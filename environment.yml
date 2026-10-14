@@ -1,0 +1,15 @@
+name: soccer_clips_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  # gpl build includes libx264; the lgpl build does not
+  - ffmpeg>=6=gpl*
+  - pydantic>=2
+  - python-dotenv
+  - fastapi
+  - uvicorn
+  - pytest
+  - pip
+  - pip:
+      - httpx2  # starlette 1.x testclient wants httpx2, not httpx

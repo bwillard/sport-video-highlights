@@ -1,6 +1,6 @@
 # Phase 0 — Setup & Ingest
 
-**Status:** Not started.
+**Status:** Done — all 5 games registered; originals scrub fine over the LAN, so no proxies needed.
 **Goal:** Register a Veo game that's already sitting in `<SOCCER_FULL_DIR>/<year>/`, record its metadata, and make sure it scrubs well in a browser (re-encoding a copy only if needed).
 
 ## Scope
@@ -81,14 +81,14 @@ class Game(BaseModel):
 - New fields always get defaults, so old files keep loading. `schema_version` is there in case a real migration is ever needed.
 
 ## Tasks
-- [ ] `environment.yml` (python 3.12, ffmpeg>=6, typer, pydantic) + `conda env create`; verify `xfade` is available (`ffmpeg -filters | grep xfade`)
-- [ ] `pyproject.toml`, package skeleton, `pip install -e .`
-- [ ] `.gitignore` (with `.env`), `.env.example`, local `.env`; `config.py` with `pydantic-settings` + ffmpeg version check
-- [ ] `models.py` (`Game`) + `store.py` (atomic save, locks, list games)
-- [ ] `scan` command: find new videos, probe → `probe.json`, write `game.json`
-- [ ] Serve an original over the LAN and test scrubbing from the tagging machine (decides whether proxies are needed)
-- [ ] *(If needed)* `proxy` command with progress output
-- [ ] Scan all 5 existing 2026 games
+- [x] `environment.yml` (python 3.12, ffmpeg>=6, typer, pydantic) + `conda env create`; verify `xfade` is available (`ffmpeg -filters | grep xfade`)
+- [x] `pyproject.toml`, package skeleton, `pip install -e .`
+- [x] `.gitignore` (with `.env`), `.env.example`, local `.env`; `config.py` with `pydantic-settings` + ffmpeg version check
+- [x] `models.py` (`Game`) + `store.py` (atomic save, locks, list games)
+- [x] `scan` command: find new videos, probe → `probe.json`, write `game.json`
+- [x] Serve an original over the LAN and test scrubbing from the tagging machine (decides whether proxies are needed)
+- [x] ~~*(If needed)* `proxy` command~~ not needed with progress output
+- [x] Scan all 5 existing 2026 games
 
 ## Acceptance criteria
 - All 5 existing games registered; a game plays on the tagging machine over the LAN and seeking anywhere feels instant (original or keyframe copy).
@@ -109,6 +109,6 @@ _(fill in as we go)_
 | Keyframe interval | 2.5s (75 frames) |
 | `moov` atom | at the front (already "faststart") |
 | Game length / size | 60–84 min, 2.1–2.9 GB (5 games, 2026) |
-| Originals scrub OK in browser over LAN? | |
+| Originals scrub OK in browser over LAN? | Yes (tested 2026-10-13) — no proxy needed |
 | Proxy encode time (CPU), if needed | |
 | Proxy file size, if needed | |

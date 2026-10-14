@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Soccer Clips — scrub test</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 16px; background: #111; color: #eee; }
+  video { width: 100%; max-height: 80vh; background: #000; }
+  .bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  .stat { font-variant-numeric: tabular-nums; }
+  kbd { background: #333; border-radius: 3px; padding: 0 4px; }
+  #scrub { width: 100%; }
+  #log { font-size: 12px; color: #aaa; max-height: 8em; overflow-y: auto; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <select id="game"></select>
+  <span class="stat">time <b id="time">0:00.000</b></span>
+  <span class="stat">rate <b id="rate">1</b>×</span>
+  <span class="stat">last seek <b id="seek">–</b> ms</span>
+  <span class="stat">avg seek <b id="avg">–</b> ms</span>
+</div>
+<video id="v" preload="auto"></video>
+<input id="scrub" type="range" min="0" max="1000" value="0">
+<p>
+  <kbd>Space</kbd> play/pause · <kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> back / pause / faster ·
+  <kbd>←</kbd>/<kbd>→</kbd> ±5s · <kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd> ±60s ·
+  <kbd>,</kbd>/<kbd>.</kbd> frame step (paused) ·
+  <kbd>[</kbd>/<kbd>]</kbd> slower / faster (¼×–8×)
+</p>
+<div id="log"></div>
+<script>
+const v = document.getElementById("v");
+const sel = document.getElementById("game");
+let fps = 30000 / 1001;
+let seekStart = null;
+const seekTimes = [];
+
+function fmt(t) {
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return `${m}:${s.toFixed(3).padStart(6, "0")}`;
+}
+
+function log(msg) {
+  const el = document.getElementById("log");
+  el.prepend(Object.assign(document.createElement("div"), { textContent: msg }));
+}
+
+function seekTo(t) {
+  seekStart = performance.now();
+  v.currentTime = Math.max(0, Math.min(v.duration || 0, t));
+}
+
+v.addEventListener("seeked", () => {
+  if (seekStart === null) return;
+  const ms = performance.now() - seekStart;
+  seekStart = null;
+  seekTimes.push(ms);
+  document.getElementById("seek").textContent = ms.toFixed(0);
+  const avg = seekTimes.reduce((a, b) => a + b, 0) / seekTimes.length;
+  document.getElementById("avg").textContent = `${avg.toFixed(0)} (n=${seekTimes.length})`;
+});
+v.addEventListener("timeupdate", () => {
+  document.getElementById("time").textContent = fmt(v.currentTime);
+  if (!scrubbing && v.duration) scrub.value = (v.currentTime / v.duration) * 1000;
+});
+v.addEventListener("ratechange", () => {
+  document.getElementById("rate").textContent = v.playbackRate;
+});
+
+// Reverse playback isn't supported by browsers, so J steps back in 2s jumps while held.
+document.addEventListener("keydown", (e) => {
+  if (e.target === sel || e.target === scrub) return;
+  const frame = 1 / fps;
+  switch (e.key) {
+    case " ": e.preventDefault(); v.paused ? v.play() : v.pause(); break;
+    case "k": case "K": v.pause(); v.playbackRate = 1; break;
+    case "l": case "L":
+      v.playbackRate = v.paused ? 1 : Math.min(v.playbackRate * 2, 8);
+      v.play(); break;
+    case "[": v.playbackRate = Math.max(v.playbackRate / 2, 0.25); break;
+    case "]": v.playbackRate = Math.min(v.playbackRate * 2, 8); break;
+    case "j": case "J": seekTo(v.currentTime - 2); break;
+    case "ArrowLeft": e.preventDefault(); seekTo(v.currentTime - (e.shiftKey ? 60 : 5)); break;
+    case "ArrowRight": e.preventDefault(); seekTo(v.currentTime + (e.shiftKey ? 60 : 5)); break;
+    case ",": v.pause(); seekTo(v.currentTime - frame); break;
+    case ".": v.pause(); seekTo(v.currentTime + frame); break;
+  }
+});
+
+// Custom scrubber instead of native controls, which would swallow the keyboard shortcuts.
+const scrub = document.getElementById("scrub");
+let scrubbing = false;
+scrub.addEventListener("input", () => { scrubbing = true; seekTo((scrub.value / 1000) * v.duration); });
+scrub.addEventListener("change", () => { scrubbing = false; scrub.blur(); });
+v.addEventListener("click", () => { v.paused ? v.play() : v.pause(); });
+
+async function loadGame(id) {
+  const g = await (await fetch(`/api/games/${encodeURIComponent(id)}`)).json();
+  fps = g.fps_num / g.fps_den;
+  seekTimes.length = 0;
+  // Start each game fresh: paused at 0:00, 1× speed, cleared readouts.
+  v.pause();
+  v.src = `/video/${encodeURIComponent(id)}`;
+  v.addEventListener("loadedmetadata", () => { v.currentTime = 0; }, { once: true });
+  v.defaultPlaybackRate = v.playbackRate = 1;
+  scrub.value = 0;
+  document.getElementById("time").textContent = fmt(0);
+  document.getElementById("rate").textContent = 1;
+  document.getElementById("seek").textContent = "–";
+  document.getElementById("avg").textContent = "–";
+  log(`loaded ${g.id}: ${g.width}x${g.height} @ ${fps.toFixed(3)} fps, ${(g.duration_s / 60).toFixed(1)} min`);
+}
+
+(async () => {
+  const games = await (await fetch("/api/games")).json();
+  for (const g of games) sel.append(new Option(g.id, g.id));
+  // Blur after picking so arrow keys seek instead of switching games.
+  sel.addEventListener("change", () => { sel.blur(); loadGame(sel.value); });
+  if (games.length) loadGame(games[0].id);
+})();
+</script>
+</body>
+</html>
