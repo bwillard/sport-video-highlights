@@ -15,7 +15,7 @@ from typing import get_args
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from soccer_clips.config import get_settings
 from soccer_clips.export import export_job, run_export
@@ -29,7 +29,13 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-class GamePatch(BaseModel):
+class RequestBody(BaseModel):
+    # Reject unknown fields instead of ignoring them, so a page that's newer
+    # than the running server gets an error rather than a silent no-op save.
+    model_config = ConfigDict(extra="forbid")
+
+
+class GamePatch(RequestBody):
     played_on: date | None = None
     opponent: str | None = None
     description: str | None = None
@@ -37,7 +43,7 @@ class GamePatch(BaseModel):
     kickoff_2h_s: float | None = None
 
 
-class ClipCreate(BaseModel):
+class ClipCreate(RequestBody):
     start_s: float
     end_s: float
     tags: list[str] = []
@@ -46,7 +52,7 @@ class ClipCreate(BaseModel):
     note: str | None = None
 
 
-class ClipPatch(BaseModel):
+class ClipPatch(RequestBody):
     start_s: float | None = None
     end_s: float | None = None
     tags: list[str] | None = None
@@ -56,26 +62,26 @@ class ClipPatch(BaseModel):
     callout: Callout | None = None  # null removes it
 
 
-class ExportRequest(BaseModel):
+class ExportRequest(RequestBody):
     clip_ids: list[str]
     fast: bool = False
 
 
-class ReelCreate(BaseModel):
+class ReelCreate(RequestBody):
     title: str
     items: list[ReelItem] = []
     card_s: float = Field(default=2.0, ge=0, le=15)
     callout_s: float = Field(default=1.5, ge=0, le=10)
 
 
-class ReelPatch(BaseModel):
+class ReelPatch(RequestBody):
     title: str | None = None
     items: list[ReelItem] | None = None
     card_s: float | None = Field(default=None, ge=0, le=15)
     callout_s: float | None = Field(default=None, ge=0, le=10)
 
 
-class RenderRequest(BaseModel):
+class RenderRequest(RequestBody):
     preset: Preset = "landscape_1080p"
 
 

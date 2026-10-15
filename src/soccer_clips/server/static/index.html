@@ -562,7 +562,10 @@ document.addEventListener("keydown", (e) => {
 async function patchGame(changes, what) {
   const updated = await api("PATCH", gameUrl(), changes);
   game = { ...game, played_on: updated.played_on, description: updated.description };
-  flash(`saved ${what}`);
+  // check the server actually stored it (an out-of-date server can drop new fields)
+  const kept = Object.entries(changes).every(([k, val]) => (updated[k] ?? null) === val);
+  if (kept) flash(`saved ${what}`);
+  else flash(`${what} was NOT saved — restart soccer-clips serve, then try again`, true);
   render();
 }
 $("playedOn").addEventListener("change", (e) => patchGame({ played_on: e.target.value || null }, "game date"));

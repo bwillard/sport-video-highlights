@@ -124,6 +124,7 @@ class Clip(BaseModel):
 - **2026-10-14** — "Export" makes one file per clip; it doesn't join them. Joining clips into a reel, watching it in the app and jumping back to the full game are Phase 2 (see the "Watching reels in the app" section in [phase2_reel.md](phase2_reel.md)).
 - **2026-10-15** — Game info box at the top of the tagger's right-hand panel: the game's date (prefilled from the filename) and a free-text description (e.g. "Home vs SAA, 3-1 win"). Saved on change/Enter via `PATCH /api/games/{id}` (`played_on`, `description`). The unused `Game.title` field was renamed `description` (it was empty in every game file). Used on reel opening cards, and as the suggested title for a new reel.
 - **2026-10-15** — Sound starts muted on the tagger and reel pages; `M` or the "sound off/on" button in the header toggles it.
+- **2026-10-15** — Bug report: the game description "saved" but then emptied. Cause: the server process predated the change (it still expected `title`), and the pages are served fresh from disk, so a new page talked to old server code that ignored the unknown `description` field. Fixes: request bodies now reject unknown fields (422 instead of a silent no-op), and the tagger checks the saved value came back before saying "saved", otherwise it says to restart the server. Lesson: restart `soccer-clips serve` after pulling or committing code changes.
 - Not built yet: thumbnail sprite, tag-rename CLI, LosslessCut import.
 
 _(add friction points and timing from tagging a real game)_

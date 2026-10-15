@@ -121,3 +121,9 @@ def test_callout_set_validate_and_clear(client):
     assert client.patch(url, json={"start_s": 1.6}).json()["callout"] is None
     client.patch(url, json={"start_s": 1.0, "callout": callout})
     assert client.patch(url, json={"callout": None}).json()["callout"] is None
+
+
+def test_unknown_fields_are_rejected(client):
+    # e.g. a newer page talking to an older server: fail loudly, don't silently drop the field
+    assert client.patch(f"/api/games/{GAME}", json={"descriptoin": "typo"}).status_code == 422
+    assert client.post(f"/api/games/{GAME}/clips", json={"start_s": 0, "end_s": 1, "colour": "red"}).status_code == 422
