@@ -121,6 +121,7 @@ class Clip(BaseModel):
 - **2026-10-13** — Match clock is minutes only ("23'", "2H 7'"); the clip list shows exact video time on hover, the clip editor shows both.
 - **2026-10-14** — Exported clips now have a "⬇ mp4" download link in the clip list (before, the only link was in the clip editor, which only shows when a clip is selected). Clicking it doesn't select the row.
 - **2026-10-14** — "Export" makes one file per clip; it doesn't join them. Joining clips into a reel, watching it in the app and jumping back to the full game are Phase 2 (see the "Watching reels in the app" section in [phase2_reel.md](phase2_reel.md)).
+- **2026-10-15** — Game info box at the top of the tagger's right-hand panel: the game's date (prefilled from the filename) and a free-text description (e.g. "Home vs SAA, 3-1 win"). Saved on change/Enter via `PATCH /api/games/{id}` (`played_on`, `description`). The unused `Game.title` field was renamed `description` (it was empty in every game file). Used on reel opening cards, and as the suggested title for a new reel.
 - Not built yet: thumbnail sprite, tag-rename CLI, LosslessCut import.
 
 _(add friction points and timing from tagging a real game)_

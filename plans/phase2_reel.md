@@ -61,13 +61,13 @@ A vertical (9:16) preset is a [future idea](#future-ideas).
 
 ## Title cards (2026-10-14)
 - **What's on them:** white text on a dark background (`#111`), centred, DejaVu Sans Bold (Pillow's built-in font if that's missing).
-  - **Opening card:** the reel title.
+  - **Opening card:** the reel title, then underneath: for a one-game reel, the game's description (if set and not the same as the title) and its date, e.g. "Saturday, October 10, 2026"; for a multi-game reel, "N games · September 19 – October 10, 2026". Date and description are set in the tagger (added 2026-10-15).
   - **Card before each clip:** the time in the game ("23'", "2H 7'"; the video time as m:ss if that game has no kickoff set) and, underneath, the clip's note if it has one (wrapped, at most 4 lines).
 - **Length:** `Reel.card_s`, default 3s, set in the "cards … s" box next to the render buttons on the reel page; 0 turns all cards off. Cards are exactly `round(card_s × 29.97)` frames, with silent audio.
 - **Code:** `soccer_clips/reel/cards.py` draws them; the renderer caches each card like a clip (keyed on its text, length, preset and font).
 - **Time map:** each `Segment` records `card_start_s` and `card_lines`; the `Render` records `start_card_lines`. On the reel page a clip's chapter starts at its card: ↑/↓ and the chapter list land on the card, the header shows "(card)", the timeline draws cards in grey, and `G` on a card goes to the start of the clip in the game.
 - **Out of date:** a render is flagged if the card length, the title card, or a clip card's text (note or kickoff edited) changed since it was made.
-- Possible later tweaks: separate lengths for the opening card and clip cards; show the opponent/date on clip cards in multi-game reels (the time alone is ambiguous there).
+- Possible later tweaks: separate lengths for the opening card and clip cards; show the game's description/date on clip cards in multi-game reels (the time alone is ambiguous there).
 
 ## Watching reels in the app
 Requested 2026-10-14: watch a rendered reel in the tagger app, jump from any moment of the reel back to that moment in the full game, and download the reel. (Built in the first slice above; this is the design.)

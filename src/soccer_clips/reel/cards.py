@@ -2,11 +2,14 @@
 Title cards: white text on a dark background, drawn with Pillow and turned
 into a short silent clip by the renderer.
 
-- Opening card: the reel title.
+- Opening card: the reel title, then for a one-game reel the game's
+  description and date, or for a multi-game reel the number of games and
+  the date range.
 - Clip card (before each clip): the time in the game, and the clip's note if
   it has one, so viewers know what they're about to see.
 """
 
+from datetime import date
 from functools import cache
 from pathlib import Path
 
@@ -38,8 +41,35 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(path, size) if path else ImageFont.load_default(size)
 
 
-def start_card_lines(reel: Reel) -> list[str]:
-    return [reel.title]
+def long_date(d: date) -> str:
+    """Saturday, October 10, 2026"""
+    return f"{d:%A, %B} {d.day}, {d.year}"
+
+
+def date_range(first: date, last: date) -> str:
+    if first == last:
+        return long_date(first)
+    if first.year == last.year:
+        return f"{first:%B} {first.day} – {last:%B} {last.day}, {last.year}"
+    return f"{first:%B} {first.day}, {first.year} – {last:%B} {last.day}, {last.year}"
+
+
+def start_card_lines(reel: Reel, games: list[Game]) -> list[str]:
+    """Title, then game description + date (one game) or "N games · date range" (several)."""
+    lines = [reel.title]
+    unique = list({g.id: g for g in games}.values())
+    if len(unique) == 1:
+        g = unique[0]
+        description = (g.description or "").strip()
+        if description and description.casefold() != reel.title.strip().casefold():
+            lines.append(description)
+        if g.played_on:
+            lines.append(long_date(g.played_on))
+    elif unique:
+        dates = sorted(g.played_on for g in unique if g.played_on)
+        summary = f"{len(unique)} games"
+        lines.append(f"{summary} · {date_range(dates[0], dates[-1])}" if dates else summary)
+    return lines
 
 
 def clip_card_lines(game: Game, clip: Clip) -> list[str]:
@@ -72,8 +102,9 @@ def _wrap(text: str, font: ImageFont.FreeTypeFont, max_width: float, max_lines: 
 
 def draw_card(lines: list[str], width: int, height: int) -> Image.Image:
     """
-    First line is the headline (title or game time), the rest is wrapped body
-    text (the note). Everything is centred; sizes scale with the height.
+    First line is the headline (title or game time); each further line is
+    wrapped body text (game description, date, or the clip's note). Everything
+    is centred; sizes scale with the height.
     """
     img = Image.new("RGB", (width, height), BACKGROUND)
     draw = ImageDraw.Draw(img)
@@ -83,7 +114,7 @@ def draw_card(lines: list[str], width: int, height: int) -> Image.Image:
     gap = round(height * 0.04)
 
     head = _wrap(lines[0], head_font, max_w, 2) if lines else []
-    body = _wrap(" ".join(lines[1:]), body_font, max_w, MAX_NOTE_LINES) if len(lines) > 1 else []
+    body = [part for line in lines[1:] for part in _wrap(line, body_font, max_w, MAX_NOTE_LINES)]
     blocks = [(t, head_font, TEXT) for t in head] + [(t, body_font, SUBTEXT) for t in body]
 
     def line_h(font: ImageFont.FreeTypeFont) -> int:

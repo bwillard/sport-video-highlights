@@ -48,6 +48,10 @@
     </p>
   </section>
   <aside>
+    <div class="box filters" title="Shown on the opening card of reels made from this game">
+      <input type="date" id="playedOn" aria-label="game date">
+      <input id="desc" aria-label="game description" placeholder="game description, e.g. Home vs SAA, 3-1 win" style="flex:1; min-width:12em; padding:2px 6px">
+    </div>
     <div class="box filters">
       <select id="ftag" aria-label="filter by tag"><option value="">all tags</option></select>
       <select id="frating" aria-label="minimum rating">
@@ -239,6 +243,8 @@ function render() {
   }).join("") : `<li class="empty">${clips.length ? "no clips match the filter" : "no clips yet — press Enter during play"}</li>`;
   renderDetail();
   $("markin").textContent = markIn == null ? "–" : `${label(markIn)}${markOut != null ? " → " + label(markOut) : ""}`;
+  if (game && document.activeElement !== $("playedOn")) $("playedOn").value = game.played_on || "";
+  if (game && document.activeElement !== $("desc")) $("desc").value = game.description || "";
   $("kickoffs").textContent = [game?.kickoff_1h_s, game?.kickoff_2h_s]
     .map((k, i) => (k == null ? null : `${i + 1}H ${fmt(k)}`)).filter(Boolean).join(" · ") || "– (press H)";
 }
@@ -549,6 +555,19 @@ document.addEventListener("keydown", (e) => {
   act();
 });
 
+// ---------- game info ----------
+async function patchGame(changes, what) {
+  const updated = await api("PATCH", gameUrl(), changes);
+  game = { ...game, played_on: updated.played_on, description: updated.description };
+  flash(`saved ${what}`);
+  render();
+}
+$("playedOn").addEventListener("change", (e) => patchGame({ played_on: e.target.value || null }, "game date"));
+$("desc").addEventListener("change", (e) => patchGame({ description: e.target.value.trim() || null }, "game description"));
+for (const id of ["playedOn", "desc"]) {
+  $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+}
+
 // ---------- reels ----------
 async function loadReels() {
   const reels = await getJson("/api/reels");
@@ -564,7 +583,7 @@ $("addToReel").addEventListener("click", async (e) => {
   if (!items.length) return flash("no clips shown to add", true);
   let view, added = items.length;
   if (!$("reelPick").value) {
-    const title = prompt("Title for the new reel:", `${shortGame(game.id)} ${game.played_on || ""}`.trim());
+    const title = prompt("Title for the new reel:", game.description || `${shortGame(game.id)} ${game.played_on || ""}`.trim());
     if (title == null) return;
     view = await api("POST", "/api/reels", { title, items });
   } else {

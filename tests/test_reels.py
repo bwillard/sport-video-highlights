@@ -162,7 +162,7 @@ def test_title_cards(client, settings, carded_reel):
     [r] = render(client, rid)["renders"]
     card = 30 / (30000 / 1001)  # 1s rounds to 30 frames = 1.001s
 
-    assert r["start_card_lines"] == ["Fall 2026: vs Rovers!"]
+    assert r["start_card_lines"] == ["Fall 2026: vs Rovers!", "2 games · January 1 – January 8, 2026"]
     segs = r["segments"]
     # game A has a kickoff, so its cards show the match minute; game B has none, so video time
     assert [s["card_lines"] for s in segs] == [["1'", "Shot from outside the box"], ["1'"], ["0:01"]]
@@ -256,3 +256,47 @@ def test_callout_freeze(client, settings, reel):
     [r] = render(client, rid)["renders"]
     assert all(seg["freeze_at_s"] is None for seg in r["segments"])
     assert int(probe(settings, out)["video"]["nb_read_frames"]) == 105
+
+
+def test_start_card_lines():
+    from datetime import date, datetime
+
+    from soccer_clips.models import Game, Reel
+    from soccer_clips.reel.cards import start_card_lines
+
+    def game(gid, played_on, description=None):
+        return Game(id=gid, year=2026, played_on=played_on, description=description, original="x.mp4",
+                    duration_s=60, fps_num=30000, fps_den=1001, width=1920, height=1080, created_at=datetime.now())
+
+    saa = game("saa", date(2026, 10, 10), "Home vs SAA, 3-1 win")
+    reel = Reel(title="Fall highlights")
+    assert start_card_lines(reel, [saa, saa]) == ["Fall highlights", "Home vs SAA, 3-1 win", "Saturday, October 10, 2026"]
+    # a title that repeats the description doesn't show it twice
+    assert start_card_lines(Reel(title="home vs saa, 3-1 WIN"), [saa]) == ["home vs saa, 3-1 WIN", "Saturday, October 10, 2026"]
+    assert start_card_lines(reel, [game("x", None)]) == ["Fall highlights"]
+    # several games: count + date range
+    games = [saa, game("a", date(2026, 9, 19)), game("b", None)]
+    assert start_card_lines(reel, games) == ["Fall highlights", "3 games · September 19 – October 10, 2026"]
+    assert start_card_lines(reel, [saa, game("old", date(2025, 11, 2))])[1] == "2 games · November 2, 2025 – October 10, 2026"
+
+
+def test_game_info_edit_updates_title_card(client):
+    a1 = add_clip(client, GAME_A, 1.0, 2.0)
+    rid = client.post("/api/reels", json={"title": "Rovers", "card_s": 1,
+                                          "items": [{"game_id": GAME_A, "clip_id": a1}]}).json()["reel"]["id"]
+    g = client.patch(f"/api/games/{GAME_A}", json={"played_on": "2026-01-03", "description": "Away vs Rovers"}).json()
+    assert (g["played_on"], g["description"]) == ("2026-01-03", "Away vs Rovers")
+    [r] = render(client, rid)["renders"]
+    assert r["start_card_lines"] == ["Rovers", "Away vs Rovers", "Saturday, January 3, 2026"]
+    client.patch(f"/api/games/{GAME_A}", json={"description": "Away vs Rovers, 2-2"})
+    assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["title card changed"]
+    assert client.patch(f"/api/games/{GAME_A}", json={"description": None}).json()["description"] is None
+
+
+def test_draw_card_keeps_body_lines_separate():
+    from soccer_clips.reel.cards import draw_card
+
+    one = draw_card(["Title", "Home vs SAA Saturday, October 10, 2026"], 960, 540)
+    two = draw_card(["Title", "Home vs SAA", "Saturday, October 10, 2026"], 960, 540)
+    rows = lambda img: sum(1 for y in range(540) if any(img.getpixel((x, y)) != (17, 17, 17) for x in range(0, 960, 2)))
+    assert rows(two) > rows(one)  # an extra text row

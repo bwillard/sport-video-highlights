@@ -159,7 +159,7 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
             _card(store, lines, spec, reel.card_s, path)
         return path
 
-    start_lines = start_card_lines(reel) if reel.card_s > 0 else []
+    start_lines = start_card_lines(reel, [game for game, _ in parts]) if reel.card_s > 0 else []
     start_card = card(start_lines)
     entries = []  # (game, clip, card lines, card path or None, clip path, callout frame or None)
     used = set()  # cache files to keep
@@ -252,7 +252,7 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
         reasons.append("card length changed")
     if reel.callout_s != render.reel.callout_s:
         reasons.append("callout freeze length changed")
-    elif reel.card_s > 0 and start_card_lines(reel) != render.start_card_lines:
+    elif reel.card_s > 0 and start_card_lines(reel, [g for g, _ in _resolve(store, reel)[0]]) != render.start_card_lines:
         reasons.append("title card changed")
     games: dict[str, Game] = {}
     changed = deleted = cards = callouts = 0

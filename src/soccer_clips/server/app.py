@@ -8,6 +8,7 @@ import logging
 import re
 import shutil
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import get_args
 
@@ -29,8 +30,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 class GamePatch(BaseModel):
+    played_on: date | None = None
     opponent: str | None = None
-    title: str | None = None
+    description: str | None = None
     kickoff_1h_s: float | None = None
     kickoff_2h_s: float | None = None
 

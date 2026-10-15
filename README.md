@@ -23,3 +23,4 @@ Tag clips from full-game Veo videos, highlight a player, and build highlight ree
  - Reels: in the tagger, filter the clip list and press "Add shown to reel". Open `/reel` to render (preview or full), watch, jump back to the full game with `G`, and download. Renders go to `$SOCCER_REELS_DIR/<reel_id>/<preset>.mp4`.
  - Title cards: each reel gets an opening card (its title) and a card before each clip (time in the game + the clip's note). Set their length in the "cards" box on the reel page before rendering (0 turns them off).
  - Callouts: in the tagger, select a clip, pause on a moment inside it, press `C` and click on her (drag to size the ring). Reels freeze there for 1.5s with her spotlighted; set the length in the "freeze" box on the reel page (0 turns it off).
+ - Game info: set each game's date and a short description (e.g. "Home vs SAA, 3-1 win") in the box at the top of the tagger's right-hand panel. Reel opening cards show them under the reel title.

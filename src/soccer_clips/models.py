@@ -65,7 +65,7 @@ class Game(BaseModel):
     year: int
     played_on: date | None = None
     opponent: str | None = None
-    title: str | None = None
+    description: str | None = None  # free text set in the tagger, e.g. "Home vs SAA, 3-1 win"
     original: str  # relative to full_dir, e.g. "2026/gu11-vs-saa-2026-10-10.mp4"
     proxy: str | None = None  # relative to proxy_dir; set if a keyframe-dense copy exists
     duration_s: float
