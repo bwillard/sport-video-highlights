@@ -22,11 +22,14 @@ from soccer_clips import ffmpeg
 from soccer_clips.jobs import Job
 from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment
 from soccer_clips.reel.callout import STYLE_VERSION, callout_frame, splice_callout
-from soccer_clips.reel.cards import card_seconds, clip_card_lines, draw_card, font_path, start_card_lines
+from soccer_clips.reel.cards import (
+    card_seconds, clip_card_lines, draw_caption, draw_card, font_path, start_card_lines,
+)
 from soccer_clips.store import Store
 
 # Bump to invalidate every cached intermediate (e.g. after changing the normalise filters).
 CACHE_VERSION = 1
+CAPTION_VERSION = 1  # bump when the caption look changes
 OUTPUT_FPS = Fraction(30000, 1001)  # Veo's rate, so normally no frame-rate conversion
 
 
@@ -125,6 +128,29 @@ def _card(store: Store, lines: list[str], spec: PresetSpec, duration_s: float, o
     os.replace(tmp, out)
 
 
+def _caption(store: Store, src: Path, lines: list[str], spec: PresetSpec,
+             windows: list[tuple[float, float]], out: Path) -> None:
+    """Copy an intermediate with a caption overlaid during the given (start, end) times."""
+    png = out.with_name(out.stem + ".caption.png")
+    draw_caption(lines, spec.width, spec.height).save(png)
+    enable = "+".join(f"between(t,{a:.4f},{b:.4f})" for a, b in windows)
+    tmp = out.with_name(out.stem + ".part.mp4")
+    cmd = [
+        store.settings.ffmpeg, "-y", "-v", "error", "-i", str(src), "-loop", "1", "-i", str(png),
+        "-filter_complex", f"[0:v][1:v]overlay=0:0:shortest=1:enable='{enable}',format=yuv420p[v]",
+        "-map", "[v]", "-map", "0:a", "-c:a", "copy",
+        "-c:v", "libx264", "-preset", spec.intermediate_preset, "-crf", str(spec.intermediate_crf), str(tmp),
+    ]
+    try:
+        ffmpeg.run(cmd, 0)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        png.unlink(missing_ok=True)
+    os.replace(tmp, out)
+
+
 def _cache_name(preset: str, *key) -> str:
     digest = hashlib.sha1(json.dumps([CACHE_VERSION, preset, *key]).encode()).hexdigest()[:16]
     return f"{preset}-{digest}.mp4"
@@ -162,35 +188,56 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
 
     start_lines = start_card_lines(reel, [game for game, _ in parts]) if reel.card_s > 0 else []
     start_card = card(start_lines)
-    entries = []  # (game, clip, card lines, card path or None, clip path, callout frame or None)
+    overlay = reel.card_style == "overlay" and reel.card_s > 0
+    entries = []  # (game, clip, card lines, card path or None, clip path, callout frame or None, caption)
     used = set()  # cache files to keep
-    freeze_s = float(max(1, round(reel.callout_s * OUTPUT_FPS)) / OUTPUT_FPS) if reel.callout_s > 0 else 0.0
+    freeze_s = float(max(1, round(reel.freeze_s * OUTPUT_FPS)) / OUTPUT_FPS) if reel.freeze_s > 0 else 0.0
     for (game, clip), (seek_s, duration_s) in zip(parts, windows):
         lines = clip_card_lines(game, clip) if reel.card_s > 0 else []
-        card_path = card(lines)
+        card_path = None if overlay else card(lines)
         path = cache / _cache_name(preset, game.id, game.original, round(seek_s, 6), round(duration_s, 6))
         frame_n = callout_frame(game, clip) if freeze_s else None
         spliced = None
         if frame_n is not None:
             spliced = cache / _cache_name(preset, "callout", path.name, frame_n, clip.callout.model_dump(),
-                                          round(reel.callout_s, 3), STYLE_VERSION)
-        needs_clip = spliced is None or not spliced.exists()  # the splice is made from the clip
-        if needs_clip and not path.exists():
+                                          round(reel.freeze_s, 3), STYLE_VERSION)
+        caption = None  # (lines, seconds shown from the clip start)
+        captioned = None
+        if overlay and lines:
+            caption_s = float(max(1, round(card_seconds(lines, reel.card_s) * OUTPUT_FPS)) / OUTPUT_FPS)
+            caption = (lines, caption_s)
+            cap_windows = [(0.0, caption_s)]
+            if frame_n is not None:  # also show it during the callout freeze
+                at = float(frame_n / OUTPUT_FPS)
+                cap_windows.append((at, at + freeze_s))
+            captioned = cache / _cache_name(preset, "caption", (spliced or path).name, lines,
+                                            [(round(a, 4), round(b, 4)) for a, b in cap_windows],
+                                            font_path(), CAPTION_VERSION)
+        # Each step is made from the one before (clip -> splice -> caption) and
+        # each is cached, so an edit only redoes the steps after it.
+        final = captioned or spliced or path
+        need_caption = captioned is not None and not captioned.exists()
+        need_splice = spliced is not None and not spliced.exists() and (need_caption or final == spliced)
+        need_clip = not path.exists() and (need_splice or need_caption and spliced is None or final == path)
+        if need_clip:
             _normalise(store, game, seek_s, duration_s, spec, path, lambda f: report(f, duration_s))
-        if spliced and not spliced.exists():
-            splice_callout(store, path, frame_n, clip.callout, game, reel.callout_s, OUTPUT_FPS,
+        if need_splice:
+            splice_callout(store, path, frame_n, clip.callout, game, reel.freeze_s, OUTPUT_FPS,
                            spec.intermediate_preset, spec.intermediate_crf, spliced)
+        if need_caption:
+            _caption(store, spliced or path, caption[0], spec, cap_windows, captioned)
         done += duration_s
-        if path.exists():
-            used.add(path)  # kept even when spliced, so moving the callout only redoes the splice
-        entries.append((game, clip, lines, card_path, spliced or path, frame_n))
+        for p in (path, spliced):  # kept so moving a callout or editing a note redoes only the later steps
+            if p and p.exists():
+                used.add(p)
+        entries.append((game, clip, lines, card_path, final, frame_n, caption))
 
     length = lambda p: max(ffmpeg.stream_durations(s, p).values())
     intermediates, segments, t = [], [], 0.0
     if start_card:
         intermediates.append(start_card)
         t += length(start_card)
-    for game, clip, lines, card_path, path, frame_n in entries:
+    for game, clip, lines, card_path, path, frame_n, caption in entries:
         card_start = None
         if card_path:
             intermediates.append(card_path)
@@ -208,6 +255,8 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
             freeze_at_s=None if frame_n is None else t + float(frame_n / OUTPUT_FPS),
             freeze_s=0.0 if frame_n is None else freeze_s,
             callout=None if frame_n is None else clip.callout,
+            caption_lines=caption[0] if caption else [],
+            caption_s=caption[1] if caption else 0.0,
         ))
         t += clip_len
 
@@ -233,6 +282,7 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
         reel_id=reel.id, preset=preset, file=out.name,
         duration_s=length(out), segments=segments, skipped=skipped, reel=reel,
         start_card_lines=start_lines if start_card else [],
+        card_style=reel.card_style,
     )
     store.save_render(render)
 
@@ -254,6 +304,7 @@ def _card_timing_changed(reel: Reel, render: Render) -> bool:
         first = render.segments[0]
         shown.append((render.start_card_lines, first.card_start_s if first.card_start_s is not None else first.reel_start_s))
     shown += [(s.card_lines, s.reel_start_s - s.card_start_s) for s in render.segments if s.card_start_s is not None]
+    shown += [(s.caption_lines, s.caption_s) for s in render.segments if s.caption_lines]
     # measured lengths include a few ms of audio past the last frame
     return any(abs(length - expected(lines)) > 0.05 for lines, length in shown)
 
@@ -263,9 +314,11 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
     reasons = []
     if reel.items != render.reel.items:
         reasons.append("clips were added, removed or reordered")
+    if reel.card_style != render.card_style:
+        reasons.append("descriptions switched between overlay and title cards")
     if reel.card_s != render.reel.card_s:
         reasons.append("minimum card length changed")
-    if reel.callout_s != render.reel.callout_s:
+    if reel.freeze_s != render.reel.freeze_s:
         reasons.append("callout freeze length changed")
     if reel.card_s > 0 and start_card_lines(reel, [g for g, _ in _resolve(store, reel)[0]]) != render.start_card_lines:
         reasons.append("title card changed")
@@ -287,14 +340,15 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
         ):
             changed += 1
         else:
-            if seg.card_lines and clip_card_lines(game, clip) != seg.card_lines:
+            shown = seg.card_lines or seg.caption_lines
+            if shown and clip_card_lines(game, clip) != shown:
                 cards += 1
-            if reel.callout_s > 0 and (clip.callout if callout_frame(game, clip) is not None else None) != seg.callout:
+            if reel.freeze_s > 0 and (clip.callout if callout_frame(game, clip) is not None else None) != seg.callout:
                 callouts += 1
     if callouts:
         reasons.append(f"{callouts} callout(s) added, moved or removed")
     if cards:
-        reasons.append(f"{cards} clip card(s) changed (note or kickoff time)")
+        reasons.append(f"{cards} clip description(s) changed (note or kickoff time)")
     if changed:
         reasons.append(f"{changed} clip(s) had their start/end changed")
     if deleted:

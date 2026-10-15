@@ -7,7 +7,7 @@ import secrets
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 def _now() -> datetime:
@@ -113,6 +113,12 @@ class Game(BaseModel):
 # ---------- reels (Phase 2) ----------
 
 Preset = Literal["landscape_1080p", "preview_540p"]
+# How each clip's time + note is shown: a caption over the start of the clip
+# ("overlay") or a separate title card before it ("card").
+CardStyle = Literal["overlay", "card"]
+# Callout freeze length when the reel doesn't set one. Longer with overlays,
+# where the caption is also read during the freeze.
+DEFAULT_FREEZE_S = {"overlay": 1.5, "card": 0.75}
 
 
 class ReelItem(BaseModel):
@@ -125,12 +131,20 @@ class Reel(BaseModel):
     id: str = Field(default_factory=lambda: secrets.token_hex(4))
     title: str
     items: list[ReelItem] = []
-    # Shortest a title card is shown, in seconds; cards with more text stay up
-    # longer, long enough to read it (see reel/cards.py). 0 = no cards.
+    card_style: CardStyle = "overlay"
+    # Shortest a title card or caption is shown, in seconds; ones with more
+    # text stay up longer, long enough to read (see reel/cards.py). 0 = none.
     card_s: float = Field(default=2.0, ge=0, le=15)
-    # Seconds to freeze on each clip's callout; 0 = ignore callouts.
-    callout_s: float = Field(default=0.75, ge=0, le=10)
+    # Seconds to freeze on each clip's callout; 0 = ignore callouts; None =
+    # the default for the card style (DEFAULT_FREEZE_S).
+    callout_s: float | None = Field(default=None, ge=0, le=10)
     created_at: datetime = Field(default_factory=_now)
+
+    @computed_field
+    @property
+    def freeze_s(self) -> float:
+        """The callout freeze length actually used."""
+        return self.callout_s if self.callout_s is not None else DEFAULT_FREEZE_S[self.card_style]
 
 
 class Segment(BaseModel):
@@ -148,6 +162,11 @@ class Segment(BaseModel):
     # The card shown before this clip, if any: where it starts in the reel and its text.
     card_start_s: float | None = None
     card_lines: list[str] = []
+    # The caption over the start of this clip, if any (overlay style): its
+    # text and how long it shows from the clip's start (it's also shown
+    # during the callout freeze).
+    caption_lines: list[str] = []
+    caption_s: float = 0.0
     # The callout freeze inside this clip, if any: reel time it starts, its
     # length, and the callout it shows.
     freeze_at_s: float | None = None
@@ -172,5 +191,6 @@ class Render(BaseModel):
     segments: list[Segment]
     skipped: list[ReelItem] = []  # items whose clip was missing at render time
     start_card_lines: list[str] = []  # empty if there was no opening card
+    card_style: CardStyle = "card"  # renders made before overlays existed used cards
     reel: Reel  # the definition this was rendered from, so it can be reproduced
     created_at: datetime = Field(default_factory=_now)

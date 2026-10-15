@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from soccer_clips.config import get_settings
 from soccer_clips.export import export_job, run_export
 from soccer_clips.jobs import Job, JobQueue
-from soccer_clips.models import Callout, Clip, Game, Preset, Reel, ReelItem, Render, Tag
+from soccer_clips.models import Callout, CardStyle, Clip, Game, Preset, Reel, ReelItem, Render, Tag
 from soccer_clips.reel.render import render_job, run_render, stale_reasons
 from soccer_clips.scan import scan
 from soccer_clips.store import Store
@@ -70,15 +70,17 @@ class ExportRequest(RequestBody):
 class ReelCreate(RequestBody):
     title: str
     items: list[ReelItem] = []
+    card_style: CardStyle = "overlay"
     card_s: float = Field(default=2.0, ge=0, le=15)
-    callout_s: float = Field(default=0.75, ge=0, le=10)
+    callout_s: float | None = Field(default=None, ge=0, le=10)  # None = default for the card style
 
 
 class ReelPatch(RequestBody):
     title: str | None = None
     items: list[ReelItem] | None = None
+    card_style: CardStyle | None = None
     card_s: float | None = Field(default=None, ge=0, le=15)
-    callout_s: float | None = Field(default=None, ge=0, le=10)
+    callout_s: float | None = Field(default=None, ge=0, le=10)  # explicit null = back to the style default
 
 
 class RenderRequest(RequestBody):
@@ -277,7 +279,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     def create_reel(body: ReelCreate) -> ReelView:
         check_items(body.items)
         reel = Reel(title=body.title.strip() or "Untitled reel", items=body.items,
-                    card_s=body.card_s, callout_s=body.callout_s)
+                    card_style=body.card_style, card_s=body.card_s, callout_s=body.callout_s)
         store.save_reel(reel)
         return reel_view(reel)
 
@@ -297,7 +299,9 @@ def create_app(store: Store | None = None) -> FastAPI:
                 reel.items = patch.items
             if patch.card_s is not None:
                 reel.card_s = patch.card_s
-            if patch.callout_s is not None:
+            if patch.card_style is not None:
+                reel.card_style = patch.card_style
+            if "callout_s" in patch.model_fields_set:
                 reel.callout_s = patch.callout_s
         return reel_view(reel)
 

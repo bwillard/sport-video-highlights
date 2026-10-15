@@ -126,3 +126,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-15** — Reel page: game date + description under the title, clip notes in both lists, ▶ preview of any clip straight from its game.
 - **2026-10-15** — Callout freeze default shortened to 0.5s (was 1.5s). Reels created earlier keep their stored value.
 - **2026-10-15** — After watching a real reel: freeze default 0.75s; title cards a little shorter (0.75s + 17 characters/second, 2s minimum). Renders made with the old timing are flagged "title card timing changed".
+- **2026-10-15** — Clip descriptions can be a caption overlaid on the start of the clip (new default, per reel) instead of a title card. The freeze default follows the style: 1.5s with overlays, 0.75s with cards.

@@ -44,14 +44,15 @@ def probe(settings, path) -> dict:
     return {s["codec_type"]: s for s in json.loads(out)["streams"]}
 
 
-def make_reel(client, card_s):
+def make_reel(client, card_s, card_style="overlay"):
     """Two clips from game A (out of order) and one from game B (no audio)."""
     a1 = add_clip(client, GAME_A, 3.0, 4.0)
     a2 = add_clip(client, GAME_A, 0.5, 2.0)
     b1 = add_clip(client, GAME_B, 1.0, 2.0)
     items = [{"game_id": GAME_A, "clip_id": a1}, {"game_id": GAME_A, "clip_id": a2},
              {"game_id": GAME_B, "clip_id": b1}]
-    r = client.post("/api/reels", json={"title": "Fall 2026: vs Rovers!", "items": items, "card_s": card_s})
+    r = client.post("/api/reels", json={"title": "Fall 2026: vs Rovers!", "items": items, "card_s": card_s,
+                                        "card_style": card_style})
     assert r.status_code == 201
     return r.json()["reel"]
 
@@ -64,7 +65,13 @@ def reel(client):
 
 @pytest.fixture
 def carded_reel(client):
-    """With 1s title cards."""
+    """With title cards before each clip, at least 1s."""
+    return make_reel(client, card_s=1, card_style="card")
+
+
+@pytest.fixture
+def captioned_reel(client):
+    """With caption overlays (the default), at least 1s."""
     return make_reel(client, card_s=1)
 
 
@@ -188,7 +195,7 @@ def test_title_cards(client, settings, carded_reel):
 
     # card text changes make the render out of date
     client.patch(f"/api/games/{GAME_A}/clips/{a1}", json={"note": "Goal!"})
-    assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["1 clip card(s) changed (note or kickoff time)"]
+    assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["1 clip description(s) changed (note or kickoff time)"]
     client.patch(f"/api/reels/{rid}", json={"title": "Season"})
     assert "title card changed" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
     client.patch(f"/api/reels/{rid}", json={"card_s": 2})
@@ -235,7 +242,7 @@ def test_callout_freeze(client, settings, reel):
     client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": callout})
     [r] = render(client, rid)["renders"]
     fps = 30000 / 1001
-    freeze = round(0.75 * fps) / fps  # default 0.75s = 22 frames
+    freeze = 45 / fps  # the overlay style's default freeze, 1.5s = 45 frames
 
     segs = [Segment(**s) for s in r["segments"]]
     s = segs[1]
@@ -253,7 +260,7 @@ def test_callout_freeze(client, settings, reel):
 
     out = settings.reels_dir / rid / f"{PRESET}.mp4"
     streams = probe(settings, out)
-    assert int(streams["video"]["nb_read_frames"]) == 105 + 22
+    assert int(streams["video"]["nb_read_frames"]) == 105 + 45
     assert float(streams["audio"]["duration"]) == pytest.approx(float(streams["video"]["duration"]), abs=0.05)
 
     # the held frame has a white ring around the callout and is dimmed outside it
@@ -326,3 +333,59 @@ def test_card_timing_change_marks_render_stale(client, carded_reel, monkeypatch)
     assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == []
     monkeypatch.setattr(cards, "READING_CPS", 5)  # e.g. after retuning the reading speed
     assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["title card timing changed"]
+
+
+def test_freeze_default_follows_card_style(client, reel):
+    rid = reel["id"]
+    assert reel["callout_s"] is None and reel["freeze_s"] == 1.5  # overlay default
+    assert client.patch(f"/api/reels/{rid}", json={"card_style": "card"}).json()["reel"]["freeze_s"] == 0.75
+    # an explicit length sticks across styles; null goes back to the default
+    r = client.patch(f"/api/reels/{rid}", json={"callout_s": 1.0}).json()["reel"]
+    assert (r["callout_s"], r["freeze_s"]) == (1.0, 1.0)
+    assert client.patch(f"/api/reels/{rid}", json={"card_style": "overlay"}).json()["reel"]["freeze_s"] == 1.0
+    r = client.patch(f"/api/reels/{rid}", json={"callout_s": None}).json()["reel"]
+    assert (r["callout_s"], r["freeze_s"]) == (None, 1.5)
+    assert client.patch(f"/api/reels/{rid}", json={"card_style": "banner"}).status_code == 422
+
+
+def test_caption_overlay(client, settings, captioned_reel):
+    from soccer_clips.models import Segment
+    from soccer_clips.reel.cards import card_seconds
+
+    rid = captioned_reel["id"]
+    a2 = captioned_reel["items"][1]["clip_id"]  # game A 0.5s -> 2.0s
+    client.patch(f"/api/games/{GAME_A}", json={"kickoff_1h_s": 0.0})
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"note": "Wins it in midfield",
+                                                          "callout": {"t_s": 1.5, "x": 0.5, "y": 0.3, "r": 0.1}})
+    [r] = render(client, rid)["renders"]
+    fps = 30000 / 1001
+    assert r["card_style"] == "overlay" and r["start_card_lines"]  # the opening card is still a card
+    segs = [Segment(**x) for x in r["segments"]]
+    assert all(x.card_start_s is None and not x.card_lines for x in segs)  # no cards before clips
+    assert [x.caption_lines for x in segs] == [["1'"], ["1'", "Wins it in midfield"], ["0:01"]]
+    s = segs[1]
+    assert s.caption_s == pytest.approx(round(card_seconds(s.caption_lines, 1) * fps) / fps)
+    # clips follow the opening card directly; only the start card and the freeze add frames
+    start = round(card_seconds(r["start_card_lines"], 1) * fps)
+    out = settings.reels_dir / rid / f"{PRESET}.mp4"
+    assert int(probe(settings, out)["video"]["nb_read_frames"]) == start + 105 + 45
+    assert segs[0].reel_start_s == pytest.approx(start / fps, abs=0.03)
+
+    # the caption box darkens the bottom middle of the picture while shown, and is gone after
+    w = probe(settings, out)["video"]["width"]
+    px = (w // 2, round(540 * 0.94) - 4)  # in the box's bottom padding, below the text
+    spot = lambda t: frame_at(settings, out, t).getpixel(px)
+    late = segs[0].reel_start_s + 3.9  # clip 1 is 4s; its caption (~1.9s) has ended
+    shown, gone = spot(segs[0].reel_start_s + 0.5), spot(late)
+    assert sum(shown) < sum(gone) * 0.6
+    # ...it's shown during the callout freeze, and gone once the clip plays on past its reading time
+    assert s.freeze_at_s + s.freeze_s + 0.2 - s.reel_start_s > s.caption_s  # output time is past the caption window
+    during = frame_at(settings, out, s.freeze_at_s + 0.7)
+    after_freeze = frame_at(settings, out, s.freeze_at_s + s.freeze_s + 0.2)
+    assert sum(during.getpixel(px)) < sum(after_freeze.getpixel(px)) * 0.8
+
+    # note edits and style switches make the render out of date
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"note": "Goal!"})
+    assert "1 clip description(s) changed (note or kickoff time)" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
+    client.patch(f"/api/reels/{rid}", json={"card_style": "card"})
+    assert "descriptions switched between overlay and title cards" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]

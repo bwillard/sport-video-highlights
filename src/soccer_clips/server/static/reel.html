@@ -73,10 +73,15 @@
       <div class="row" style="margin-top:0">
         <button data-render="preview_540p" title="960×540, fast — check order and cuts">Render preview</button>
         <button data-render="landscape_1080p" title="1920×1080, slower">Render full</button>
-        <label title="Title cards stay up long enough to read (0.75s + 17 characters per second), and at least this long. 0 = no cards.">
+        <label title="How each clip's game time and note are shown: a caption over the start of the clip, or a title card before it. The reel's opening card is a card either way.">
+          descriptions <select id="cardStyle">
+            <option value="overlay">overlay on video</option>
+            <option value="card">title card before clip</option>
+          </select></label>
+        <label title="Cards and captions stay up long enough to read (0.75s + 17 characters per second), and at least this long. 0 = none.">
           cards ≥ <input type="number" id="cardS" min="0" max="15" step="0.5" style="width:4.5em"> s</label>
-        <label title="how long to freeze on each clip's callout (set with C in the tagger); 0 = no freezes">
-          freeze <input type="number" id="calloutS" min="0" max="10" step="0.5" style="width:4.5em"> s</label>
+        <label title="How long to freeze on each clip's callout (set with C in the tagger). Leave empty for the default (1.5s with overlays, 0.75s with cards); 0 = no freezes.">
+          freeze <input type="number" id="calloutS" min="0" max="10" step="0.25" style="width:4.5em"> s</label>
       </div>
       <div class="row" id="jobRow" hidden><span class="stat" id="jobText"></span><div class="progress"><div id="jobBar"></div></div></div>
       <div class="row warn" id="stale" hidden></div>
@@ -201,7 +206,12 @@ function render() {
   const { reel, items } = view;
   if (document.activeElement !== $("title")) $("title").value = reel.title;
   if (document.activeElement !== $("cardS")) $("cardS").value = reel.card_s;
-  if (document.activeElement !== $("calloutS")) $("calloutS").value = reel.callout_s;
+  $("cardStyle").value = reel.card_style;
+  if (document.activeElement !== $("calloutS")) {
+    // empty = the style's default, shown as the placeholder
+    $("calloutS").value = reel.callout_s ?? "";
+    $("calloutS").placeholder = `${reel.freeze_s}`;
+  }
   const missing = items.filter((i) => i.missing).length;
   const r = current();
   $("summary").textContent = `${items.length} clip(s)${missing ? `, ${missing} missing` : ""}` +
@@ -282,9 +292,15 @@ $("cardS").addEventListener("change", async (e) => {
 });
 $("cardS").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
 $("calloutS").addEventListener("change", async (e) => {
-  const value = Math.max(0, Math.min(10, +e.target.value || 0));
+  const raw = e.target.value.trim();
+  const value = raw === "" ? null : Math.max(0, Math.min(10, +raw || 0));  // empty = back to the default
   view = await api("PATCH", `/api/reels/${reelId()}`, { callout_s: value });
   e.target.blur();
+  render();
+});
+$("cardStyle").addEventListener("change", async (e) => {
+  e.target.blur();
+  view = await api("PATCH", `/api/reels/${reelId()}`, { card_style: e.target.value });
   render();
 });
 $("calloutS").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });

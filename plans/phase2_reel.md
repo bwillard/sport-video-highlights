@@ -73,6 +73,14 @@ A vertical (9:16) preset is a [future idea](#future-ideas).
 - **Out of date:** a render is flagged if the card length, the title card, or a clip card's text (note or kickoff edited) changed since it was made.
 - Possible later tweaks: separate lengths for the opening card and clip cards; show the game's description/date on clip cards in multi-game reels (the time alone is ambiguous there).
 
+## Caption overlays (2026-10-15)
+Per-reel setting **Descriptions** (`Reel.card_style`): `"overlay"` (default) or `"card"` (the clip cards above). The reel's opening card is a full card either way.
+- **Overlay:** the clip's card text (game time + note) is drawn in a rounded, ~65%-opaque black box near the bottom centre of the video (time bold on top, note wrapped below, up to 3 lines; `draw_caption` in `reel/cards.py`). It shows from the start of the clip for the same reading time a card would get (0.75s + 17 cps, at least `card_s`), and again during the callout freeze if the clip has one.
+- **Render:** one more cached step after the clip and the callout splice: ffmpeg `overlay` with `enable=between(t,…)` windows. Each step is cached separately, so a note edit only redoes the caption pass. The time map records `caption_lines` / `caption_s`; `Render.card_style` records which style was used (renders from before this default to `"card"`).
+- **Freeze default depends on the style:** `Reel.callout_s` is now optional; empty means the style's default (`DEFAULT_FREEZE_S`: 1.5s with overlays, where the caption is read during the freeze; 0.75s with cards). A typed value sticks across styles; clearing the box goes back to the default. The reel page shows the default as the box's placeholder.
+- **Out of date:** switching style, editing a note/kickoff shown in a caption, or changing the timing rule flags the render.
+- Existing reels have no `card_style` saved, so they now use overlays; their old renders are flagged "descriptions switched between overlay and title cards" until re-rendered.
+
 ## Watching reels in the app
 Requested 2026-10-14: watch a rendered reel in the tagger app, jump from any moment of the reel back to that moment in the full game, and download the reel. (Built in the first slice above; this is the design.)
 

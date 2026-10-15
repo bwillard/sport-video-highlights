@@ -7,6 +7,9 @@ into a short silent clip by the renderer.
   the date range.
 - Clip card (before each clip): the time in the game, and the clip's note if
   it has one, so viewers know what they're about to see.
+- Caption (overlay style, instead of clip cards): the same text in a
+  semi-transparent box near the bottom of the video, drawn on a transparent
+  image that the renderer overlays on the start of the clip.
 """
 
 from datetime import date
@@ -142,6 +145,46 @@ def draw_card(lines: list[str], width: int, height: int) -> Image.Image:
     for i, (text, font, colour) in enumerate(blocks):
         if body and i == len(head):
             y += gap
+        draw.text((width / 2, y), text, font=font, fill=colour, anchor="mt")
+        y += line_h(font)
+    return img
+
+
+CAPTION_BOX = (0, 0, 0, 165)  # black, ~65% opaque
+MAX_CAPTION_LINES = 3
+
+
+def draw_caption(lines: list[str], width: int, height: int) -> Image.Image:
+    """
+    Transparent full-frame image with a caption box near the bottom: the
+    first line (game time) bold and white, the note below it wrapped.
+    """
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    head_font = _font(round(height * 0.05))
+    body_font = _font(round(height * 0.04))
+    max_w = width * 0.8
+    pad = round(height * 0.02)
+
+    head = _wrap(lines[0], head_font, max_w, 1) if lines else []
+    body = [part for line in lines[1:] for part in _wrap(line, body_font, max_w, MAX_CAPTION_LINES)]
+    blocks = [(t, head_font, TEXT) for t in head] + [(t, body_font, SUBTEXT) for t in body]
+    if not blocks:
+        return img
+
+    def line_h(font: ImageFont.FreeTypeFont) -> int:
+        top, bottom = font.getbbox("Ag")[1::2]
+        return round((bottom - top) * 1.3)
+
+    text_w = max(font.getlength(t) for t, font, _ in blocks)
+    text_h = sum(line_h(f) for _, f, _ in blocks)
+    box_w, box_h = text_w + 2 * pad, text_h + 2 * pad
+    left = (width - box_w) / 2
+    bottom = height * 0.94
+    top = bottom - box_h
+    draw.rounded_rectangle((left, top, left + box_w, bottom), radius=pad, fill=CAPTION_BOX)
+    y = top + pad
+    for text, font, colour in blocks:
         draw.text((width / 2, y), text, font=font, fill=colour, anchor="mt")
         y += line_h(font)
     return img
