@@ -58,6 +58,7 @@ A vertical (9:16) preset is a [future idea](#future-ideas).
 - **Reel page** (`/reel`, `/reel#reel=<id>&preset=<p>&t=<s>`): a reel list, then for a reel: player, timeline coloured by clip (orange = her), "Clips in this video" chapter list (current one highlighted), "Reel order" list with ↑/↓/✕ and a link to each clip in the tagger, render buttons with progress, download link per version, and the out-of-date warning. Keys: Space, `[`/`]` speed, ←/→ ±5s, ↑/↓ previous/next clip, **G** go to the full game.
 - **Jumping back:** G (or "game ↗" on a chapter) opens the tagger at `#game=<id>&t=<source time>&clip=<id>&back=<reel url>`. The tagger seeks there, selects the clip and shows "← back to reel"; the browser's Back button also returns to the same spot in the reel.
 - Shared page code lives in `static/common.js` / `common.css`.
+- **Added 2026-10-15:** under the reel title, each game in the reel with its date and description; clip notes on their own line in both "Clips in this video" and "Reel order"; ◎ on clips with a callout; a ▶ preview button on each clip in "Reel order" that plays it straight from the full-game video (no render needed), stops at the clip's end (Space replays), and returns to the same spot in the reel with "✕ back to reel" or `Esc` (`G` during a preview opens the tagger there). Changing `#reel=` in the URL now switches reels without a reload.
 
 ## Title cards (2026-10-14)
 - **What's on them:** white text on a dark background (`#111`), centred, DejaVu Sans Bold (Pillow's built-in font if that's missing).

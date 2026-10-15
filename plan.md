@@ -123,3 +123,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-15** — Video starts muted in the app (`M` toggles). Measured: removing audio from reels would save ~2% file size and ~1% render time, so reels keep their audio.
 - **2026-10-15** — Title cards are timed by their text: 1s + 15 characters/second, with a 2s minimum per reel (`Reel.card_s`, now a minimum) and a 15s cap.
 - **2026-10-15** — API request bodies reject unknown fields, so a page newer than the running server fails loudly (found when a stale server silently dropped game descriptions).
+- **2026-10-15** — Reel page: game date + description under the title, clip notes in both lists, ▶ preview of any clip straight from its game.

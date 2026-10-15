@@ -16,6 +16,11 @@
   .progress div { height: 100%; background: var(--accent); width: 0; }
   #reelList li { grid-template-columns: 1fr auto; }
   .placeholder { padding: 48px 16px; text-align: center; color: var(--muted); background: #000; border-radius: 4px; }
+  #gameInfo { margin-top: 6px; color: var(--muted); line-height: 1.5; }
+  #gameInfo b { color: var(--text); font-weight: 600; }
+  .list .note { grid-column: 2 / -1; color: var(--text); font-size: 13px; white-space: normal; margin-top: -2px; }
+  #previewBar { display: flex; gap: 10px; align-items: center; padding: 6px 10px; margin-bottom: 6px;
+                background: #3a2a10; border: 1px solid var(--warn); border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -38,18 +43,25 @@
 
 <div class="layout" id="main" hidden>
   <section>
+    <div id="previewBar" hidden>
+      <span id="previewText"></span><span style="flex:1"></span>
+      <button id="previewReplay" title="play the clip again">▶ again</button>
+      <button id="previewBack" title="Esc">✕ back to reel</button>
+    </div>
     <video id="v" preload="auto"></video>
     <div id="placeholder" class="placeholder" hidden>Not rendered yet. Use “Render preview” (quick) or “Render full” on the right.</div>
     <canvas id="timeline"></canvas>
     <p class="help">
       <kbd>Space</kbd> play/pause · <kbd>M</kbd> sound on/off · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× · <kbd>←</kbd>/<kbd>→</kbd> ±5s ·
       <kbd>↑</kbd>/<kbd>↓</kbd> previous / next clip ·
-      <kbd>G</kbd> go to this moment in the full game (Back returns here)
+      <kbd>G</kbd> go to this moment in the full game (Back returns here) ·
+      ▶ on a clip under “Reel order” previews it from the game (<kbd>Esc</kbd> returns to the reel)
     </p>
   </section>
   <aside>
     <div class="box">
       <input id="title" aria-label="reel title">
+      <div id="gameInfo"></div>
       <div class="row">
         <span class="stat" id="summary"></span>
         <span style="flex:1"></span>
@@ -91,6 +103,13 @@ const v = $("v"), canvas = $("timeline");
 let reels = [], view = null, preset = null, games = {}, pollTimer = null, hoverX = null;
 
 const reelId = () => view?.reel.id;
+// "2026-10-10" -> "Saturday, October 10, 2026" (parsed as a local date, not UTC)
+const longDate = (iso) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+};
+// the games in this reel, in the order they first appear
+const reelGames = () => [...new Set(view.items.map((i) => i.game_id))].map((id) => games[id] || { id });
 const current = () => view?.renders.find((r) => r.preset === preset) || null;
 const segments = () => current()?.segments || [];
 const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "reel";
@@ -137,7 +156,10 @@ async function loadReels() {
 }
 
 async function openReel(id, wantPreset = null, startT = 0) {
-  view = await getJson(`/api/reels/${id}`);
+  if (preview) { preview = null; $("previewBar").hidden = true; canvas.hidden = false; }
+  const [reelView, allGames] = await Promise.all([getJson(`/api/reels/${id}`), getJson("/api/games")]);
+  view = reelView;
+  for (const g of allGames) games[g.id] = g;
   $("reelPick").value = id;
   $("noReel").hidden = true;
   $("main").hidden = false;
@@ -185,6 +207,11 @@ function render() {
   $("summary").textContent = `${items.length} clip(s)${missing ? `, ${missing} missing` : ""}` +
     (r ? ` · ${fmt(r.duration_s)} long` : "");
   $("dur").textContent = r ? fmt(r.duration_s) : "–";
+  $("gameInfo").innerHTML = reelGames().map((g) => {
+    const date = g.played_on ? `<b>${esc(longDate(g.played_on))}</b>` : "";
+    const desc = esc(g.description || (g.played_on ? "" : shortGame(g.id)));
+    return `<div>${[date, desc].filter(Boolean).join(" · ")}</div>`;
+  }).join("");
 
   $("versions").innerHTML = view.renders.map((x) => `
     <button data-preset="${x.preset}" class="${x.preset === preset ? "on" : ""}" title="watch this version">${PRESET_NAMES[x.preset]}</button>
@@ -201,8 +228,9 @@ function render() {
     return `<li data-i="${i}" class="${i === now ? "sel" : ""}" title="from ${esc(s.game_id)} at ${fmt(s.source_start_s)}">
       <span class="d">${i + 1}</span>
       <span class="t">${esc(clipLabel(s.game_id, s.source_start_s))}</span>
-      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}${info?.note ? " · " + esc(info.note) : ""}${s.callout ? " · ◎" : ""}</span>
+      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}${s.callout ? " · ◎" : ""}</span>
       <a href="#" data-go="${i}" title="go to this clip in the full game (G)">game ↗</a>
+      ${info?.note ? `<span class="note">${esc(info.note)}</span>` : ""}
     </li>`;
   }).join("") : `<li class="empty">Render the reel to watch it here.</li>`;
 
@@ -210,8 +238,9 @@ function render() {
     <li data-i="${i}">
       <span class="d">${i + 1}</span>
       <span class="tags">${it.missing ? '<span class="warn">clip deleted</span> · ' + esc(shortGame(it.game_id))
-        : `${it.involves_her ? '<span class="her">● her</span> ' : ""}<a href="${taggerLink(it.game_id, it.start_s, it.clip_id)}">${esc(clipLabel(it.game_id, it.start_s))}</a> ${esc(shortGame(it.game_id))} · ${(it.end_s - it.start_s).toFixed(1)}s${it.tags.length ? " · " + esc(it.tags.join(", ")) : ""}`}</span>
-      <span><button data-move="-1" title="move up" ${i === 0 ? "disabled" : ""}>↑</button><button data-move="1" title="move down" ${i === items.length - 1 ? "disabled" : ""}>↓</button><button data-remove title="remove from reel" class="danger">✕</button></span>
+        : `${it.involves_her ? '<span class="her">● her</span> ' : ""}<a href="${taggerLink(it.game_id, it.start_s, it.clip_id)}">${esc(clipLabel(it.game_id, it.start_s))}</a> ${esc(shortGame(it.game_id))} · ${(it.end_s - it.start_s).toFixed(1)}s${it.tags.length ? " · " + esc(it.tags.join(", ")) : ""}${it.has_callout ? " · ◎" : ""}`}</span>
+      <span>${it.missing ? "" : `<button data-preview title="preview this clip from the game">▶</button>`}<button data-move="-1" title="move up" ${i === 0 ? "disabled" : ""}>↑</button><button data-move="1" title="move down" ${i === items.length - 1 ? "disabled" : ""}>↓</button><button data-remove title="remove from reel" class="danger">✕</button></span>
+      ${it.note ? `<span class="note">${esc(it.note)}</span>` : ""}
     </li>`).join("") : `<li class="empty">No clips in this reel yet.</li>`;
 }
 
@@ -228,6 +257,7 @@ $("items").addEventListener("click", (e) => {
   if (!b) return;
   b.blur();
   const i = +b.closest("li").dataset.i, items = [...view.items];
+  if ("preview" in b.dataset) return startPreview(i);
   if (b.dataset.move) {
     const j = i + +b.dataset.move;
     [items[i], items[j]] = [items[j], items[i]];
@@ -301,6 +331,45 @@ async function resumeJobs() {
   if (active) watchJob(active);
 }
 
+// ---------- previewing one clip from its game ----------
+// Plays the clip straight from the full-game video (no render needed), then
+// returns to the reel at the same spot.
+let preview = null;  // {item, back: {preset, t}}
+
+function startPreview(i) {
+  const it = view.items[i];
+  if (!preview) preview = { back: { preset, t: v.currentTime } };
+  preview.item = it;
+  preview.n = i + 1;
+  $("previewText").textContent = `Previewing clip ${i + 1}: ${clipLabel(it.game_id, it.start_s)} · ${shortGame(it.game_id)} · ` +
+    `${fmt(it.start_s)}–${fmt(it.end_s)}${it.note ? ` · ${it.note}` : ""}`;
+  $("previewBar").hidden = false;
+  $("placeholder").hidden = true;
+  v.hidden = false;
+  canvas.hidden = true;
+  v.pause();
+  v.src = `/video/${encodeURIComponent(it.game_id)}`;
+  v.addEventListener("loadedmetadata", () => { v.currentTime = it.start_s; v.play(); }, { once: true });
+}
+function replayPreview() {
+  if (!preview) return;
+  v.currentTime = preview.item.start_s;
+  v.play();
+}
+function endPreview() {
+  if (!preview) return;
+  const { back } = preview;
+  preview = null;
+  $("previewBar").hidden = true;
+  canvas.hidden = false;
+  preset = back.preset;
+  loadVideo(back.t);
+  lastChapter = lastHeader = undefined;  // refresh the header and lists
+  render();
+}
+$("previewReplay").addEventListener("click", (e) => { e.target.blur(); replayPreview(); });
+$("previewBack").addEventListener("click", (e) => { e.target.blur(); endPreview(); });
+
 // ---------- playback ----------
 function seekTo(t) { v.currentTime = Math.max(0, Math.min(v.duration || 0, t)); }
 
@@ -354,6 +423,23 @@ v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
 
 document.addEventListener("keydown", (e) => {
   if (typingInField(e) || !view || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (preview) {  // only a few keys make sense while previewing a clip
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const previewKeys = {
+      " ": () => (!v.paused ? v.pause() : v.currentTime >= preview.item.end_s - 0.05 ? replayPreview() : v.play()),
+      m: () => toggleMute(),
+      Escape: endPreview,
+      ArrowLeft: () => seekTo(v.currentTime - 5),
+      ArrowRight: () => seekTo(v.currentTime + 5),
+      g: () => {
+        history.replaceState(null, "", `/reel${makeHash({ reel: reelId(), preset: preview.back.preset, t: preview.back.t.toFixed(2) })}`);
+        location.href = `/${makeHash({ game: preview.item.game_id, t: v.currentTime.toFixed(2), clip: preview.item.clip_id,
+                                       back: location.pathname + location.hash })}`;
+      },
+    };
+    if (previewKeys[k]) { e.preventDefault(); previewKeys[k](); }
+    return;
+  }
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const actions = {
     " ": () => (v.paused ? v.play() : v.pause()),
@@ -427,7 +513,11 @@ canvas.addEventListener("pointerleave", () => (hoverX = null));
 let lastChapter = null, lastHeader = null;
 function frame() {
   $("time").textContent = fmt(v.currentTime || 0);
-  if (view) {
+  if (preview) {
+    if (!v.paused && v.currentTime >= preview.item.end_s) v.pause();
+    $("chap").textContent = `previewing clip ${preview.n}`;
+    $("dur").textContent = fmt(preview.item.end_s);  // game time, so show where the clip ends
+  } else if (view) {
     const i = segmentAt(v.currentTime), s = segments()[i];
     const header = s
       ? `${i + 1}/${segments().length} · ${clipLabel(s.game_id, s.source_start_s)}${onCard(s, v.currentTime) ? " (card)" : inFreeze(s, v.currentTime) ? " (callout)" : ""}`
@@ -442,6 +532,11 @@ function frame() {
   }
   requestAnimationFrame(frame);
 }
+
+window.addEventListener("hashchange", () => {
+  const h = readHash();
+  if (h.reel && h.reel !== reelId() && reels.some((r) => r.reel.id === h.reel)) openReel(h.reel, h.preset, +h.t || 0);
+});
 
 // ---------- start ----------
 (async () => {
