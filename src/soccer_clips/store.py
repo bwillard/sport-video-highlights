@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from soccer_clips.config import Settings
-from soccer_clips.models import DEFAULT_TAGS, Game, Tag
+from soccer_clips.models import DEFAULT_TAGS, Game, Preset, Reel, Render, Tag
 
 _tags_adapter = TypeAdapter(list[Tag])
 
@@ -111,3 +111,46 @@ class Store:
     def clip_export_rel(self, game: Game, clip_id: str) -> str:
         """Export path for a clip, relative to clips_dir."""
         return f"{game.year}/{game.id}/{clip_id}.mp4"
+
+    # ---------- reels ----------
+
+    def reel_dir(self, reel_id: str) -> Path:
+        return self.settings.reels_dir / reel_id
+
+    def _reel_path(self, reel_id: str) -> Path:
+        return self.reel_dir(reel_id) / "reel.json"
+
+    def load_reel(self, reel_id: str) -> Reel:
+        path = self._reel_path(reel_id)
+        if not path.exists():
+            raise KeyError(f"no reel {reel_id!r}")
+        return Reel.model_validate_json(path.read_text())
+
+    def save_reel(self, reel: Reel) -> None:
+        path = self._reel_path(reel.id)
+        with _lock_for(path):
+            atomic_write_text(path, reel.model_dump_json(indent=2) + "\n")
+
+    @contextmanager
+    def edit_reel(self, reel_id: str) -> Iterator[Reel]:
+        path = self._reel_path(reel_id)
+        with _lock_for(path):
+            if not path.exists():
+                raise KeyError(f"no reel {reel_id!r}")
+            reel = Reel.model_validate_json(path.read_text())
+            yield reel
+            atomic_write_text(path, reel.model_dump_json(indent=2) + "\n")
+
+    def list_reels(self) -> list[Reel]:
+        reels = [Reel.model_validate_json(p.read_text()) for p in self.settings.reels_dir.glob("*/reel.json")]
+        return sorted(reels, key=lambda r: r.created_at, reverse=True)
+
+    def render_path(self, reel_id: str, preset: Preset) -> Path:
+        return self.reel_dir(reel_id) / f"{preset}.render.json"
+
+    def load_render(self, reel_id: str, preset: Preset) -> Render | None:
+        path = self.render_path(reel_id, preset)
+        return Render.model_validate_json(path.read_text()) if path.exists() else None
+
+    def save_render(self, render: Render) -> None:
+        atomic_write_text(self.render_path(render.reel_id, render.preset), render.model_dump_json(indent=2) + "\n")

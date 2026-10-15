@@ -7,8 +7,8 @@
 > - Each phase has its own detailed doc in [plans/](plans/) — refine those as we build, and keep this doc as the summary.
 
 ## Status (last updated 2026-10-13)
-**Current phase:** Phase 1 in progress (not yet committed). Tagger page built: quick-clip/in-out marking, tags, rating, her flag, notes, filters, timeline, kickoff + match clock, single/batch export. Tests pass (18 unit + a headless-Chrome keyboard run on synthetic video).
-**Next action:** Tag one full real game and write down friction points in [plans/phase1_tagging.md](plans/phase1_tagging.md); then commit. Then Phase 2, which now includes watching reels in the app with jump-back to the full game, and reel downloads. Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
+**Current phase:** Phase 2 in progress (first slice built, not yet committed). Phase 1 committed (d93c0a6). Reels: add clips from the tagger, render preview/full with hard cuts, watch on the reel page with chapters, jump to the full game (G) and back, download. 23 unit tests + headless-Chrome runs pass.
+**Next action:** Try a real reel. Then the rest of Phase 2: transitions, title card, music, vertical, per-clip trim/speed/slow-mo. Still open from Phase 1: tag a full real game and note friction. Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
 **Blocked on:** nothing, but forbeck_env needs cleanup: `soccer_clips` + fastapi/pydantic/uvicorn/httpx2 stack were accidentally pip-installed there and idna was upgraded 3.7 → 3.20 (see 2026-10-13 log).
 
 ## Goals
@@ -82,7 +82,7 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 ## Plan
 - [x] **Phase 0 — Setup & ingest** → [plans/phase0_ingest.md](plans/phase0_ingest.md)
   Environment, ffmpeg upgrade, import a game, make a scrub-friendly proxy.
-- [ ] **Phase 1 — Clip tagging** → [plans/phase1_tagging.md](plans/phase1_tagging.md)
+- [ ] **Phase 1 — Clip tagging** (built; real-game test pending) → [plans/phase1_tagging.md](plans/phase1_tagging.md)
   Keyboard-driven web player: mark in/out, tag, rate, export clips.
 - [ ] **Phase 2 — Highlight reel** → [plans/phase2_reel.md](plans/phase2_reel.md)
   Order clips, render with transitions, title card, music, landscape + vertical. Watch reels in the app, jump back to the full game, download.
@@ -115,3 +115,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-13** — LAN scrub test passed on the originals: seeking and stepping feel fine, so the proxy step is skipped. Added `[`/`]` to halve/double playback speed (¼×–8×), since `L` could only speed up.
 - **2026-10-13** — Phase 1 keymap: `[`/`]` stay as speed controls, so prev/next clip is ↑/↓ and the "her" flag is `F`. Clip API is nested under the game (`/api/games/{id}/clips/{clip_id}`).
 - **2026-10-14** — Exports are single-clip files; a joined reel is Phase 2. Planned for Phase 2: each render writes a segment map (`render.json`) so the in-app reel player can jump to the matching moment in the full game, and offers the reel for download. Also: `[`/`]` step speed by 0.5× (0.5×–8×), J/K/L removed, and the clip list links to each exported file.
+- **2026-10-14** — Phase 2 first slice: hard-cut reels with a segment map for jump-back. Exports and renders share one background worker (`jobs.py`) so two CPU-heavy encodes never run at once. Rendered reels live in `<SOCCER_REELS_DIR>/<reel_id>/`.

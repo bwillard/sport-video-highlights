@@ -82,7 +82,7 @@ def test_kickoff_set_and_clear(client):
 def test_export_clip(client, settings, fast):
     clip = client.post(f"/api/games/{GAME}/clips", json={"start_s": 1.0, "end_s": 2.0}).json()
     [job] = client.post(f"/api/games/{GAME}/export", json={"clip_ids": [clip["id"]], "fast": fast}).json()
-    client.app_state.exports.wait()
+    client.app_state.jobs.wait()
 
     job = client.get(f"/api/jobs/{job['id']}").json()
     assert job["status"] == "done", job["error"]

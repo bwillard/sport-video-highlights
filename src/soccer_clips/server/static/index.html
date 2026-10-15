@@ -4,59 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Soccer Clips</title>
+<link rel="stylesheet" href="/static/common.css">
 <style>
-  :root {
-    --bg: #111; --panel: #1b1b1b; --line: #333; --text: #eee; --muted: #999;
-    --accent: #4ea1ff; --her: #ff8a3d; --in: #3ddc84; --bad: #ff5c5c;
-  }
-  * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
-  .bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-  .stat { font-variant-numeric: tabular-nums; color: var(--muted); }
-  .stat b { color: var(--text); font-weight: 600; }
-  #flash { margin-left: auto; color: var(--muted); }
-  #flash.err { color: var(--bad); }
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 12px 16px; }
-  @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
-  video { width: 100%; max-height: 72vh; background: #000; display: block; }
-  #timeline { width: 100%; height: 56px; display: block; margin-top: 6px; cursor: pointer; touch-action: none; }
-  .help { color: var(--muted); line-height: 1.9; font-size: 13px; }
-  kbd { background: #333; border-radius: 3px; padding: 0 5px; color: var(--text); font-family: inherit; }
-  aside { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
-  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  select, button, textarea, input { font: inherit; color: var(--text); background: #262626; border: 1px solid var(--line); border-radius: 4px; }
-  button { padding: 3px 8px; cursor: pointer; }
-  button:hover { border-color: #555; }
-  button.on { background: var(--accent); border-color: var(--accent); color: #000; }
-  button.her.on { background: var(--her); border-color: var(--her); }
-  button.danger { color: var(--bad); }
-  #clips { list-style: none; margin: 0; padding: 0; max-height: 42vh; overflow-y: auto; }
-  #clips li { display: grid; grid-template-columns: 64px 44px 1fr auto; gap: 6px; align-items: center;
-              padding: 4px 6px; border-radius: 4px; cursor: pointer; font-variant-numeric: tabular-nums; }
-  #clips li:hover { background: #242424; }
-  #clips li.sel { background: #1d3550; }
-  #clips .t { font-weight: 600; }
-  #clips .d { color: var(--muted); font-size: 12px; }
-  #clips .tags { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #clips .her { color: var(--her); }
-  .x { font-size: 12px; color: var(--muted); }
-  .x.done { color: var(--in); }
-  a.x.done { text-decoration: none; }
-  a.x.done:hover { text-decoration: underline; }
-  .x.failed { color: var(--bad); }
-  .empty { color: var(--muted); padding: 6px; }
-  #detail h3 { margin: 0 0 8px; font-size: 14px; }
   #detail .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
   #detail .lbl { color: var(--muted); width: 52px; }
   #detail textarea { width: 100%; min-height: 48px; padding: 4px 6px; resize: vertical; }
-  #detail a { color: var(--accent); }
-  .hk { color: var(--muted); font-size: 11px; margin-left: 3px; }
-  button.on .hk { color: #00000099; }
+  #back { font-weight: 600; }
 </style>
 </head>
 <body>
 <div class="bar">
+  <a id="back" hidden>← back to reel</a>
   <select id="game" aria-label="game"></select>
   <span class="stat">time <b id="time">0:00.0</b></span>
   <span class="stat">match <b id="clock">–</b></span>
@@ -64,6 +22,7 @@
   <span class="stat">in <b id="markin">–</b></span>
   <span class="stat">kickoff <b id="kickoffs">–</b></span>
   <span id="flash"></span>
+  <a href="/reel">Reels →</a>
 </div>
 <div class="layout">
   <section>
@@ -90,64 +49,36 @@
       <label><input type="checkbox" id="fher"> her only</label>
       <span class="stat" id="count"></span>
     </div>
-    <div class="box"><ul id="clips"></ul></div>
+    <div class="box"><ul id="clips" class="list"></ul></div>
     <div class="box filters">
       <button id="exportShown">Export shown</button>
       <label title="stream copy: quick, but starts snap to the previous keyframe (up to 2.5s early)">
         <input type="checkbox" id="fast"> fast</label>
       <span class="stat" id="jobs"></span>
     </div>
+    <div class="box filters">
+      <select id="reelPick" aria-label="reel to add to"><option value="">new reel…</option></select>
+      <button id="addToReel">Add shown to reel</button>
+      <a id="openReel" hidden></a>
+    </div>
     <div class="box" id="detail"></div>
   </aside>
 </div>
+<script src="/static/common.js"></script>
 <script>
 const QUICK_BEFORE_S = 8, QUICK_AFTER_S = 2;
 const MIN_RATE = 0.5, MAX_RATE = 8, RATE_STEP = 0.5;
 
-const $ = (id) => document.getElementById(id);
 const v = $("v"), sel = $("game"), canvas = $("timeline");
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 let game = null, tags = [], clips = [];
 let selectedId = null, markIn = null, markOut = null, stopAt = null;
 let jobsByClip = {}, pollTimer = null, hoverX = null;
 let fps = 30000 / 1001;
 
-// ---------- formatting ----------
-function fmt(t) {
-  const m = Math.floor(t / 60), s = t - m * 60;
-  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
-}
-function matchClock(t) {
-  const k1 = game?.kickoff_1h_s, k2 = game?.kickoff_2h_s;
-  if (k2 != null && t >= k2) return `2H ${Math.floor((t - k2) / 60) + 1}'`;
-  if (k1 != null && t >= k1) return `${Math.floor((t - k1) / 60) + 1}'`;
-  return k1 != null ? "pre" : "";
-}
+const matchClock = (t) => matchClockFor(t, game?.kickoff_1h_s, game?.kickoff_2h_s);
 const label = (t) => matchClock(t) || fmt(t);
-function flash(msg, err = false) {
-  const el = $("flash");
-  el.textContent = msg;
-  el.className = err ? "err" : "";
-  clearTimeout(flash.t);
-  flash.t = setTimeout(() => (el.textContent = ""), err ? 8000 : 2500);
-}
 
-// ---------- API ----------
-async function api(method, url, body) {
-  const r = await fetch(url, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!r.ok) {
-    let msg = await r.text();
-    try { msg = JSON.parse(msg).detail; } catch {}
-    flash(`${method} failed: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`, true);
-    throw new Error(msg);
-  }
-  return r.status === 204 ? null : r.json();
-}
 const gameUrl = () => `/api/games/${encodeURIComponent(game.id)}`;
 const clipUrl = (id) => `${gameUrl()}/clips/${id}`;
 
@@ -449,11 +380,7 @@ async function setKickoff(half) {
 }
 
 document.addEventListener("keydown", (e) => {
-  const tag = e.target.tagName;
-  if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") {
-    if (e.key === "Escape") e.target.blur();
-    return;
-  }
+  if (typingInField(e)) return;
   if (!game || e.ctrlKey || e.metaKey || e.altKey) return;
 
   // Digits by physical key, since Shift+1 types "!" on most layouts.
@@ -505,30 +432,94 @@ document.addEventListener("keydown", (e) => {
   act();
 });
 
+// ---------- reels ----------
+async function loadReels() {
+  const reels = await getJson("/api/reels");
+  const pick = $("reelPick"), keep = pick.value;
+  pick.length = 1;
+  for (const r of reels) pick.append(new Option(`${r.reel.title} (${r.reel.items.length})`, r.reel.id));
+  if (reels.some((r) => r.reel.id === keep)) pick.value = keep;
+}
+
+$("addToReel").addEventListener("click", async (e) => {
+  e.target.blur();
+  const items = visibleClips().map((c) => ({ game_id: game.id, clip_id: c.id }));
+  if (!items.length) return flash("no clips shown to add", true);
+  let view, added = items.length;
+  if (!$("reelPick").value) {
+    const title = prompt("Title for the new reel:", `${shortGame(game.id)} ${game.played_on || ""}`.trim());
+    if (title == null) return;
+    view = await api("POST", "/api/reels", { title, items });
+  } else {
+    const id = $("reelPick").value;
+    const { reel } = await getJson(`/api/reels/${id}`);
+    const have = new Set(reel.items.map((i) => `${i.game_id}/${i.clip_id}`));
+    const fresh = items.filter((i) => !have.has(`${i.game_id}/${i.clip_id}`));
+    added = fresh.length;
+    view = await api("PATCH", `/api/reels/${id}`, { items: [...reel.items, ...fresh] });
+  }
+  await loadReels();
+  $("reelPick").value = view.reel.id;
+  const link = $("openReel");
+  link.href = `/reel${makeHash({ reel: view.reel.id })}`;
+  link.textContent = `open “${view.reel.title}” →`;
+  link.hidden = false;
+  flash(`added ${added} clip(s) to “${view.reel.title}” (${view.reel.items.length} total)`);
+});
+
 // ---------- loading ----------
-async function loadGame(id) {
-  game = await (await fetch(`/api/games/${encodeURIComponent(id)}`)).json();
+// The reel page links here with #game=<id>&t=<seconds>&clip=<id>&back=<reel page url>.
+async function loadGame(id, startT = 0, clipId = null) {
+  if (game?.id === id) {  // already loaded: just jump
+    seekTo(startT);
+    if (clipId && clips.some((c) => c.id === clipId)) select(clipId, false);
+    return;
+  }
+  game = await getJson(`/api/games/${encodeURIComponent(id)}`);
+  sel.value = id;
   fps = game.fps_num / game.fps_den;
   clips = game.clips.sort((a, b) => a.start_s - b.start_s);
-  selectedId = markIn = markOut = stopAt = null;
+  selectedId = clips.some((c) => c.id === clipId) ? clipId : null;
+  markIn = markOut = stopAt = null;
   try { localStorage.setItem("game", id); } catch {}
-  // Start each game fresh: paused at 0:00 and 1× speed.
+  // Start fresh: paused at the requested time (0:00 by default) and 1× speed.
   v.pause();
   v.src = `/video/${encodeURIComponent(id)}`;
-  v.addEventListener("loadedmetadata", () => { v.currentTime = 0; }, { once: true });
+  v.addEventListener("loadedmetadata", () => { v.currentTime = startT; }, { once: true });
   v.defaultPlaybackRate = v.playbackRate = 1;
   $("rate").textContent = 1;
   render();
+  document.querySelector("#clips li.sel")?.scrollIntoView({ block: "nearest" });
   pollJobs();
 }
 
+function applyHash() {
+  const h = readHash();
+  const back = $("back");
+  back.hidden = !h.back;
+  if (h.back) back.href = h.back;
+  if (h.game && [...sel.options].some((o) => o.value === h.game)) {
+    loadGame(h.game, Math.max(0, +h.t || 0), h.clip || null);
+    return true;
+  }
+  return false;
+}
+window.addEventListener("hashchange", applyHash);
+
 (async () => {
-  tags = await (await fetch("/api/tags")).json();
+  tags = await getJson("/api/tags");
   for (const t of tags) $("ftag").append(new Option(t.name, t.name));
-  const games = await (await fetch("/api/games")).json();
+  const games = await getJson("/api/games");
   for (const g of games) sel.append(new Option(g.id, g.id));
   // Blur after picking so the keys drive the player instead of switching games.
-  sel.addEventListener("change", () => { sel.blur(); loadGame(sel.value); });
+  sel.addEventListener("change", () => {
+    sel.blur();
+    const back = readHash().back;  // keep the way back to the reel
+    history.replaceState(null, "", location.pathname + (back ? makeHash({ back }) : ""));
+    loadGame(sel.value);
+  });
+  loadReels();
+  if (applyHash()) return;
   let last = null;
   try { last = localStorage.getItem("game"); } catch {}
   if (games.some((g) => g.id === last)) sel.value = last;

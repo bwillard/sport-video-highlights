@@ -5,6 +5,7 @@ so older files keep loading; bump schema_version only for a real migration.
 
 import secrets
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -81,3 +82,51 @@ class Game(BaseModel):
             if c.id == clip_id:
                 return c
         raise KeyError(f"no clip {clip_id!r} in game {self.id!r}")
+
+
+# ---------- reels (Phase 2) ----------
+
+Preset = Literal["landscape_1080p", "preview_540p"]
+
+
+class ReelItem(BaseModel):
+    game_id: str
+    clip_id: str
+
+
+class Reel(BaseModel):
+    schema_version: int = 1
+    id: str = Field(default_factory=lambda: secrets.token_hex(4))
+    title: str
+    items: list[ReelItem] = []
+    created_at: datetime = Field(default_factory=_now)
+
+
+class Segment(BaseModel):
+    """Where one reel item sits in a render, and where it came from in its game."""
+
+    game_id: str
+    clip_id: str
+    reel_start_s: float
+    reel_end_s: float
+    # Source times are recorded (not just the clip id) so jumping back to the
+    # full game still works after the clip is edited or deleted.
+    source_start_s: float
+    source_end_s: float
+    speed: float = 1.0
+
+    def source_time(self, reel_t: float) -> float:
+        return self.source_start_s + (reel_t - self.reel_start_s) * self.speed
+
+
+class Render(BaseModel):
+    """Written next to each render as <preset>.render.json."""
+
+    reel_id: str
+    preset: Preset
+    file: str  # relative to the reel's folder
+    duration_s: float
+    segments: list[Segment]
+    skipped: list[ReelItem] = []  # items whose clip was missing at render time
+    reel: Reel  # the definition this was rendered from, so it can be reproduced
+    created_at: datetime = Field(default_factory=_now)

@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Clips — Reels</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  #chapters li { grid-template-columns: 28px 64px 1fr auto; }
+  #items li { grid-template-columns: 28px 1fr auto; cursor: default; }
+  #items li:hover { background: none; }
+  #title { width: 100%; padding: 4px 6px; font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+  .progress { height: 6px; background: #262626; border-radius: 3px; overflow: hidden; flex: 1; min-width: 80px; }
+  .progress div { height: 100%; background: var(--accent); width: 0; }
+  #reelList li { grid-template-columns: 1fr auto; }
+  .placeholder { padding: 48px 16px; text-align: center; color: var(--muted); background: #000; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="/">← Tagger</a>
+  <select id="reelPick" aria-label="reel"></select>
+  <span class="stat">time <b id="time">0:00.0</b> / <b id="dur">–</b></span>
+  <span class="stat">clip <b id="chap">–</b></span>
+  <span class="stat">rate <b id="rate">1</b>×</span>
+  <span id="flash"></span>
+</div>
+
+<div class="layout" id="noReel" hidden>
+  <section class="box">
+    <h3>Reels</h3>
+    <ul id="reelList" class="list"></ul>
+  </section>
+</div>
+
+<div class="layout" id="main" hidden>
+  <section>
+    <video id="v" preload="auto"></video>
+    <div id="placeholder" class="placeholder" hidden>Not rendered yet. Use “Render preview” (quick) or “Render full” on the right.</div>
+    <canvas id="timeline"></canvas>
+    <p class="help">
+      <kbd>Space</kbd> play/pause · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× · <kbd>←</kbd>/<kbd>→</kbd> ±5s ·
+      <kbd>↑</kbd>/<kbd>↓</kbd> previous / next clip ·
+      <kbd>G</kbd> go to this moment in the full game (Back returns here)
+    </p>
+  </section>
+  <aside>
+    <div class="box">
+      <input id="title" aria-label="reel title">
+      <div class="row">
+        <span class="stat" id="summary"></span>
+        <span style="flex:1"></span>
+        <button id="deleteReel" class="danger">Delete reel</button>
+      </div>
+    </div>
+    <div class="box">
+      <h3>Render</h3>
+      <div class="row" style="margin-top:0">
+        <button data-render="preview_540p" title="960×540, fast — check order and cuts">Render preview</button>
+        <button data-render="landscape_1080p" title="1920×1080, slower">Render full</button>
+      </div>
+      <div class="row" id="jobRow" hidden><span class="stat" id="jobText"></span><div class="progress"><div id="jobBar"></div></div></div>
+      <div class="row warn" id="stale" hidden></div>
+      <div class="row" id="versions"></div>
+    </div>
+    <div class="box">
+      <h3>Clips in this video</h3>
+      <ul id="chapters" class="list"></ul>
+    </div>
+    <div class="box">
+      <h3>Reel order</h3>
+      <ul id="items" class="list"></ul>
+      <div class="help" style="margin:6px 0 0">Add clips from the tagger: filter the clip list, then “Add shown to reel”. Changes here apply on the next render.</div>
+    </div>
+  </aside>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+const MIN_RATE = 0.5, MAX_RATE = 8, RATE_STEP = 0.5;
+const PRESET_NAMES = { landscape_1080p: "full 1080p", preview_540p: "preview 540p" };
+const v = $("v"), canvas = $("timeline");
+
+let reels = [], view = null, preset = null, games = {}, pollTimer = null, hoverX = null;
+
+const reelId = () => view?.reel.id;
+const current = () => view?.renders.find((r) => r.preset === preset) || null;
+const segments = () => current()?.segments || [];
+const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "reel";
+
+// Segment boundaries include a few ms of audio past the last video frame, so a
+// seek to a segment's start can land just before it; allow a little slack.
+const BOUNDARY_SLACK_S = 0.05;
+function segmentAt(t) {
+  return segments().findIndex((s) => t >= s.reel_start_s - BOUNDARY_SLACK_S && t < s.reel_end_s - BOUNDARY_SLACK_S);
+}
+function clipLabel(gameId, t) {
+  const g = games[gameId];
+  return matchClockFor(t, g?.kickoff_1h_s, g?.kickoff_2h_s) || fmt(t);
+}
+function itemInfo(seg) {
+  return view.items.find((i) => i.game_id === seg.game_id && i.clip_id === seg.clip_id);
+}
+const taggerLink = (gameId, t, clipId) =>
+  `/${makeHash({ game: gameId, t: t.toFixed(2), clip: clipId, back: reelUrl() })}`;
+const reelUrl = () => `/reel${makeHash({ reel: reelId(), preset, t: v.currentTime.toFixed(2) })}`;
+
+// ---------- loading ----------
+async function loadReels() {
+  reels = await getJson("/api/reels");
+  const pick = $("reelPick");
+  pick.length = 0;
+  pick.append(new Option("all reels", ""));
+  for (const r of reels) pick.append(new Option(r.reel.title, r.reel.id));
+  pick.value = reelId() || "";
+}
+
+async function openReel(id, wantPreset = null, startT = 0) {
+  view = await getJson(`/api/reels/${id}`);
+  $("reelPick").value = id;
+  $("noReel").hidden = true;
+  $("main").hidden = false;
+  history.replaceState(null, "", `/reel${makeHash({ reel: id })}`);
+  const available = view.renders.map((r) => r.preset);
+  preset = available.includes(wantPreset) ? wantPreset
+         : available.includes("landscape_1080p") ? "landscape_1080p" : available[0] || null;
+  loadVideo(startT);
+  render();
+  resumeJobs();
+}
+
+function loadVideo(startT = 0) {
+  const r = current();
+  v.pause();
+  $("placeholder").hidden = !!r;
+  v.hidden = !r;
+  if (!r) { v.removeAttribute("src"); v.load(); return; }
+  // created_at busts the browser cache after a re-render
+  v.src = `/reels/${reelId()}/${r.preset}.mp4?v=${encodeURIComponent(r.created_at)}`;
+  v.addEventListener("loadedmetadata", () => { v.currentTime = Math.min(startT, v.duration || 0); }, { once: true });
+  v.defaultPlaybackRate = v.playbackRate = 1;
+}
+
+function showReelList() {
+  view = null;
+  $("main").hidden = true;
+  $("noReel").hidden = false;
+  history.replaceState(null, "", "/reel");
+  $("reelList").innerHTML = reels.length ? reels.map((r) => `
+    <li data-id="${r.reel.id}"><span><b>${esc(r.reel.title)}</b> <span class="stat">· ${r.reel.items.length} clip(s)</span></span>
+    <span class="stat">${r.renders.map((x) => `${PRESET_NAMES[x.preset]} ${fmt(x.duration_s)}`).join(" · ") || "not rendered"}</span></li>`).join("")
+    : `<li class="empty">No reels yet. In the tagger, filter the clip list and press “Add shown to reel”.</li>`;
+}
+
+// ---------- rendering the page ----------
+function render() {
+  if (!view) return;
+  const { reel, items } = view;
+  if (document.activeElement !== $("title")) $("title").value = reel.title;
+  const missing = items.filter((i) => i.missing).length;
+  const r = current();
+  $("summary").textContent = `${items.length} clip(s)${missing ? `, ${missing} missing` : ""}` +
+    (r ? ` · ${fmt(r.duration_s)} long` : "");
+  $("dur").textContent = r ? fmt(r.duration_s) : "–";
+
+  $("versions").innerHTML = view.renders.map((x) => `
+    <button data-preset="${x.preset}" class="${x.preset === preset ? "on" : ""}" title="watch this version">${PRESET_NAMES[x.preset]}</button>
+    <a href="/reels/${reelId()}/${x.preset}.mp4" download="${slugify(reel.title)}-${x.preset}.mp4" title="download">⬇</a>`).join("");
+
+  const stale = r?.stale || [];
+  $("stale").hidden = !stale.length && !(r?.skipped.length);
+  $("stale").innerHTML = (stale.length ? `⚠ Out of date: ${esc(stale.join("; "))}. Render again to update.` : "") +
+    (r?.skipped.length ? ` ${r.skipped.length} clip(s) were missing when this was rendered and were left out.` : "");
+
+  const now = segmentAt(v.currentTime);
+  $("chapters").innerHTML = r ? segments().map((s, i) => {
+    const info = itemInfo(s);
+    return `<li data-i="${i}" class="${i === now ? "sel" : ""}" title="from ${esc(s.game_id)} at ${fmt(s.source_start_s)}">
+      <span class="d">${i + 1}</span>
+      <span class="t">${esc(clipLabel(s.game_id, s.source_start_s))}</span>
+      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}</span>
+      <a href="#" data-go="${i}" title="go to this clip in the full game (G)">game ↗</a>
+    </li>`;
+  }).join("") : `<li class="empty">Render the reel to watch it here.</li>`;
+
+  $("items").innerHTML = items.length ? items.map((it, i) => `
+    <li data-i="${i}">
+      <span class="d">${i + 1}</span>
+      <span class="tags">${it.missing ? '<span class="warn">clip deleted</span> · ' + esc(shortGame(it.game_id))
+        : `${it.involves_her ? '<span class="her">● her</span> ' : ""}<a href="${taggerLink(it.game_id, it.start_s, it.clip_id)}">${esc(clipLabel(it.game_id, it.start_s))}</a> ${esc(shortGame(it.game_id))} · ${(it.end_s - it.start_s).toFixed(1)}s${it.tags.length ? " · " + esc(it.tags.join(", ")) : ""}`}</span>
+      <span><button data-move="-1" title="move up" ${i === 0 ? "disabled" : ""}>↑</button><button data-move="1" title="move down" ${i === items.length - 1 ? "disabled" : ""}>↓</button><button data-remove title="remove from reel" class="danger">✕</button></span>
+    </li>`).join("") : `<li class="empty">No clips in this reel yet.</li>`;
+}
+
+// ---------- editing ----------
+async function saveItems(newItems) {
+  view = await api("PATCH", `/api/reels/${reelId()}`, {
+    items: newItems.map(({ game_id, clip_id }) => ({ game_id, clip_id })),
+  });
+  render();
+}
+
+$("items").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  b.blur();
+  const i = +b.closest("li").dataset.i, items = [...view.items];
+  if (b.dataset.move) {
+    const j = i + +b.dataset.move;
+    [items[i], items[j]] = [items[j], items[i]];
+  } else if ("remove" in b.dataset) {
+    items.splice(i, 1);
+  }
+  saveItems(items);
+});
+
+$("title").addEventListener("change", async (e) => {
+  view = await api("PATCH", `/api/reels/${reelId()}`, { title: e.target.value });
+  await loadReels();
+  render();
+});
+$("title").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+
+$("deleteReel").addEventListener("click", async () => {
+  if (!confirm(`Delete reel “${view.reel.title}” and its rendered videos? The clips themselves are kept.`)) return;
+  await api("DELETE", `/api/reels/${reelId()}`);
+  await loadReels();
+  showReelList();
+});
+
+// ---------- render jobs ----------
+document.querySelectorAll("[data-render]").forEach((b) => b.addEventListener("click", async () => {
+  b.blur();
+  const job = await api("POST", `/api/reels/${reelId()}/render`, { preset: b.dataset.render });
+  watchJob(job);
+}));
+
+function watchJob(job) {
+  clearTimeout(pollTimer);
+  const name = PRESET_NAMES[job.preset];
+  $("jobRow").hidden = false;
+  $("jobText").textContent = job.status === "queued" ? `${name}: waiting…` : `${name}: ${Math.round(job.progress * 100)}%`;
+  $("jobBar").style.width = `${job.progress * 100}%`;
+  document.querySelectorAll("[data-render]").forEach((b) => (b.disabled = true));
+  if (job.status === "queued" || job.status === "running") {
+    pollTimer = setTimeout(async () => watchJob(await getJson(`/api/jobs/${job.id}`)), 1000);
+    return;
+  }
+  $("jobRow").hidden = true;
+  document.querySelectorAll("[data-render]").forEach((b) => (b.disabled = false));
+  if (job.status === "failed") return flash(`render failed: ${job.error}`, true);
+  flash(`${name} rendered`);
+  const id = reelId();
+  if (job.reel_id === id) openReel(id, job.preset, 0);
+}
+
+async function resumeJobs() {
+  clearTimeout(pollTimer);
+  $("jobRow").hidden = true;
+  document.querySelectorAll("[data-render]").forEach((b) => (b.disabled = false));
+  const jobs = await getJson("/api/jobs");
+  const active = jobs.find((j) => j.kind === "render" && j.reel_id === reelId() && (j.status === "queued" || j.status === "running"));
+  if (active) watchJob(active);
+}
+
+// ---------- playback ----------
+function seekTo(t) { v.currentTime = Math.max(0, Math.min(v.duration || 0, t)); }
+
+function stepChapter(dir) {
+  const segs = segments();
+  if (!segs.length) return;
+  const i = segmentAt(v.currentTime);
+  // ↑ inside a clip goes back to its start first (like a music player), unless right at the start
+  let j = i < 0 ? 0 : i + dir;
+  if (dir < 0 && i >= 0 && v.currentTime - segs[i].reel_start_s > 1) j = i;
+  seekTo(segs[Math.max(0, Math.min(segs.length - 1, j))].reel_start_s);
+}
+
+function goToGame(i = segmentAt(v.currentTime)) {
+  const s = segments()[i];
+  if (!s) return flash("nothing playing to jump from", true);
+  // Inside the clip, map the reel time back to the game; from the list, use the clip start.
+  const inside = segmentAt(v.currentTime) === i;
+  const offset = Math.max(0, v.currentTime - s.reel_start_s);
+  const t = inside ? s.source_start_s + offset * s.speed : s.source_start_s;
+  history.replaceState(null, "", reelUrl());  // so Back returns to this exact spot
+  location.href = taggerLink(s.game_id, t, s.clip_id);
+}
+
+$("chapters").addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-i]");
+  if (!li) return;
+  e.preventDefault();
+  const i = +li.dataset.i;
+  if (e.target.closest("[data-go]")) return goToGame(i);
+  seekTo(segments()[i].reel_start_s);
+});
+$("versions").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-preset]");
+  if (!b) return;
+  b.blur();
+  const t = v.currentTime;  // both versions share one timeline
+  preset = b.dataset.preset;
+  loadVideo(t);
+  render();
+});
+$("reelList").addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-id]");
+  if (li) openReel(li.dataset.id);
+});
+$("reelPick").addEventListener("change", (e) => {
+  e.target.blur();
+  e.target.value ? openReel(e.target.value) : showReelList();
+});
+v.addEventListener("ratechange", () => ($("rate").textContent = v.playbackRate));
+v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
+
+document.addEventListener("keydown", (e) => {
+  if (typingInField(e) || !view || e.ctrlKey || e.metaKey || e.altKey) return;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const actions = {
+    " ": () => (v.paused ? v.play() : v.pause()),
+    "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
+    "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
+    ArrowLeft: () => seekTo(v.currentTime - 5),
+    ArrowRight: () => seekTo(v.currentTime + 5),
+    ArrowUp: () => stepChapter(-1),
+    ArrowDown: () => stepChapter(1),
+    g: () => goToGame(),
+  };
+  const act = actions[key];
+  if (!act) return;
+  e.preventDefault();
+  act();
+});
+
+// ---------- timeline ----------
+function drawTimeline() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w) return;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#222";
+  ctx.fillRect(0, 14, w, h - 14);
+  const r = current();
+  if (!r) return;
+  const x = (t) => (t / r.duration_s) * w;
+  const now = segmentAt(v.currentTime);
+  r.segments.forEach((s, i) => {
+    const info = itemInfo(s);
+    ctx.fillStyle = info?.involves_her ? "#ff8a3d" : "#4ea1ff";
+    ctx.globalAlpha = i === now ? 1 : 0.55;
+    ctx.fillRect(x(s.reel_start_s) + 1, 20, Math.max(1, x(s.reel_end_s) - x(s.reel_start_s) - 2), h - 26);
+  });
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(x(v.currentTime) - 1, 10, 2, h - 10);
+  if (hoverX != null) {
+    const t = (hoverX / w) * r.duration_s, i = segmentAt(t);
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#aaa";
+    const txt = i >= 0 ? `${i + 1}: ${clipLabel(r.segments[i].game_id, r.segments[i].source_start_s)}` : fmt(t);
+    ctx.fillText(txt, Math.min(Math.max(0, hoverX - 20), w - 70), 1);
+  }
+}
+function timelineSeek(e) {
+  const r = current(), rect = canvas.getBoundingClientRect();
+  if (r) seekTo(((e.clientX - rect.left) / rect.width) * r.duration_s);
+}
+canvas.addEventListener("pointerdown", (e) => { canvas.setPointerCapture(e.pointerId); timelineSeek(e); });
+canvas.addEventListener("pointermove", (e) => {
+  hoverX = e.clientX - canvas.getBoundingClientRect().left;
+  if (canvas.hasPointerCapture(e.pointerId)) timelineSeek(e);
+});
+canvas.addEventListener("pointerleave", () => (hoverX = null));
+
+let lastChapter = null;
+function frame() {
+  $("time").textContent = fmt(v.currentTime || 0);
+  if (view) {
+    const i = segmentAt(v.currentTime);
+    if (i !== lastChapter) {  // re-render only when the playing clip changes
+      lastChapter = i;
+      const s = segments()[i];
+      $("chap").textContent = s ? `${i + 1}/${segments().length} · ${clipLabel(s.game_id, s.source_start_s)}` : "–";
+      render();
+      document.querySelector("#chapters li.sel")?.scrollIntoView({ block: "nearest" });
+    }
+    drawTimeline();
+  }
+  requestAnimationFrame(frame);
+}
+
+// ---------- start ----------
+(async () => {
+  for (const g of await getJson("/api/games")) games[g.id] = g;
+  await loadReels();
+  const h = readHash();
+  if (h.reel && reels.some((r) => r.reel.id === h.reel)) await openReel(h.reel, h.preset, +h.t || 0);
+  else showReelList();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

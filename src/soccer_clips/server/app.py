@@ -1,19 +1,26 @@
 """
-FastAPI app: games, clips, tags and export jobs as a JSON API, video streaming
-(with HTTP Range so the browser can seek), and the tagging page.
+FastAPI app: games, clips, tags, reels and background jobs as a JSON API,
+video streaming (with HTTP Range so the browser can seek), the tagging page
+and the reel page.
 """
 
 import logging
+import re
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import get_args
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from soccer_clips.config import get_settings
-from soccer_clips.export import ExportQueue, Job
-from soccer_clips.models import Clip, Game, Tag
+from soccer_clips.export import export_job, run_export
+from soccer_clips.jobs import Job, JobQueue
+from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Tag
+from soccer_clips.reel.render import render_job, run_render, stale_reasons
 from soccer_clips.scan import scan
 from soccer_clips.store import Store
 
@@ -51,9 +58,50 @@ class ExportRequest(BaseModel):
     fast: bool = False
 
 
+class ReelCreate(BaseModel):
+    title: str
+    items: list[ReelItem] = []
+
+
+class ReelPatch(BaseModel):
+    title: str | None = None
+    items: list[ReelItem] | None = None
+
+
+class RenderRequest(BaseModel):
+    preset: Preset = "landscape_1080p"
+
+
+class ReelItemView(ReelItem):
+    """A reel item plus what the reel page needs to show it."""
+
+    missing: bool = False
+    start_s: float | None = None
+    end_s: float | None = None
+    tags: list[str] = []
+    involves_her: bool = False
+    rating: int | None = None
+    kickoff_1h_s: float | None = None
+    kickoff_2h_s: float | None = None
+
+
+class RenderView(Render):
+    stale: list[str] = []  # reasons the render no longer matches; empty if current
+
+
+class ReelView(BaseModel):
+    reel: Reel
+    items: list[ReelItemView]
+    renders: list[RenderView]
+
+
+def slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "reel"
+
+
 def create_app(store: Store | None = None) -> FastAPI:
     store = store or Store(get_settings())
-    exports = ExportQueue(store)
+    jobs = JobQueue()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -63,7 +111,7 @@ def create_app(store: Store | None = None) -> FastAPI:
         yield
 
     app = FastAPI(lifespan=lifespan)
-    app.state.exports = exports
+    app.state.jobs = jobs
 
     def load(game_id: str) -> Game:
         try:
@@ -149,17 +197,112 @@ def create_app(store: Store | None = None) -> FastAPI:
         missing = [cid for cid in body.clip_ids if cid not in known]
         if missing:
             raise HTTPException(404, f"no clips {missing}")
-        return [exports.submit(game_id, cid, body.fast) for cid in body.clip_ids]
+        return [
+            jobs.submit(export_job(game_id, cid, body.fast), lambda job: run_export(store, job))
+            for cid in body.clip_ids
+        ]
 
     @app.get("/api/jobs")
     def list_jobs() -> list[Job]:
-        return list(exports.jobs.values())
+        return list(jobs.jobs.values())
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> Job:
-        if job_id not in exports.jobs:
+        if job_id not in jobs.jobs:
             raise HTTPException(404, f"no job {job_id}")
-        return exports.jobs[job_id]
+        return jobs.jobs[job_id]
+
+    # ---------- reels ----------
+
+    def load_reel(reel_id: str) -> Reel:
+        try:
+            return store.load_reel(reel_id)
+        except KeyError:
+            raise HTTPException(404, f"no reel {reel_id}")
+
+    def check_items(items: list[ReelItem]) -> None:
+        for item in items:
+            try:
+                store.load_game(item.game_id).clip(item.clip_id)
+            except KeyError:
+                raise HTTPException(404, f"no clip {item.clip_id} in game {item.game_id}")
+
+    def reel_view(reel: Reel) -> ReelView:
+        games: dict[str, Game] = {}
+        items = []
+        for item in reel.items:
+            try:
+                game = games.get(item.game_id) or store.load_game(item.game_id)
+                games[game.id] = game
+                clip = game.clip(item.clip_id)
+            except KeyError:
+                items.append(ReelItemView(**item.model_dump(), missing=True))
+                continue
+            items.append(ReelItemView(
+                **item.model_dump(), start_s=clip.start_s, end_s=clip.end_s, tags=clip.tags,
+                involves_her=clip.involves_her, rating=clip.rating,
+                kickoff_1h_s=game.kickoff_1h_s, kickoff_2h_s=game.kickoff_2h_s,
+            ))
+        renders = []
+        for preset in get_args(Preset):
+            render = store.load_render(reel.id, preset)
+            if render and (store.reel_dir(reel.id) / render.file).exists():
+                renders.append(RenderView(**render.model_dump(), stale=stale_reasons(store, reel, render)))
+        return ReelView(reel=reel, items=items, renders=renders)
+
+    @app.get("/api/reels")
+    def list_reels() -> list[ReelView]:
+        return [reel_view(r) for r in store.list_reels()]
+
+    @app.post("/api/reels", status_code=201)
+    def create_reel(body: ReelCreate) -> ReelView:
+        check_items(body.items)
+        reel = Reel(title=body.title.strip() or "Untitled reel", items=body.items)
+        store.save_reel(reel)
+        return reel_view(reel)
+
+    @app.get("/api/reels/{reel_id}")
+    def get_reel(reel_id: str) -> ReelView:
+        return reel_view(load_reel(reel_id))
+
+    @app.patch("/api/reels/{reel_id}")
+    def patch_reel(reel_id: str, patch: ReelPatch) -> ReelView:
+        load_reel(reel_id)
+        if patch.items is not None:
+            check_items(patch.items)
+        with store.edit_reel(reel_id) as reel:
+            if patch.title is not None:
+                reel.title = patch.title.strip() or reel.title
+            if patch.items is not None:
+                reel.items = patch.items
+        return reel_view(reel)
+
+    @app.delete("/api/reels/{reel_id}", status_code=204)
+    def delete_reel(reel_id: str) -> None:
+        load_reel(reel_id)
+        if jobs.active(reel_id=reel_id):
+            raise HTTPException(409, "reel is rendering; wait for it to finish")
+        shutil.rmtree(store.reel_dir(reel_id))
+
+    @app.post("/api/reels/{reel_id}/render", status_code=202)
+    def render_reel(reel_id: str, body: RenderRequest) -> Job:
+        reel = load_reel(reel_id)
+        if not reel.items:
+            raise HTTPException(422, "reel has no clips")
+        existing = jobs.active(reel_id=reel_id, preset=body.preset)
+        if existing:
+            return existing
+        return jobs.submit(render_job(reel_id, body.preset), lambda job: run_render(store, job))
+
+    @app.get("/reels/{reel_id}/{preset}.mp4")
+    def reel_file(reel_id: str, preset: Preset) -> FileResponse:
+        reel = load_reel(reel_id)
+        path = store.reel_dir(reel_id) / f"{preset}.mp4"
+        if not path.exists():
+            raise HTTPException(404, "not rendered")
+        # inline so <video> can play it; the page's download link sets the save-as name
+        return FileResponse(path, media_type="video/mp4", filename=f"{slug(reel.title)}-{preset}.mp4",
+                            content_disposition_type="inline")
 
     @app.get("/video/{game_id}")
     def video(game_id: str) -> FileResponse:
@@ -177,5 +320,11 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/reel")
+    def reel_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "reel.html")
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     return app
