@@ -235,7 +235,7 @@ def test_callout_freeze(client, settings, reel):
     client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": callout})
     [r] = render(client, rid)["renders"]
     fps = 30000 / 1001
-    freeze = 45 / fps  # default 1.5s = 45 frames
+    freeze = 15 / fps  # default 0.5s = 15 frames
 
     segs = [Segment(**s) for s in r["segments"]]
     s = segs[1]
@@ -248,16 +248,16 @@ def test_callout_freeze(client, settings, reel):
 
     # jump-back: before, during and after the freeze
     assert s.source_time(s.reel_start_s + 0.2) == pytest.approx(0.7, abs=0.02)
-    assert s.source_time(s.freeze_at_s + 1.0) == pytest.approx(1.0, abs=0.02)
+    assert s.source_time(s.freeze_at_s + 0.25) == pytest.approx(1.0, abs=0.02)
     assert s.source_time(s.freeze_at_s + freeze + 0.3) == pytest.approx(1.3, abs=0.02)
 
     out = settings.reels_dir / rid / f"{PRESET}.mp4"
     streams = probe(settings, out)
-    assert int(streams["video"]["nb_read_frames"]) == 105 + 45
+    assert int(streams["video"]["nb_read_frames"]) == 105 + 15
     assert float(streams["audio"]["duration"]) == pytest.approx(float(streams["video"]["duration"]), abs=0.05)
 
     # the held frame has a white ring around the callout and is dimmed outside it
-    held = frame_at(settings, out, s.freeze_at_s + 0.7)
+    held = frame_at(settings, out, s.freeze_at_s + 0.25)
     w, h = held.size
     ring_x = round(w * 0.5 + 0.1 * h)  # right edge of the ring
     assert min(held.getpixel((ring_x, h // 2))) > 200
