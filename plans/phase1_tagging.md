@@ -1,6 +1,6 @@
 # Phase 1 — Clip Tagging
 
-**Status:** Not started. Depends on Phase 0.
+**Status:** In progress — tagger built and browser-tested on synthetic video (2026-10-13). Next: tag a real game and note friction.
 **Goal:** Go through a full game quickly with the keyboard, mark clips with in/out points, tag and rate them, and export them.
 
 ## Scope
@@ -17,28 +17,37 @@
 - JSON API:
   - `GET /api/games`, `GET /api/games/{id}`
   - `PATCH /api/games/{id}` (kickoff times)
-  - `GET/POST /api/games/{id}/clips`, `PATCH/DELETE /api/clips/{id}`
-  - `POST /api/clips/{id}/export` → background job; `GET /api/jobs/{id}`
+  - `GET /api/tags`
+  - `GET/POST /api/games/{id}/clips`, `PATCH/DELETE /api/games/{id}/clips/{clip_id}` (nested under the game so no cross-game lookup is needed)
+  - `POST /api/games/{id}/export` with `{clip_ids, fast}` (single or batch) → background jobs; `GET /api/jobs`, `GET /api/jobs/{id}`
+  - `GET /clips/{game_id}/{clip_id}.mp4` downloads an exported clip
 - Static page at `/` (vanilla JS, no build step).
 
 ## UI
 Layout: large video on the left; clip list on the right; timeline strip underneath showing clip ranges (and the thumbnail sprite if built).
 
-### Keyboard map (draft)
+### Keyboard map (as built)
 | Key | Action |
 |---|---|
 | Space | play / pause |
-| J / K / L | back ×2 / pause / forward ×2 (press repeatedly for faster) |
-| ← / → | −5s / +5s |
-| , / . | step one frame back / forward (while paused) |
-| I / O | set in / out point |
-| Enter | save clip (if no in point: in = now − 8s, out = now + 2s) |
-| 1–9 | toggle tag 1–9 on current clip |
-| Shift+1–5 | rating |
-| N | note |
-| [ / ] | previous / next clip |
-| Delete | delete selected clip |
-| H | set kickoff for current half |
+| [ / ] | speed −/+ 0.5× (0.5×–8×) |
+| ← / → | −5s / +5s (Shift: ±60s) |
+| , / . | step one frame back / forward (pauses) |
+| I / O | mark in / out for a new clip |
+| Shift+I / Shift+O | move the selected clip's start / end to now |
+| Enter | save clip (if no in point: in = now − 8s, out = now + 2s); the new clip is selected |
+| Esc | clear marks and deselect (in the note box: leave it, which saves) |
+| 1–9 | toggle tag on selected clip (hotkeys from `tags.json`) |
+| Shift+1–5 | rating (same number again clears it) |
+| F | toggle "her" flag |
+| N | edit note |
+| ↑ / ↓ | previous / next clip (in the filtered list) and seek to it |
+| R | replay selected clip, stopping at its end |
+| E | export selected clip |
+| Delete / Backspace | delete selected clip (asks first; also deletes its export) |
+| H / Shift+H | set 1st / 2nd half kickoff to now |
+
+`[`/`]` became speed controls during Phase 0 testing, so previous/next clip moved to ↑/↓. J/K/L were dropped (2026-10-14) as unneeded.
 
 "Quick clip" with Enter is the main workflow: watch at 2×, hit Enter right after something good happens, adjust the in/out points later.
 
@@ -84,15 +93,15 @@ class Clip(BaseModel):
 - Also: "export all clips matching filter" → batch.
 
 ## Tasks
-- [ ] FastAPI app skeleton + `serve` command
-- [ ] Range-capable video serving; confirm seeking works
-- [ ] `Clip` model, `tags.json`, clip API on top of `store.py`
-- [ ] Player page: playback controls + keyboard map
-- [ ] In/out marking, quick-clip, clip list, edit/delete
-- [ ] Tags, rating, "her" flag, notes; filter the clip list
-- [ ] Timeline strip with clip ranges
-- [ ] Kickoff markers + match clock
-- [ ] Export job (single + batch)
+- [x] FastAPI app skeleton + `serve` command
+- [x] Range-capable video serving; confirm seeking works
+- [x] `Clip` model, `tags.json`, clip API on top of `store.py`
+- [x] Player page: playback controls + keyboard map
+- [x] In/out marking, quick-clip, clip list, edit/delete
+- [x] Tags, rating, "her" flag, notes; filter the clip list
+- [x] Timeline strip with clip ranges
+- [x] Kickoff markers + match clock
+- [x] Export job (single + batch)
 - [ ] *(Optional)* LosslessCut CSV import
 - [ ] Tag one full real game; note friction points below
 
@@ -107,4 +116,11 @@ class Clip(BaseModel):
 - Should clips be able to overlap? Assume yes.
 
 ## Findings
-_(fill in as we go — friction points, timing)_
+- **2026-10-13** — Export snaps times to whole frames (seeks to half a frame before the first frame), so an accurate export has exactly `frame_at(end) − frame_at(start)` frames; tested (1.0–2.0s → 30 frames).
+- **2026-10-13** — Editing a clip's start/end clears its `export` field (the file is stale and is overwritten on re-export). Deleting a clip deletes its exported file.
+- **2026-10-13** — Match clock is minutes only ("23'", "2H 7'"); the clip list shows exact video time on hover, the clip editor shows both.
+- **2026-10-14** — Exported clips now have a "⬇ mp4" download link in the clip list (before, the only link was in the clip editor, which only shows when a clip is selected). Clicking it doesn't select the row.
+- **2026-10-14** — "Export" makes one file per clip; it doesn't join them. Joining clips into a reel, watching it in the app and jumping back to the full game are Phase 2 (see the "Watching reels in the app" section in [phase2_reel.md](phase2_reel.md)).
+- Not built yet: thumbnail sprite, tag-rename CLI, LosslessCut import.
+
+_(add friction points and timing from tagging a real game)_

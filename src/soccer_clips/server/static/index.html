@@ -2,123 +2,537 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Soccer Clips — scrub test</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Clips</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 16px; background: #111; color: #eee; }
-  video { width: 100%; max-height: 80vh; background: #000; }
-  .bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
-  .stat { font-variant-numeric: tabular-nums; }
-  kbd { background: #333; border-radius: 3px; padding: 0 4px; }
-  #scrub { width: 100%; }
-  #log { font-size: 12px; color: #aaa; max-height: 8em; overflow-y: auto; }
+  :root {
+    --bg: #111; --panel: #1b1b1b; --line: #333; --text: #eee; --muted: #999;
+    --accent: #4ea1ff; --her: #ff8a3d; --in: #3ddc84; --bad: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+  .bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  .stat { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .stat b { color: var(--text); font-weight: 600; }
+  #flash { margin-left: auto; color: var(--muted); }
+  #flash.err { color: var(--bad); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 12px 16px; }
+  @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+  video { width: 100%; max-height: 72vh; background: #000; display: block; }
+  #timeline { width: 100%; height: 56px; display: block; margin-top: 6px; cursor: pointer; touch-action: none; }
+  .help { color: var(--muted); line-height: 1.9; font-size: 13px; }
+  kbd { background: #333; border-radius: 3px; padding: 0 5px; color: var(--text); font-family: inherit; }
+  aside { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  select, button, textarea, input { font: inherit; color: var(--text); background: #262626; border: 1px solid var(--line); border-radius: 4px; }
+  button { padding: 3px 8px; cursor: pointer; }
+  button:hover { border-color: #555; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #000; }
+  button.her.on { background: var(--her); border-color: var(--her); }
+  button.danger { color: var(--bad); }
+  #clips { list-style: none; margin: 0; padding: 0; max-height: 42vh; overflow-y: auto; }
+  #clips li { display: grid; grid-template-columns: 64px 44px 1fr auto; gap: 6px; align-items: center;
+              padding: 4px 6px; border-radius: 4px; cursor: pointer; font-variant-numeric: tabular-nums; }
+  #clips li:hover { background: #242424; }
+  #clips li.sel { background: #1d3550; }
+  #clips .t { font-weight: 600; }
+  #clips .d { color: var(--muted); font-size: 12px; }
+  #clips .tags { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #clips .her { color: var(--her); }
+  .x { font-size: 12px; color: var(--muted); }
+  .x.done { color: var(--in); }
+  a.x.done { text-decoration: none; }
+  a.x.done:hover { text-decoration: underline; }
+  .x.failed { color: var(--bad); }
+  .empty { color: var(--muted); padding: 6px; }
+  #detail h3 { margin: 0 0 8px; font-size: 14px; }
+  #detail .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  #detail .lbl { color: var(--muted); width: 52px; }
+  #detail textarea { width: 100%; min-height: 48px; padding: 4px 6px; resize: vertical; }
+  #detail a { color: var(--accent); }
+  .hk { color: var(--muted); font-size: 11px; margin-left: 3px; }
+  button.on .hk { color: #00000099; }
 </style>
 </head>
 <body>
 <div class="bar">
-  <select id="game"></select>
-  <span class="stat">time <b id="time">0:00.000</b></span>
+  <select id="game" aria-label="game"></select>
+  <span class="stat">time <b id="time">0:00.0</b></span>
+  <span class="stat">match <b id="clock">–</b></span>
   <span class="stat">rate <b id="rate">1</b>×</span>
-  <span class="stat">last seek <b id="seek">–</b> ms</span>
-  <span class="stat">avg seek <b id="avg">–</b> ms</span>
+  <span class="stat">in <b id="markin">–</b></span>
+  <span class="stat">kickoff <b id="kickoffs">–</b></span>
+  <span id="flash"></span>
 </div>
-<video id="v" preload="auto"></video>
-<input id="scrub" type="range" min="0" max="1000" value="0">
-<p>
-  <kbd>Space</kbd> play/pause · <kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> back / pause / faster ·
-  <kbd>←</kbd>/<kbd>→</kbd> ±5s · <kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd> ±60s ·
-  <kbd>,</kbd>/<kbd>.</kbd> frame step (paused) ·
-  <kbd>[</kbd>/<kbd>]</kbd> slower / faster (¼×–8×)
-</p>
-<div id="log"></div>
+<div class="layout">
+  <section>
+    <video id="v" preload="auto"></video>
+    <canvas id="timeline"></canvas>
+    <p class="help">
+      <kbd>Space</kbd> play/pause · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× ·
+      <kbd>←</kbd>/<kbd>→</kbd> ±5s (<kbd>Shift</kbd> ±60s) · <kbd>,</kbd>/<kbd>.</kbd> frame step<br>
+      <kbd>Enter</kbd> save clip (no in point: last 8s + next 2s) · <kbd>I</kbd>/<kbd>O</kbd> mark in/out ·
+      <kbd>Shift</kbd>+<kbd>I</kbd>/<kbd>O</kbd> move selected clip's start/end here · <kbd>Esc</kbd> clear<br>
+      <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>5</kbd> rating · <kbd>F</kbd> her ·
+      <kbd>N</kbd> note · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next clip · <kbd>R</kbd> replay clip ·
+      <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
+      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff
+    </p>
+  </section>
+  <aside>
+    <div class="box filters">
+      <select id="ftag" aria-label="filter by tag"><option value="">all tags</option></select>
+      <select id="frating" aria-label="minimum rating">
+        <option value="0">any rating</option><option value="2">2+</option>
+        <option value="3">3+</option><option value="4">4+</option><option value="5">5</option>
+      </select>
+      <label><input type="checkbox" id="fher"> her only</label>
+      <span class="stat" id="count"></span>
+    </div>
+    <div class="box"><ul id="clips"></ul></div>
+    <div class="box filters">
+      <button id="exportShown">Export shown</button>
+      <label title="stream copy: quick, but starts snap to the previous keyframe (up to 2.5s early)">
+        <input type="checkbox" id="fast"> fast</label>
+      <span class="stat" id="jobs"></span>
+    </div>
+    <div class="box" id="detail"></div>
+  </aside>
+</div>
 <script>
-const v = document.getElementById("v");
-const sel = document.getElementById("game");
-let fps = 30000 / 1001;
-let seekStart = null;
-const seekTimes = [];
+const QUICK_BEFORE_S = 8, QUICK_AFTER_S = 2;
+const MIN_RATE = 0.5, MAX_RATE = 8, RATE_STEP = 0.5;
 
+const $ = (id) => document.getElementById(id);
+const v = $("v"), sel = $("game"), canvas = $("timeline");
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+let game = null, tags = [], clips = [];
+let selectedId = null, markIn = null, markOut = null, stopAt = null;
+let jobsByClip = {}, pollTimer = null, hoverX = null;
+let fps = 30000 / 1001;
+
+// ---------- formatting ----------
 function fmt(t) {
   const m = Math.floor(t / 60), s = t - m * 60;
-  return `${m}:${s.toFixed(3).padStart(6, "0")}`;
+  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}
+function matchClock(t) {
+  const k1 = game?.kickoff_1h_s, k2 = game?.kickoff_2h_s;
+  if (k2 != null && t >= k2) return `2H ${Math.floor((t - k2) / 60) + 1}'`;
+  if (k1 != null && t >= k1) return `${Math.floor((t - k1) / 60) + 1}'`;
+  return k1 != null ? "pre" : "";
+}
+const label = (t) => matchClock(t) || fmt(t);
+function flash(msg, err = false) {
+  const el = $("flash");
+  el.textContent = msg;
+  el.className = err ? "err" : "";
+  clearTimeout(flash.t);
+  flash.t = setTimeout(() => (el.textContent = ""), err ? 8000 : 2500);
 }
 
-function log(msg) {
-  const el = document.getElementById("log");
-  el.prepend(Object.assign(document.createElement("div"), { textContent: msg }));
+// ---------- API ----------
+async function api(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) {
+    let msg = await r.text();
+    try { msg = JSON.parse(msg).detail; } catch {}
+    flash(`${method} failed: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`, true);
+    throw new Error(msg);
+  }
+  return r.status === 204 ? null : r.json();
+}
+const gameUrl = () => `/api/games/${encodeURIComponent(game.id)}`;
+const clipUrl = (id) => `${gameUrl()}/clips/${id}`;
+
+// ---------- clips ----------
+const selected = () => clips.find((c) => c.id === selectedId) || null;
+const clamp = (t) => Math.max(0, Math.min(game.duration_s, t));
+
+function visibleClips() {
+  const tag = $("ftag").value, minRating = +$("frating").value, herOnly = $("fher").checked;
+  return clips.filter((c) =>
+    (!tag || c.tags.includes(tag)) && (c.rating || 0) >= minRating && (!herOnly || c.involves_her));
 }
 
+function upsert(clip) {
+  const i = clips.findIndex((c) => c.id === clip.id);
+  if (i >= 0) clips[i] = clip; else clips.push(clip);
+  clips.sort((a, b) => a.start_s - b.start_s);
+}
+
+async function saveClip() {
+  const now = v.currentTime;
+  let start, end;
+  if (markIn != null) {
+    start = markIn;
+    end = markOut != null && markOut > markIn ? markOut : now;
+  } else {
+    start = now - QUICK_BEFORE_S;
+    end = now + QUICK_AFTER_S;
+  }
+  [start, end] = [clamp(start), clamp(end)];
+  if (end - start < 0.2) return flash("clip too short — the in point must be before the out point", true);
+  const clip = await api("POST", `${gameUrl()}/clips`, { start_s: start, end_s: end });
+  markIn = markOut = null;
+  upsert(clip);
+  select(clip.id, false);
+  flash(`saved clip ${label(start)} (${(end - start).toFixed(1)}s)`);
+}
+
+async function patchSelected(changes) {
+  const c = selected();
+  if (!c) return flash("no clip selected — click one or press ↑/↓", true);
+  upsert(await api("PATCH", clipUrl(c.id), changes));
+  render();
+}
+
+function toggleTag(name) {
+  const c = selected();
+  if (!c) return patchSelected({});
+  const on = c.tags.includes(name);
+  // keep tags.json order, plus any tags no longer in tags.json
+  const next = tags.map((t) => t.name).filter((n) => (n === name ? !on : c.tags.includes(n)));
+  next.push(...c.tags.filter((n) => !tags.some((t) => t.name === n)));
+  patchSelected({ tags: next });
+}
+const setRating = (n) => patchSelected({ rating: selected()?.rating === n ? null : n });
+
+async function deleteSelected() {
+  const c = selected();
+  if (!c || !confirm(`Delete clip at ${label(c.start_s)}?`)) return;
+  await api("DELETE", clipUrl(c.id));
+  clips = clips.filter((x) => x.id !== c.id);
+  selectedId = null;
+  render();
+}
+
+function select(id, seek = true) {
+  selectedId = id;
+  const c = selected();
+  if (c && seek) seekTo(c.start_s);
+  render();
+  document.querySelector("#clips li.sel")?.scrollIntoView({ block: "nearest" });
+}
+
+function step(dir) {
+  const list = visibleClips();
+  if (!list.length) return;
+  const i = list.findIndex((c) => c.id === selectedId);
+  let next;
+  if (i < 0) {
+    const t = v.currentTime;
+    next = dir > 0 ? list.find((c) => c.start_s > t) || list[list.length - 1]
+                   : [...list].reverse().find((c) => c.start_s < t) || list[0];
+  } else {
+    next = list[Math.max(0, Math.min(list.length - 1, i + dir))];
+  }
+  select(next.id);
+}
+
+function replay() {
+  const c = selected();
+  if (!c) return;
+  seekTo(c.start_s);
+  stopAt = c.end_s;
+  v.play();
+}
+
+// ---------- export jobs ----------
+async function exportClips(ids) {
+  if (!ids.length) return;
+  const jobs = await api("POST", `${gameUrl()}/export`, { clip_ids: ids, fast: $("fast").checked });
+  for (const j of jobs) jobsByClip[j.clip_id] = j;
+  flash(`queued ${jobs.length} export(s)`);
+  render();
+  pollJobs();
+}
+
+async function pollJobs() {
+  clearTimeout(pollTimer);
+  const all = await (await fetch("/api/jobs")).json();
+  jobsByClip = {};
+  for (const j of all) if (j.game_id === game.id) jobsByClip[j.clip_id] = j;  // latest wins
+  const active = all.filter((j) => j.status === "queued" || j.status === "running");
+  $("jobs").textContent = active.length ? `${active.length} exporting…` : "";
+  if (active.length) {
+    pollTimer = setTimeout(pollJobs, 1000);
+  } else {
+    // pick up the export paths the worker wrote
+    clips = (await (await fetch(`${gameUrl()}/clips`)).json());
+  }
+  render();
+}
+
+const exportUrl = (c) => `/clips/${encodeURIComponent(game.id)}/${c.id}.mp4`;
+
+function exportStatus(c) {
+  const j = jobsByClip[c.id];
+  if (j && (j.status === "queued" || j.status === "running"))
+    return ["run", j.status === "queued" ? "queued" : `${Math.round(j.progress * 100)}%`];
+  if (j && j.status === "failed" && !c.export) return ["failed", "export failed"];
+  if (c.export) return ["done", "✓ exported"];
+  return ["", ""];
+}
+
+// ---------- rendering ----------
+function render() {
+  const list = visibleClips();
+  $("count").textContent = `${list.length}/${clips.length} clips`;
+  $("exportShown").textContent = `Export shown (${list.length})`;
+  $("clips").innerHTML = list.length ? list.map((c) => {
+    const [cls, txt] = exportStatus(c);
+    return `<li data-id="${c.id}" class="${c.id === selectedId ? "sel" : ""}">
+      <span class="t" title="${fmt(c.start_s)}">${esc(label(c.start_s))}</span>
+      <span class="d">${(c.end_s - c.start_s).toFixed(1)}s</span>
+      <span class="tags">${c.involves_her ? '<span class="her">● her</span> ' : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
+      <span>${c.rating ? "★".repeat(c.rating) : ""} ${cls === "done"
+        ? `<a class="x done" href="${exportUrl(c)}" download title="download exported clip">⬇ mp4</a>`
+        : `<span class="x ${cls}">${esc(txt)}</span>`}</span>
+    </li>`;
+  }).join("") : `<li class="empty">${clips.length ? "no clips match the filter" : "no clips yet — press Enter during play"}</li>`;
+  renderDetail();
+  $("markin").textContent = markIn == null ? "–" : `${label(markIn)}${markOut != null ? " → " + label(markOut) : ""}`;
+  $("kickoffs").textContent = [game?.kickoff_1h_s, game?.kickoff_2h_s]
+    .map((k, i) => (k == null ? null : `${i + 1}H ${fmt(k)}`)).filter(Boolean).join(" · ") || "– (press H)";
+}
+
+function renderDetail() {
+  const c = selected(), el = $("detail");
+  if (!c) { el.dataset.id = ""; el.innerHTML = `<div class="empty">Select a clip to edit it.</div>`; return; }
+  if (el.dataset.id === c.id && document.activeElement?.id === "note") return;  // don't clobber typing
+  el.dataset.id = c.id;
+  const [cls, txt] = exportStatus(c);
+  el.innerHTML = `
+    <h3>${fmt(c.start_s)} → ${fmt(c.end_s)} <span class="stat">${esc(matchClock(c.start_s))} (${(c.end_s - c.start_s).toFixed(1)}s)</span></h3>
+    <div class="row"><span class="lbl">range</span>
+      <button data-act="start" title="Shift+I">start = now</button>
+      <button data-act="end" title="Shift+O">end = now</button>
+      <button data-act="replay" title="R">▶ replay</button></div>
+    <div class="row"><span class="lbl">tags</span>
+      ${tags.map((t) => `<button data-tag="${esc(t.name)}" class="${c.tags.includes(t.name) ? "on" : ""}">${esc(t.name)}${t.hotkey ? `<span class="hk">${esc(t.hotkey)}</span>` : ""}</button>`).join("")}
+      <button data-act="her" class="her ${c.involves_her ? "on" : ""}">her<span class="hk">F</span></button></div>
+    <div class="row"><span class="lbl">rating</span>
+      ${[1, 2, 3, 4, 5].map((n) => `<button data-rating="${n}" class="${c.rating === n ? "on" : ""}">${n}</button>`).join("")}</div>
+    <div class="row"><textarea id="note" placeholder="note (N to edit, Esc to leave)">${esc(c.note || "")}</textarea></div>
+    <div class="row">
+      <button data-act="export" title="E">Export</button>
+      <span class="x ${cls}">${esc(txt)}</span>
+      ${c.export ? `<a href="${exportUrl(c)}" download>⬇ download</a>` : ""}
+      <span style="flex:1"></span>
+      <button data-act="delete" class="danger" title="Del">Delete</button></div>`;
+  $("note").addEventListener("change", (e) => patchSelected({ note: e.target.value.trim() || null }));
+}
+
+$("detail").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  b.blur();  // so Space/Enter go back to the player
+  if (b.dataset.tag) return toggleTag(b.dataset.tag);
+  if (b.dataset.rating) return setRating(+b.dataset.rating);
+  ({
+    start: () => patchSelected({ start_s: v.currentTime }),
+    end: () => patchSelected({ end_s: v.currentTime }),
+    replay,
+    her: () => patchSelected({ involves_her: !selected().involves_her }),
+    export: () => exportClips([selectedId]),
+    delete: deleteSelected,
+  })[b.dataset.act]?.();
+});
+$("clips").addEventListener("click", (e) => {
+  if (e.target.closest("a")) return;  // download link, not a selection
+  const li = e.target.closest("li[data-id]");
+  if (li) select(li.dataset.id);
+});
+$("exportShown").addEventListener("click", (e) => {
+  e.target.blur();
+  const ids = visibleClips().map((c) => c.id);
+  if (ids.length > 5 && !confirm(`Export ${ids.length} clips?`)) return;
+  exportClips(ids);
+});
+for (const id of ["ftag", "frating", "fher", "fast"]) {
+  $(id).addEventListener("change", (e) => { e.target.blur(); render(); });
+}
+
+// ---------- timeline ----------
+function drawTimeline() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#222";
+  ctx.fillRect(0, 14, w, h - 14);
+  if (!game) return;
+  const x = (t) => (t / game.duration_s) * w;
+  const visible = new Set(visibleClips().map((c) => c.id));
+  for (const c of clips) {
+    const cw = Math.max(2, x(c.end_s) - x(c.start_s));
+    ctx.globalAlpha = visible.has(c.id) ? 1 : 0.3;
+    ctx.fillStyle = c.involves_her ? "#ff8a3d" : "#4ea1ff";
+    ctx.fillRect(x(c.start_s), 20, cw, h - 26);
+    if (c.id === selectedId) {
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x(c.start_s) - 1, 18, cw + 2, h - 22);
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textBaseline = "top";
+  for (const [k, name] of [[game.kickoff_1h_s, "1H"], [game.kickoff_2h_s, "2H"]]) {
+    if (k == null) continue;
+    ctx.fillStyle = "#ddd";
+    ctx.fillRect(x(k), 14, 1, h - 14);
+    ctx.fillText(name, x(k) + 3, 1);
+  }
+  if (markIn != null) {
+    const end = markOut ?? v.currentTime;
+    ctx.fillStyle = "rgba(61,220,132,0.3)";
+    ctx.fillRect(x(markIn), 14, Math.max(1, x(end) - x(markIn)), h - 14);
+    ctx.fillStyle = "#3ddc84";
+    ctx.fillRect(x(markIn), 14, 2, h - 14);
+  }
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(x(v.currentTime) - 1, 10, 2, h - 10);
+  if (hoverX != null) {
+    ctx.fillStyle = "#aaa";
+    ctx.fillText(label((hoverX / w) * game.duration_s), Math.min(Math.max(0, hoverX - 20), w - 50), 1);
+  }
+}
+
+function timelineSeek(e) {
+  const r = canvas.getBoundingClientRect();
+  seekTo(((e.clientX - r.left) / r.width) * game.duration_s);
+}
+canvas.addEventListener("pointerdown", (e) => {
+  if (!game) return;
+  canvas.setPointerCapture(e.pointerId);
+  timelineSeek(e);
+});
+canvas.addEventListener("pointermove", (e) => {
+  hoverX = e.clientX - canvas.getBoundingClientRect().left;
+  if (canvas.hasPointerCapture(e.pointerId)) timelineSeek(e);
+});
+canvas.addEventListener("pointerleave", () => (hoverX = null));
+
+function frame() {
+  if (stopAt != null && v.currentTime >= stopAt) { v.pause(); stopAt = null; }
+  $("time").textContent = fmt(v.currentTime);
+  $("clock").textContent = (game && matchClock(v.currentTime)) || "–";
+  drawTimeline();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------- playback & keys ----------
 function seekTo(t) {
-  seekStart = performance.now();
+  stopAt = null;
   v.currentTime = Math.max(0, Math.min(v.duration || 0, t));
 }
+v.addEventListener("ratechange", () => ($("rate").textContent = v.playbackRate));
+v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
 
-v.addEventListener("seeked", () => {
-  if (seekStart === null) return;
-  const ms = performance.now() - seekStart;
-  seekStart = null;
-  seekTimes.push(ms);
-  document.getElementById("seek").textContent = ms.toFixed(0);
-  const avg = seekTimes.reduce((a, b) => a + b, 0) / seekTimes.length;
-  document.getElementById("avg").textContent = `${avg.toFixed(0)} (n=${seekTimes.length})`;
-});
-v.addEventListener("timeupdate", () => {
-  document.getElementById("time").textContent = fmt(v.currentTime);
-  if (!scrubbing && v.duration) scrub.value = (v.currentTime / v.duration) * 1000;
-});
-v.addEventListener("ratechange", () => {
-  document.getElementById("rate").textContent = v.playbackRate;
-});
+async function setKickoff(half) {
+  const key = half === 1 ? "kickoff_1h_s" : "kickoff_2h_s";
+  game = await api("PATCH", gameUrl(), { [key]: v.currentTime });
+  clips = game.clips.sort((a, b) => a.start_s - b.start_s);
+  flash(`${half === 1 ? "1st" : "2nd"} half kickoff set to ${fmt(v.currentTime)}`);
+  render();
+}
 
-// Reverse playback isn't supported by browsers, so J steps back in 2s jumps while held.
 document.addEventListener("keydown", (e) => {
-  if (e.target === sel || e.target === scrub) return;
-  const frame = 1 / fps;
-  switch (e.key) {
-    case " ": e.preventDefault(); v.paused ? v.play() : v.pause(); break;
-    case "k": case "K": v.pause(); v.playbackRate = 1; break;
-    case "l": case "L":
-      v.playbackRate = v.paused ? 1 : Math.min(v.playbackRate * 2, 8);
-      v.play(); break;
-    case "[": v.playbackRate = Math.max(v.playbackRate / 2, 0.25); break;
-    case "]": v.playbackRate = Math.min(v.playbackRate * 2, 8); break;
-    case "j": case "J": seekTo(v.currentTime - 2); break;
-    case "ArrowLeft": e.preventDefault(); seekTo(v.currentTime - (e.shiftKey ? 60 : 5)); break;
-    case "ArrowRight": e.preventDefault(); seekTo(v.currentTime + (e.shiftKey ? 60 : 5)); break;
-    case ",": v.pause(); seekTo(v.currentTime - frame); break;
-    case ".": v.pause(); seekTo(v.currentTime + frame); break;
+  const tag = e.target.tagName;
+  if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") {
+    if (e.key === "Escape") e.target.blur();
+    return;
   }
+  if (!game || e.ctrlKey || e.metaKey || e.altKey) return;
+
+  // Digits by physical key, since Shift+1 types "!" on most layouts.
+  if (e.code.startsWith("Digit")) {
+    const d = e.code.slice(5);
+    if (e.shiftKey) {
+      if (d >= "1" && d <= "5") setRating(+d);
+    } else {
+      const t = tags.find((t) => t.hotkey === d);
+      if (t) toggleTag(t.name);
+    }
+    e.preventDefault();
+    return;
+  }
+  const frameS = 1 / fps;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const actions = {
+    " ": () => (v.paused ? v.play() : v.pause()),
+    "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
+    "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
+    ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),
+    ArrowRight: () => seekTo(v.currentTime + (e.shiftKey ? 60 : 5)),
+    ",": () => { v.pause(); seekTo(v.currentTime - frameS); },
+    ".": () => { v.pause(); seekTo(v.currentTime + frameS); },
+    i: () => {
+      if (e.shiftKey) return patchSelected({ start_s: v.currentTime });
+      markIn = v.currentTime; markOut = null; render();
+    },
+    o: () => {
+      if (e.shiftKey) return patchSelected({ end_s: v.currentTime });
+      if (markIn == null) return flash("press I to mark the in point first", true);
+      markOut = v.currentTime; render();
+    },
+    Enter: saveClip,
+    Escape: () => { markIn = markOut = null; selectedId = null; render(); },
+    f: () => patchSelected({ involves_her: !selected()?.involves_her }),
+    n: () => $("note")?.focus(),
+    r: replay,
+    e: () => (selectedId ? exportClips([selectedId]) : flash("no clip selected", true)),
+    ArrowUp: () => step(-1),
+    ArrowDown: () => step(1),
+    Delete: deleteSelected,
+    Backspace: deleteSelected,
+    h: () => setKickoff(e.shiftKey ? 2 : 1),
+  };
+  const act = actions[key];
+  if (!act) return;
+  e.preventDefault();
+  act();
 });
 
-// Custom scrubber instead of native controls, which would swallow the keyboard shortcuts.
-const scrub = document.getElementById("scrub");
-let scrubbing = false;
-scrub.addEventListener("input", () => { scrubbing = true; seekTo((scrub.value / 1000) * v.duration); });
-scrub.addEventListener("change", () => { scrubbing = false; scrub.blur(); });
-v.addEventListener("click", () => { v.paused ? v.play() : v.pause(); });
-
+// ---------- loading ----------
 async function loadGame(id) {
-  const g = await (await fetch(`/api/games/${encodeURIComponent(id)}`)).json();
-  fps = g.fps_num / g.fps_den;
-  seekTimes.length = 0;
-  // Start each game fresh: paused at 0:00, 1× speed, cleared readouts.
+  game = await (await fetch(`/api/games/${encodeURIComponent(id)}`)).json();
+  fps = game.fps_num / game.fps_den;
+  clips = game.clips.sort((a, b) => a.start_s - b.start_s);
+  selectedId = markIn = markOut = stopAt = null;
+  try { localStorage.setItem("game", id); } catch {}
+  // Start each game fresh: paused at 0:00 and 1× speed.
   v.pause();
   v.src = `/video/${encodeURIComponent(id)}`;
   v.addEventListener("loadedmetadata", () => { v.currentTime = 0; }, { once: true });
   v.defaultPlaybackRate = v.playbackRate = 1;
-  scrub.value = 0;
-  document.getElementById("time").textContent = fmt(0);
-  document.getElementById("rate").textContent = 1;
-  document.getElementById("seek").textContent = "–";
-  document.getElementById("avg").textContent = "–";
-  log(`loaded ${g.id}: ${g.width}x${g.height} @ ${fps.toFixed(3)} fps, ${(g.duration_s / 60).toFixed(1)} min`);
+  $("rate").textContent = 1;
+  render();
+  pollJobs();
 }
 
 (async () => {
+  tags = await (await fetch("/api/tags")).json();
+  for (const t of tags) $("ftag").append(new Option(t.name, t.name));
   const games = await (await fetch("/api/games")).json();
   for (const g of games) sel.append(new Option(g.id, g.id));
-  // Blur after picking so arrow keys seek instead of switching games.
+  // Blur after picking so the keys drive the player instead of switching games.
   sel.addEventListener("change", () => { sel.blur(); loadGame(sel.value); });
-  if (games.length) loadGame(games[0].id);
+  let last = null;
+  try { last = localStorage.getItem("game"); } catch {}
+  if (games.some((g) => g.id === last)) sel.value = last;
+  if (games.length) loadGame(sel.value);
 })();
 </script>
 </body>

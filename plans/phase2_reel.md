@@ -50,6 +50,16 @@ MoviePy 2.x is an alternative if ffmpeg filter graphs become painful. It's slowe
 - Reel page: drag to reorder, per-item trim/speed/slow-mo/lower-third, total running time, preview render, final render with progress.
 - Clips can come from **multiple games** (season reel).
 
+## Watching reels in the app
+Requested 2026-10-14: watch a rendered reel in the tagger app, jump from any moment of the reel back to that moment in the full game, and download the reel.
+
+- **Segment map.** Each render writes `render.json` next to its mp4: for every item, its span in the reel (`reel_start_s`, `reel_end_s`) and where it came from (`game_id`, `clip_id`, `source_start_s`, `speed`). It records source **times**, not just the clip id, so jumping back still works if the clip is later edited or deleted. Spans are measured from the actual normalised intermediates (ffprobe), not computed from the reel definition, because transitions overlap neighbouring items and speed changes and slow-mo replays stretch them. Inside a slow-mo replay, map back with `source_start_s + (t − reel_start_s) × speed`. Title cards map to nothing.
+- **Reel page** (`/reel.html#reel=<id>`): a player for the render, with a chapter list (one row per item: match clock, tags, game). The current chapter is highlighted as it plays, and clicking a row jumps there. The landscape/vertical toggle appears when both have been rendered.
+- **Jump to full game:** a button (and key `G`) opens the tagger at the matching source time, selecting the clip if it still exists. The tagger takes `#game=<id>&t=<seconds>&clip=<id>` in the URL hash and shows a "← back to reel" link that returns to the same reel position. Because it's a URL change, the browser's Back button works too.
+- **Download:** a link for each rendered file (`/reels/<id>/<file>.mp4`, sent with `Content-Disposition` so the browser saves it with a readable name such as `fall-2026-vs-rovers-landscape.mp4`).
+- **Reels list:** the tagger header gets a "Reels" menu listing each reel's renders (date, length, preset).
+- **Stale renders:** if a referenced clip has been edited or deleted since the render, the reel page shows "clips changed since this render" with a re-render button. The jump-back map still points at the old source times, which is what was actually rendered.
+
 ## Optional: NLE export
 Export the reel as OpenTimelineIO (`opentimelineio`) or CMX EDL pointing at the original files, for finishing by hand in DaVinci Resolve / Kdenlive.
 
@@ -61,6 +71,9 @@ Export the reel as OpenTimelineIO (`opentimelineio`) or CMX EDL pointing at the 
 - [ ] Music mixing
 - [ ] Presets incl. vertical (crop vs blurred fill — compare)
 - [ ] Reel builder UI
+- [ ] `render.json` segment map written by each render (measured from the intermediates)
+- [ ] Reel page: player, chapter list, jump to full game (`G`), download links, stale-render warning
+- [ ] Tagger accepts `#game=&t=&clip=` and shows "← back to reel"
 - [ ] Slow-mo replay
 - [ ] *(Optional)* OTIO export
 - [ ] Render a real reel; record timings below

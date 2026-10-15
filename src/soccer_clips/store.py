@@ -12,8 +12,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from soccer_clips.config import Settings
-from soccer_clips.models import Game
+from soccer_clips.models import DEFAULT_TAGS, Game, Tag
+
+_tags_adapter = TypeAdapter(list[Tag])
 
 _locks: defaultdict[Path, threading.Lock] = defaultdict(threading.Lock)
 _locks_guard = threading.Lock()
@@ -81,6 +85,18 @@ class Store:
         games = [Game.model_validate_json(p.read_text()) for p in paths]
         return sorted(games, key=lambda g: (g.played_on is None, g.played_on, g.id))
 
+    @property
+    def tags_path(self) -> Path:
+        return self.settings.games_dir / "tags.json"
+
+    def load_tags(self) -> list[Tag]:
+        """The tag list (hand-editable); written with the defaults on first use."""
+        path = self.tags_path
+        with _lock_for(path):
+            if not path.exists():
+                atomic_write_text(path, _tags_adapter.dump_json(DEFAULT_TAGS, indent=2).decode() + "\n")
+            return _tags_adapter.validate_json(path.read_text())
+
     def original_path(self, game: Game) -> Path:
         return self.settings.full_dir / game.original
 
@@ -91,3 +107,7 @@ class Store:
             if proxy.exists():
                 return proxy
         return self.original_path(game)
+
+    def clip_export_rel(self, game: Game, clip_id: str) -> str:
+        """Export path for a clip, relative to clips_dir."""
+        return f"{game.year}/{game.id}/{clip_id}.mp4"
