@@ -9,6 +9,7 @@ dependencies:
   - python-dotenv
   - fastapi
   - uvicorn
+  - pillow  # title cards
   - pytest
   - pip
   - pip:

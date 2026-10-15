@@ -77,6 +77,21 @@ class Game(BaseModel):
     def frame_at(self, t_s: float) -> int:
         return round(t_s * self.fps_num / self.fps_den)
 
+    def match_clock(self, t_s: float) -> str | None:
+        """"23'" / "2H 7'" from the kickoff times (same rule as the web pages); None if unknown."""
+        if self.kickoff_2h_s is not None and t_s >= self.kickoff_2h_s:
+            return f"2H {int((t_s - self.kickoff_2h_s) // 60) + 1}'"
+        if self.kickoff_1h_s is not None and t_s >= self.kickoff_1h_s:
+            return f"{int((t_s - self.kickoff_1h_s) // 60) + 1}'"
+        return None
+
+    def time_label(self, t_s: float) -> str:
+        """Match clock if kickoffs are set, otherwise the video time as m:ss."""
+        if clock := self.match_clock(t_s):
+            return clock
+        m, s = divmod(int(t_s), 60)
+        return f"{m}:{s:02d}"
+
     def clip(self, clip_id: str) -> Clip:
         for c in self.clips:
             if c.id == clip_id:
@@ -99,6 +114,8 @@ class Reel(BaseModel):
     id: str = Field(default_factory=lambda: secrets.token_hex(4))
     title: str
     items: list[ReelItem] = []
+    # Seconds for the opening title card and the card before each clip; 0 = no cards.
+    card_s: float = Field(default=3.0, ge=0, le=15)
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -114,6 +131,9 @@ class Segment(BaseModel):
     source_start_s: float
     source_end_s: float
     speed: float = 1.0
+    # The card shown before this clip, if any: where it starts in the reel and its text.
+    card_start_s: float | None = None
+    card_lines: list[str] = []
 
     def source_time(self, reel_t: float) -> float:
         return self.source_start_s + (reel_t - self.reel_start_s) * self.speed
@@ -128,5 +148,6 @@ class Render(BaseModel):
     duration_s: float
     segments: list[Segment]
     skipped: list[ReelItem] = []  # items whose clip was missing at render time
+    start_card_lines: list[str] = []  # empty if there was no opening card
     reel: Reel  # the definition this was rendered from, so it can be reproduced
     created_at: datetime = Field(default_factory=_now)

@@ -1,7 +1,8 @@
 """
 Render a reel: normalise each clip to an intermediate file (same size, frame
-rate, pixel format and audio layout; cached), measure the intermediates, then
-join them with hard cuts into <reels_dir>/<reel_id>/<preset>.mp4.
+rate, pixel format and audio layout; cached), make the title cards (an opening
+card, then one before each clip; also cached), measure everything, then join
+it with hard cuts into <reels_dir>/<reel_id>/<preset>.mp4.
 
 Next to the mp4, <preset>.render.json records where each clip landed in the
 reel and where it came from in its game, so the reel page can jump back to the
@@ -20,6 +21,7 @@ from pathlib import Path
 from soccer_clips import ffmpeg
 from soccer_clips.jobs import Job
 from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment
+from soccer_clips.reel.cards import clip_card_lines, draw_card, font_path, start_card_lines
 from soccer_clips.store import Store
 
 # Bump to invalidate every cached intermediate (e.g. after changing the normalise filters).
@@ -97,6 +99,36 @@ def _normalise(store: Store, game: Game, seek_s: float, duration_s: float, spec:
     os.replace(tmp, out)
 
 
+def _card(store: Store, lines: list[str], spec: PresetSpec, duration_s: float, out: Path) -> None:
+    """A silent clip of a still title card, exactly round(duration_s * fps) frames long."""
+    png = out.with_suffix(".png")
+    draw_card(lines, spec.width, spec.height).save(png)
+    frames = max(1, round(duration_s * OUTPUT_FPS))
+    tmp = out.with_name(out.stem + ".part.mp4")
+    cmd = [
+        store.settings.ffmpeg, "-y", "-v", "error",
+        "-loop", "1", "-framerate", str(OUTPUT_FPS), "-i", str(png),
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-map", "0:v", "-map", "1:a", "-frames:v", str(frames), "-t", f"{frames / OUTPUT_FPS:.6f}",
+        "-vf", "setsar=1,format=yuv420p",
+        "-c:v", "libx264", "-preset", spec.intermediate_preset, "-crf", str(spec.intermediate_crf),
+        "-tune", "stillimage", "-c:a", "aac", "-b:a", "192k", str(tmp),
+    ]
+    try:
+        ffmpeg.run(cmd, frames / OUTPUT_FPS)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        png.unlink(missing_ok=True)
+    os.replace(tmp, out)
+
+
+def _cache_name(preset: str, *key) -> str:
+    digest = hashlib.sha1(json.dumps([CACHE_VERSION, preset, *key]).encode()).hexdigest()[:16]
+    return f"{preset}-{digest}.mp4"
+
+
 def render_reel(store: Store, reel_id: str, preset: Preset,
                 on_progress: Callable[[float], None] = lambda f: None) -> Render:
     s = store.settings
@@ -111,34 +143,55 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
         raise ValueError("reel has no clips to render (all missing or none added)")
     windows = [ffmpeg.cut_window(game, clip.start_s, clip.end_s) for game, clip in parts]
     total = sum(d for _, d in windows)
-    # Progress: normalising is the first half of the work, the final encode the second.
+    # Progress: normalising clips is the first half of the work, the final
+    # encode the second. Cards are quick and aren't counted.
     done = 0.0
 
     def report(fraction: float, weight: float) -> None:
         on_progress((done + fraction * weight) / (2 * total))
 
-    intermediates = []
+    def card(lines: list[str]) -> Path | None:
+        if not lines or reel.card_s <= 0:
+            return None
+        path = cache / _cache_name(preset, "card", lines, round(reel.card_s, 3), font_path())
+        if not path.exists():
+            _card(store, lines, spec, reel.card_s, path)
+        return path
+
+    start_lines = start_card_lines(reel) if reel.card_s > 0 else []
+    start_card = card(start_lines)
+    entries = []  # (game, clip, card lines, card path or None, clip path)
     for (game, clip), (seek_s, duration_s) in zip(parts, windows):
-        key = hashlib.sha1(json.dumps(
-            [CACHE_VERSION, preset, game.id, game.original, round(seek_s, 6), round(duration_s, 6)]
-        ).encode()).hexdigest()[:16]
-        path = cache / f"{preset}-{key}.mp4"
+        lines = clip_card_lines(game, clip) if reel.card_s > 0 else []
+        card_path = card(lines)
+        path = cache / _cache_name(preset, game.id, game.original, round(seek_s, 6), round(duration_s, 6))
         if not path.exists():
             _normalise(store, game, seek_s, duration_s, spec, path, lambda f: report(f, duration_s))
         done += duration_s
-        intermediates.append(path)
+        entries.append((game, clip, lines, card_path, path))
 
-    segments, t = [], 0.0
-    for path, (game, clip) in zip(intermediates, parts):
-        length = max(ffmpeg.stream_durations(s, path).values())
+    length = lambda p: max(ffmpeg.stream_durations(s, p).values())
+    intermediates, segments, t = [], [], 0.0
+    if start_card:
+        intermediates.append(start_card)
+        t += length(start_card)
+    for game, clip, lines, card_path, path in entries:
+        card_start = None
+        if card_path:
+            intermediates.append(card_path)
+            card_start = t
+            t += length(card_path)
+        intermediates.append(path)
+        clip_len = length(path)
         frame_s = game.fps_den / game.fps_num
         segments.append(Segment(
             game_id=game.id, clip_id=clip.id,
-            reel_start_s=t, reel_end_s=t + length,
+            reel_start_s=t, reel_end_s=t + clip_len,
             source_start_s=game.frame_at(clip.start_s) * frame_s,
             source_end_s=game.frame_at(clip.end_s) * frame_s,
+            card_start_s=card_start, card_lines=lines if card_path else [],
         ))
-        t += length
+        t += clip_len
 
     out = folder / f"{preset}.mp4"
     tmp = folder / f"{preset}.part.mp4"
@@ -160,14 +213,15 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
 
     render = Render(
         reel_id=reel.id, preset=preset, file=out.name,
-        duration_s=max(ffmpeg.stream_durations(s, out).values()),
-        segments=segments, skipped=skipped, reel=reel,
+        duration_s=length(out), segments=segments, skipped=skipped, reel=reel,
+        start_card_lines=start_lines if start_card else [],
     )
     store.save_render(render)
 
     # Drop cached intermediates this preset no longer uses (clips edited or removed).
+    used = set(intermediates)
     for p in cache.glob(f"{preset}-*.mp4"):
-        if p not in intermediates:
+        if p not in used:
             p.unlink()
     return render
 
@@ -177,8 +231,12 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
     reasons = []
     if reel.items != render.reel.items:
         reasons.append("clips were added, removed or reordered")
+    if reel.card_s != render.reel.card_s:
+        reasons.append("card length changed")
+    elif reel.card_s > 0 and start_card_lines(reel) != render.start_card_lines:
+        reasons.append("title card changed")
     games: dict[str, Game] = {}
-    changed = deleted = 0
+    changed = deleted = cards = 0
     for seg in render.segments:
         try:
             game = games.get(seg.game_id) or store.load_game(seg.game_id)
@@ -192,6 +250,10 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
             round(seg.source_start_s, 6), round(seg.source_end_s, 6)
         ):
             changed += 1
+        elif seg.card_lines and clip_card_lines(game, clip) != seg.card_lines:
+            cards += 1
+    if cards:
+        reasons.append(f"{cards} clip card(s) changed (note or kickoff time)")
     if changed:
         reasons.append(f"{changed} clip(s) had their start/end changed")
     if deleted:

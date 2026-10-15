@@ -6,15 +6,15 @@
 > - Log meaningful decisions/findings in **Decisions & Findings Log** (dated).
 > - Each phase has its own detailed doc in [plans/](plans/) — refine those as we build, and keep this doc as the summary.
 
-## Status (last updated 2026-10-13)
-**Current phase:** Phase 2 in progress (first slice built, not yet committed). Phase 1 committed (d93c0a6). Reels: add clips from the tagger, render preview/full with hard cuts, watch on the reel page with chapters, jump to the full game (G) and back, download. 23 unit tests + headless-Chrome runs pass.
-**Next action:** Try a real reel. Then the rest of Phase 2: transitions, title card, music, vertical, per-clip trim/speed/slow-mo. Still open from Phase 1: tag a full real game and note friction. Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
+## Status (last updated 2026-10-14)
+**Current phase:** Phase 2 in progress (first slice committed in 41c151d; Phase 1 in d93c0a6). Reels: add clips from the tagger, render preview/full with hard cuts, watch on the reel page with chapters, jump to the full game (G) and back, download. 23 unit tests + headless-Chrome runs pass.
+**Next action:** Title cards are built (uncommitted). Remaining Phase 2: per-clip trim and lower third, if still wanted (fades, music, vertical and speed/slow-mo are future ideas). Still open from Phase 1: tag a full real game and note friction. Still open from Phase 1: tag a full real game and note friction. Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
 **Blocked on:** nothing, but forbeck_env needs cleanup: `soccer_clips` + fastapi/pydantic/uvicorn/httpx2 stack were accidentally pip-installed there and idna was upgraded 3.7 → 3.20 (see 2026-10-13 log).
 
 ## Goals
 1. **Tag clips** from a full-game Veo MP4 quickly — much faster than Veo's website.
 2. **Highlight my daughter** in a clip (callout circle at minimum, tracked marker ideally).
-3. **Build a highlight reel** from selected clips, in a landscape version and a phone-friendly vertical version.
+3. **Build a highlight reel** from selected clips (landscape; a phone-friendly vertical version is a future idea).
 4. *(Stretch)* **Auto-find her** in the footage, using appearance (build, hair, cleats, socks, movement) rather than relying on her jersey number, which is often hidden.
 
 ## Constraints
@@ -85,7 +85,7 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - [ ] **Phase 1 — Clip tagging** (built; real-game test pending) → [plans/phase1_tagging.md](plans/phase1_tagging.md)
   Keyboard-driven web player: mark in/out, tag, rate, export clips.
 - [ ] **Phase 2 — Highlight reel** → [plans/phase2_reel.md](plans/phase2_reel.md)
-  Order clips, render with transitions, title card, music, landscape + vertical. Watch reels in the app, jump back to the full game, download.
+  Order clips, render with hard cuts and a title card, landscape. Watch reels in the app, jump back to the full game, download. (Fades, music, vertical, speed/slow-mo: future ideas.)
 - [ ] **Phase 3 — Highlight her** → [plans/phase3_highlight.md](plans/phase3_highlight.md)
   3.1 freeze-frame callout (one click) → 3.2 tracked marker (click + correct) → 3.3 follow-crop.
 - [ ] **Phase 4 (stretch) — Auto-tag her** → [plans/phase4_autotag.md](plans/phase4_autotag.md)
@@ -116,3 +116,5 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-13** — Phase 1 keymap: `[`/`]` stay as speed controls, so prev/next clip is ↑/↓ and the "her" flag is `F`. Clip API is nested under the game (`/api/games/{id}/clips/{clip_id}`).
 - **2026-10-14** — Exports are single-clip files; a joined reel is Phase 2. Planned for Phase 2: each render writes a segment map (`render.json`) so the in-app reel player can jump to the matching moment in the full game, and offers the reel for download. Also: `[`/`]` step speed by 0.5× (0.5×–8×), J/K/L removed, and the clip list links to each exported file.
 - **2026-10-14** — Phase 2 first slice: hard-cut reels with a segment map for jump-back. Exports and renders share one background worker (`jobs.py`) so two CPU-heavy encodes never run at once. Rendered reels live in `<SOCCER_REELS_DIR>/<reel_id>/`.
+- **2026-10-14** — Scope cut: fades, music, the vertical version, and speed/slow-mo moved from Phase 2 to "Future ideas" in [plans/phase2_reel.md](plans/phase2_reel.md). Phase 3.3 (follow-crop) depends on the vertical preset, so it waits too.
+- **2026-10-14** — Title cards: an opening card with the reel title, and a card before each clip with the time in the game and the clip's note. Dark background, white text, length set per reel (default 3s, 0 = off). Pillow added to the env.

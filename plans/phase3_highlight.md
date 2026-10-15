@@ -66,7 +66,7 @@ Click once → SAM 2 propagates a mask through the video. It handles crowding be
 
 ## 3.3 — Follow-crop / punch-in
 Use the smoothed track to drive a crop window:
-- **Vertical 9:16** export that keeps her in frame (replaces Phase 2's centre crop).
+- **Vertical 9:16** export that keeps her in frame. Needs the vertical preset, which moved to Phase 2's [Future ideas](phase2_reel.md#future-ideas) on 2026-10-14; the landscape punch-in below doesn't.
 - Optional **punch-in** zoom on landscape clips (e.g. 1.3–1.5×) to make her bigger.
 - Heavy smoothing + clamping to frame edges; keep the crop still when she's briefly lost rather than jumping.
 - Quality limit: cropping already-small follow-cam footage gets soft quickly — cap the zoom factor.

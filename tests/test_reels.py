@@ -44,17 +44,28 @@ def probe(settings, path) -> dict:
     return {s["codec_type"]: s for s in json.loads(out)["streams"]}
 
 
-@pytest.fixture
-def reel(client):
+def make_reel(client, card_s):
     """Two clips from game A (out of order) and one from game B (no audio)."""
     a1 = add_clip(client, GAME_A, 3.0, 4.0)
     a2 = add_clip(client, GAME_A, 0.5, 2.0)
     b1 = add_clip(client, GAME_B, 1.0, 2.0)
     items = [{"game_id": GAME_A, "clip_id": a1}, {"game_id": GAME_A, "clip_id": a2},
              {"game_id": GAME_B, "clip_id": b1}]
-    r = client.post("/api/reels", json={"title": "Fall 2026: vs Rovers!", "items": items})
+    r = client.post("/api/reels", json={"title": "Fall 2026: vs Rovers!", "items": items, "card_s": card_s})
     assert r.status_code == 201
     return r.json()["reel"]
+
+
+@pytest.fixture
+def reel(client):
+    """Without title cards, so segment times are just the clips."""
+    return make_reel(client, card_s=0)
+
+
+@pytest.fixture
+def carded_reel(client):
+    """With 1s title cards."""
+    return make_reel(client, card_s=1)
 
 
 def test_render_segments_and_output(client, settings, reel):
@@ -141,3 +152,49 @@ def test_reel_crud(client, settings, reel):
     assert client.delete(f"/api/reels/{rid}").status_code == 204
     assert not (settings.reels_dir / rid).exists()
     assert client.get(f"/api/reels/{rid}").status_code == 404
+
+
+def test_title_cards(client, settings, carded_reel):
+    rid = carded_reel["id"]
+    client.patch(f"/api/games/{GAME_A}", json={"kickoff_1h_s": 0.0})
+    a1 = carded_reel["items"][0]["clip_id"]
+    client.patch(f"/api/games/{GAME_A}/clips/{a1}", json={"note": "Shot from outside the box"})
+    [r] = render(client, rid)["renders"]
+    card = 30 / (30000 / 1001)  # 1s rounds to 30 frames = 1.001s
+
+    assert r["start_card_lines"] == ["Fall 2026: vs Rovers!"]
+    segs = r["segments"]
+    # game A has a kickoff, so its cards show the match minute; game B has none, so video time
+    assert [s["card_lines"] for s in segs] == [["1'", "Shot from outside the box"], ["1'"], ["0:01"]]
+    # layout: start card, then card + clip for each clip
+    assert segs[0]["card_start_s"] == pytest.approx(card, abs=0.03)
+    assert segs[0]["reel_start_s"] == pytest.approx(2 * card, abs=0.03)
+    for prev, nxt in zip(segs, segs[1:]):
+        assert nxt["card_start_s"] == pytest.approx(prev["reel_end_s"])
+        assert nxt["reel_start_s"] - nxt["card_start_s"] == pytest.approx(card, abs=0.03)
+
+    # every frame present: 4 cards x 30 + clips 30 + 45 + 30
+    out = settings.reels_dir / rid / f"{PRESET}.mp4"
+    streams = probe(settings, out)
+    assert int(streams["video"]["nb_read_frames"]) == 4 * 30 + 105
+    assert float(streams["audio"]["duration"]) == pytest.approx(float(streams["video"]["duration"]), abs=0.05)
+
+    # card text changes make the render out of date
+    client.patch(f"/api/games/{GAME_A}/clips/{a1}", json={"note": "Goal!"})
+    assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["1 clip card(s) changed (note or kickoff time)"]
+    client.patch(f"/api/reels/{rid}", json={"title": "Season"})
+    assert "title card changed" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
+    client.patch(f"/api/reels/{rid}", json={"card_s": 2})
+    assert "card length changed" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
+    assert client.patch(f"/api/reels/{rid}", json={"card_s": 99}).status_code == 422
+
+
+def test_draw_card_wraps_long_notes():
+    from soccer_clips.reel.cards import draw_card
+
+    img = draw_card(["2H 7'", "word " * 200], 960, 540)
+    assert img.size == (960, 540)
+    # text stays inside the frame: the outer 5% border is all background
+    px = img.load()
+    border = [px[x, y] for x in range(960) for y in list(range(0, 27)) + list(range(513, 540))]
+    assert set(border) == {(17, 17, 17)}

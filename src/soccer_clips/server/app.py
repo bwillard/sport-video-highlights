@@ -61,11 +61,13 @@ class ExportRequest(BaseModel):
 class ReelCreate(BaseModel):
     title: str
     items: list[ReelItem] = []
+    card_s: float = Field(default=3.0, ge=0, le=15)
 
 
 class ReelPatch(BaseModel):
     title: str | None = None
     items: list[ReelItem] | None = None
+    card_s: float | None = Field(default=None, ge=0, le=15)
 
 
 class RenderRequest(BaseModel):
@@ -81,6 +83,7 @@ class ReelItemView(ReelItem):
     tags: list[str] = []
     involves_her: bool = False
     rating: int | None = None
+    note: str | None = None
     kickoff_1h_s: float | None = None
     kickoff_2h_s: float | None = None
 
@@ -240,7 +243,7 @@ def create_app(store: Store | None = None) -> FastAPI:
                 continue
             items.append(ReelItemView(
                 **item.model_dump(), start_s=clip.start_s, end_s=clip.end_s, tags=clip.tags,
-                involves_her=clip.involves_her, rating=clip.rating,
+                involves_her=clip.involves_her, rating=clip.rating, note=clip.note,
                 kickoff_1h_s=game.kickoff_1h_s, kickoff_2h_s=game.kickoff_2h_s,
             ))
         renders = []
@@ -257,7 +260,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.post("/api/reels", status_code=201)
     def create_reel(body: ReelCreate) -> ReelView:
         check_items(body.items)
-        reel = Reel(title=body.title.strip() or "Untitled reel", items=body.items)
+        reel = Reel(title=body.title.strip() or "Untitled reel", items=body.items, card_s=body.card_s)
         store.save_reel(reel)
         return reel_view(reel)
 
@@ -275,6 +278,8 @@ def create_app(store: Store | None = None) -> FastAPI:
                 reel.title = patch.title.strip() or reel.title
             if patch.items is not None:
                 reel.items = patch.items
+            if patch.card_s is not None:
+                reel.card_s = patch.card_s
         return reel_view(reel)
 
     @app.delete("/api/reels/{reel_id}", status_code=204)

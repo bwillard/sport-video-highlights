@@ -10,6 +10,7 @@
   #items li { grid-template-columns: 28px 1fr auto; cursor: default; }
   #items li:hover { background: none; }
   #title { width: 100%; padding: 4px 6px; font-weight: 600; }
+  #cardS { padding: 2px 4px; }
   .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
   .progress { height: 6px; background: #262626; border-radius: 3px; overflow: hidden; flex: 1; min-width: 80px; }
   .progress div { height: 100%; background: var(--accent); width: 0; }
@@ -59,6 +60,8 @@
       <div class="row" style="margin-top:0">
         <button data-render="preview_540p" title="960×540, fast — check order and cuts">Render preview</button>
         <button data-render="landscape_1080p" title="1920×1080, slower">Render full</button>
+        <label title="length of the opening title card and of the card before each clip (time in game + note); 0 = no cards">
+          cards <input type="number" id="cardS" min="0" max="15" step="0.5" style="width:4.5em"> s</label>
       </div>
       <div class="row" id="jobRow" hidden><span class="stat" id="jobText"></span><div class="progress"><div id="jobBar"></div></div></div>
       <div class="row warn" id="stale" hidden></div>
@@ -92,9 +95,14 @@ const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-
 // Segment boundaries include a few ms of audio past the last video frame, so a
 // seek to a segment's start can land just before it; allow a little slack.
 const BOUNDARY_SLACK_S = 0.05;
+// A clip's chapter starts at the card shown before it (if any).
+const chapterStart = (s) => s.card_start_s ?? s.reel_start_s;
+// Seeking exactly to a boundary can show the previous clip's last frame, so land half a frame in.
+const seekToChapter = (s) => seekTo(chapterStart(s) + 0.5 / 29.97);
 function segmentAt(t) {
-  return segments().findIndex((s) => t >= s.reel_start_s - BOUNDARY_SLACK_S && t < s.reel_end_s - BOUNDARY_SLACK_S);
+  return segments().findIndex((s) => t >= chapterStart(s) - BOUNDARY_SLACK_S && t < s.reel_end_s - BOUNDARY_SLACK_S);
 }
+const onCard = (s, t) => s.card_start_s != null && t < s.reel_start_s - BOUNDARY_SLACK_S;
 function clipLabel(gameId, t) {
   const g = games[gameId];
   return matchClockFor(t, g?.kickoff_1h_s, g?.kickoff_2h_s) || fmt(t);
@@ -158,6 +166,7 @@ function render() {
   if (!view) return;
   const { reel, items } = view;
   if (document.activeElement !== $("title")) $("title").value = reel.title;
+  if (document.activeElement !== $("cardS")) $("cardS").value = reel.card_s;
   const missing = items.filter((i) => i.missing).length;
   const r = current();
   $("summary").textContent = `${items.length} clip(s)${missing ? `, ${missing} missing` : ""}` +
@@ -179,7 +188,7 @@ function render() {
     return `<li data-i="${i}" class="${i === now ? "sel" : ""}" title="from ${esc(s.game_id)} at ${fmt(s.source_start_s)}">
       <span class="d">${i + 1}</span>
       <span class="t">${esc(clipLabel(s.game_id, s.source_start_s))}</span>
-      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}</span>
+      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}${info?.note ? " · " + esc(info.note) : ""}</span>
       <a href="#" data-go="${i}" title="go to this clip in the full game (G)">game ↗</a>
     </li>`;
   }).join("") : `<li class="empty">Render the reel to watch it here.</li>`;
@@ -221,6 +230,14 @@ $("title").addEventListener("change", async (e) => {
   render();
 });
 $("title").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+
+$("cardS").addEventListener("change", async (e) => {
+  const value = Math.max(0, Math.min(15, +e.target.value || 0));
+  view = await api("PATCH", `/api/reels/${reelId()}`, { card_s: value });
+  e.target.blur();
+  render();
+});
+$("cardS").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
 
 $("deleteReel").addEventListener("click", async () => {
   if (!confirm(`Delete reel “${view.reel.title}” and its rendered videos? The clips themselves are kept.`)) return;
@@ -273,14 +290,14 @@ function stepChapter(dir) {
   const i = segmentAt(v.currentTime);
   // ↑ inside a clip goes back to its start first (like a music player), unless right at the start
   let j = i < 0 ? 0 : i + dir;
-  if (dir < 0 && i >= 0 && v.currentTime - segs[i].reel_start_s > 1) j = i;
-  seekTo(segs[Math.max(0, Math.min(segs.length - 1, j))].reel_start_s);
+  if (dir < 0 && i >= 0 && v.currentTime - chapterStart(segs[i]) > 1) j = i;
+  seekToChapter(segs[Math.max(0, Math.min(segs.length - 1, j))]);
 }
 
 function goToGame(i = segmentAt(v.currentTime)) {
   const s = segments()[i];
   if (!s) return flash("nothing playing to jump from", true);
-  // Inside the clip, map the reel time back to the game; from the list, use the clip start.
+  // Inside the clip, map the reel time back to the game; on its card or from the list, use the clip start.
   const inside = segmentAt(v.currentTime) === i;
   const offset = Math.max(0, v.currentTime - s.reel_start_s);
   const t = inside ? s.source_start_s + offset * s.speed : s.source_start_s;
@@ -294,7 +311,7 @@ $("chapters").addEventListener("click", (e) => {
   e.preventDefault();
   const i = +li.dataset.i;
   if (e.target.closest("[data-go]")) return goToGame(i);
-  seekTo(segments()[i].reel_start_s);
+  seekToChapter(segments()[i]);
 });
 $("versions").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-preset]");
@@ -354,7 +371,11 @@ function drawTimeline() {
     const info = itemInfo(s);
     ctx.fillStyle = info?.involves_her ? "#ff8a3d" : "#4ea1ff";
     ctx.globalAlpha = i === now ? 1 : 0.55;
-    ctx.fillRect(x(s.reel_start_s) + 1, 20, Math.max(1, x(s.reel_end_s) - x(s.reel_start_s) - 2), h - 26);
+    ctx.fillRect(x(s.reel_start_s), 20, Math.max(1, x(s.reel_end_s) - x(s.reel_start_s) - 1), h - 26);
+    if (s.card_start_s != null) {  // the card before the clip
+      ctx.fillStyle = "#666";
+      ctx.fillRect(x(s.card_start_s) + 1, 20, Math.max(1, x(s.reel_start_s) - x(s.card_start_s) - 1), h - 26);
+    }
   });
   ctx.globalAlpha = 1;
   ctx.fillStyle = "#fff";
@@ -379,15 +400,17 @@ canvas.addEventListener("pointermove", (e) => {
 });
 canvas.addEventListener("pointerleave", () => (hoverX = null));
 
-let lastChapter = null;
+let lastChapter = null, lastHeader = null;
 function frame() {
   $("time").textContent = fmt(v.currentTime || 0);
   if (view) {
-    const i = segmentAt(v.currentTime);
-    if (i !== lastChapter) {  // re-render only when the playing clip changes
+    const i = segmentAt(v.currentTime), s = segments()[i];
+    const header = s
+      ? `${i + 1}/${segments().length} · ${clipLabel(s.game_id, s.source_start_s)}${onCard(s, v.currentTime) ? " (card)" : ""}`
+      : "–";
+    if (header !== lastHeader) $("chap").textContent = lastHeader = header;
+    if (i !== lastChapter) {  // re-render the lists only when the playing clip changes
       lastChapter = i;
-      const s = segments()[i];
-      $("chap").textContent = s ? `${i + 1}/${segments().length} · ${clipLabel(s.game_id, s.source_start_s)}` : "–";
       render();
       document.querySelector("#chapters li.sel")?.scrollIntoView({ block: "nearest" });
     }
