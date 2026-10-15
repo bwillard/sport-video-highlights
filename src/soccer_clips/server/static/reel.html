@@ -10,7 +10,7 @@
   #items li { grid-template-columns: 28px 1fr auto; cursor: default; }
   #items li:hover { background: none; }
   #title { width: 100%; padding: 4px 6px; font-weight: 600; }
-  #cardS { padding: 2px 4px; }
+  #cardS, #calloutS { padding: 2px 4px; }
   .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
   .progress { height: 6px; background: #262626; border-radius: 3px; overflow: hidden; flex: 1; min-width: 80px; }
   .progress div { height: 100%; background: var(--accent); width: 0; }
@@ -62,6 +62,8 @@
         <button data-render="landscape_1080p" title="1920×1080, slower">Render full</button>
         <label title="length of the opening title card and of the card before each clip (time in game + note); 0 = no cards">
           cards <input type="number" id="cardS" min="0" max="15" step="0.5" style="width:4.5em"> s</label>
+        <label title="how long to freeze on each clip's callout (set with C in the tagger); 0 = no freezes">
+          freeze <input type="number" id="calloutS" min="0" max="10" step="0.5" style="width:4.5em"> s</label>
       </div>
       <div class="row" id="jobRow" hidden><span class="stat" id="jobText"></span><div class="progress"><div id="jobBar"></div></div></div>
       <div class="row warn" id="stale" hidden></div>
@@ -103,6 +105,15 @@ function segmentAt(t) {
   return segments().findIndex((s) => t >= chapterStart(s) - BOUNDARY_SLACK_S && t < s.reel_end_s - BOUNDARY_SLACK_S);
 }
 const onCard = (s, t) => s.card_start_s != null && t < s.reel_start_s - BOUNDARY_SLACK_S;
+const inFreeze = (s, t) => s.freeze_at_s != null && t >= s.freeze_at_s && t < s.freeze_at_s + s.freeze_s;
+// Game time shown at reel time t inside segment s (same as Segment.source_time in models.py).
+function sourceAt(s, t) {
+  let offset = Math.max(0, t - s.reel_start_s);
+  if (s.freeze_at_s != null && t >= s.freeze_at_s) {
+    offset = Math.max(s.freeze_at_s - s.reel_start_s, offset - s.freeze_s);
+  }
+  return s.source_start_s + offset * s.speed;
+}
 function clipLabel(gameId, t) {
   const g = games[gameId];
   return matchClockFor(t, g?.kickoff_1h_s, g?.kickoff_2h_s) || fmt(t);
@@ -167,6 +178,7 @@ function render() {
   const { reel, items } = view;
   if (document.activeElement !== $("title")) $("title").value = reel.title;
   if (document.activeElement !== $("cardS")) $("cardS").value = reel.card_s;
+  if (document.activeElement !== $("calloutS")) $("calloutS").value = reel.callout_s;
   const missing = items.filter((i) => i.missing).length;
   const r = current();
   $("summary").textContent = `${items.length} clip(s)${missing ? `, ${missing} missing` : ""}` +
@@ -188,7 +200,7 @@ function render() {
     return `<li data-i="${i}" class="${i === now ? "sel" : ""}" title="from ${esc(s.game_id)} at ${fmt(s.source_start_s)}">
       <span class="d">${i + 1}</span>
       <span class="t">${esc(clipLabel(s.game_id, s.source_start_s))}</span>
-      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}${info?.note ? " · " + esc(info.note) : ""}</span>
+      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}${info?.note ? " · " + esc(info.note) : ""}${s.callout ? " · ◎" : ""}</span>
       <a href="#" data-go="${i}" title="go to this clip in the full game (G)">game ↗</a>
     </li>`;
   }).join("") : `<li class="empty">Render the reel to watch it here.</li>`;
@@ -238,6 +250,13 @@ $("cardS").addEventListener("change", async (e) => {
   render();
 });
 $("cardS").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+$("calloutS").addEventListener("change", async (e) => {
+  const value = Math.max(0, Math.min(10, +e.target.value || 0));
+  view = await api("PATCH", `/api/reels/${reelId()}`, { callout_s: value });
+  e.target.blur();
+  render();
+});
+$("calloutS").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
 
 $("deleteReel").addEventListener("click", async () => {
   if (!confirm(`Delete reel “${view.reel.title}” and its rendered videos? The clips themselves are kept.`)) return;
@@ -298,9 +317,7 @@ function goToGame(i = segmentAt(v.currentTime)) {
   const s = segments()[i];
   if (!s) return flash("nothing playing to jump from", true);
   // Inside the clip, map the reel time back to the game; on its card or from the list, use the clip start.
-  const inside = segmentAt(v.currentTime) === i;
-  const offset = Math.max(0, v.currentTime - s.reel_start_s);
-  const t = inside ? s.source_start_s + offset * s.speed : s.source_start_s;
+  const t = segmentAt(v.currentTime) === i ? sourceAt(s, v.currentTime) : s.source_start_s;
   history.replaceState(null, "", reelUrl());  // so Back returns to this exact spot
   location.href = taggerLink(s.game_id, t, s.clip_id);
 }
@@ -372,6 +389,10 @@ function drawTimeline() {
     ctx.fillStyle = info?.involves_her ? "#ff8a3d" : "#4ea1ff";
     ctx.globalAlpha = i === now ? 1 : 0.55;
     ctx.fillRect(x(s.reel_start_s), 20, Math.max(1, x(s.reel_end_s) - x(s.reel_start_s) - 1), h - 26);
+    if (s.freeze_at_s != null) {  // the callout freeze
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(x(s.freeze_at_s), 20, Math.max(2, x(s.freeze_at_s + s.freeze_s) - x(s.freeze_at_s)), h - 26);
+    }
     if (s.card_start_s != null) {  // the card before the clip
       ctx.fillStyle = "#666";
       ctx.fillRect(x(s.card_start_s) + 1, 20, Math.max(1, x(s.reel_start_s) - x(s.card_start_s) - 1), h - 26);
@@ -406,7 +427,7 @@ function frame() {
   if (view) {
     const i = segmentAt(v.currentTime), s = segments()[i];
     const header = s
-      ? `${i + 1}/${segments().length} · ${clipLabel(s.game_id, s.source_start_s)}${onCard(s, v.currentTime) ? " (card)" : ""}`
+      ? `${i + 1}/${segments().length} · ${clipLabel(s.game_id, s.source_start_s)}${onCard(s, v.currentTime) ? " (card)" : inFreeze(s, v.currentTime) ? " (callout)" : ""}`
       : "–";
     if (header !== lastHeader) $("chap").textContent = lastHeader = header;
     if (i !== lastChapter) {  // re-render the lists only when the playing clip changes

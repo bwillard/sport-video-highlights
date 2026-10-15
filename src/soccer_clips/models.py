@@ -28,6 +28,16 @@ DEFAULT_TAGS = [
 ]
 
 
+class Callout(BaseModel):
+    """A freeze-frame highlight of her at one moment in a clip (Phase 3.1)."""
+
+    t_s: float  # game time of the frozen frame; inside the clip's range
+    # Position in the frame: x as a fraction of the width, y of the height.
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    r: float = Field(default=0.06, gt=0, le=0.5)  # ring radius, fraction of the frame height
+
+
 class Clip(BaseModel):
     # Random rather than sequential so reels can reference (game_id, clip_id)
     # and clips can be deleted without renumbering.
@@ -38,6 +48,7 @@ class Clip(BaseModel):
     rating: int | None = Field(default=None, ge=1, le=5)
     involves_her: bool = False
     note: str | None = None
+    callout: Callout | None = None  # dropped if start/end change so it falls outside the clip
     export: str | None = None  # relative to clips_dir; cleared when start/end change
     created_at: datetime = Field(default_factory=_now)
 
@@ -116,6 +127,8 @@ class Reel(BaseModel):
     items: list[ReelItem] = []
     # Seconds for the opening title card and the card before each clip; 0 = no cards.
     card_s: float = Field(default=3.0, ge=0, le=15)
+    # Seconds to freeze on each clip's callout; 0 = ignore callouts.
+    callout_s: float = Field(default=1.5, ge=0, le=10)
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -134,9 +147,18 @@ class Segment(BaseModel):
     # The card shown before this clip, if any: where it starts in the reel and its text.
     card_start_s: float | None = None
     card_lines: list[str] = []
+    # The callout freeze inside this clip, if any: reel time it starts, its
+    # length, and the callout it shows.
+    freeze_at_s: float | None = None
+    freeze_s: float = 0.0
+    callout: Callout | None = None
 
     def source_time(self, reel_t: float) -> float:
-        return self.source_start_s + (reel_t - self.reel_start_s) * self.speed
+        offset = max(0.0, reel_t - self.reel_start_s)
+        if self.freeze_at_s is not None and reel_t >= self.freeze_at_s:
+            # frozen on the callout frame, then the clip carries on from there
+            offset = max(self.freeze_at_s - self.reel_start_s, offset - self.freeze_s)
+        return self.source_start_s + offset * self.speed
 
 
 class Render(BaseModel):

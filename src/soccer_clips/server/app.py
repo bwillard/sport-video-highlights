@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from soccer_clips.config import get_settings
 from soccer_clips.export import export_job, run_export
 from soccer_clips.jobs import Job, JobQueue
-from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Tag
+from soccer_clips.models import Callout, Clip, Game, Preset, Reel, ReelItem, Render, Tag
 from soccer_clips.reel.render import render_job, run_render, stale_reasons
 from soccer_clips.scan import scan
 from soccer_clips.store import Store
@@ -51,6 +51,7 @@ class ClipPatch(BaseModel):
     rating: int | None = Field(default=None, ge=1, le=5)
     involves_her: bool | None = None
     note: str | None = None
+    callout: Callout | None = None  # null removes it
 
 
 class ExportRequest(BaseModel):
@@ -62,12 +63,14 @@ class ReelCreate(BaseModel):
     title: str
     items: list[ReelItem] = []
     card_s: float = Field(default=3.0, ge=0, le=15)
+    callout_s: float = Field(default=1.5, ge=0, le=10)
 
 
 class ReelPatch(BaseModel):
     title: str | None = None
     items: list[ReelItem] | None = None
     card_s: float | None = Field(default=None, ge=0, le=15)
+    callout_s: float | None = Field(default=None, ge=0, le=10)
 
 
 class RenderRequest(BaseModel):
@@ -84,6 +87,7 @@ class ReelItemView(ReelItem):
     involves_her: bool = False
     rating: int | None = None
     note: str | None = None
+    has_callout: bool = False
     kickoff_1h_s: float | None = None
     kickoff_2h_s: float | None = None
 
@@ -177,8 +181,12 @@ def create_app(store: Store | None = None) -> FastAPI:
             except ValueError as e:
                 raise HTTPException(422, str(e))
             check_range(game, new)
+            if "callout" in changes and new.callout and not new.start_s <= new.callout.t_s < new.end_s:
+                raise HTTPException(422, "the callout must be inside the clip")
             if (new.start_s, new.end_s) != (old.start_s, old.end_s):
                 new.export = None  # the exported file no longer matches
+                if new.callout and not new.start_s <= new.callout.t_s < new.end_s:
+                    new.callout = None  # the clip no longer contains that moment
             game.clips[game.clips.index(old)] = new
         return new
 
@@ -243,7 +251,7 @@ def create_app(store: Store | None = None) -> FastAPI:
                 continue
             items.append(ReelItemView(
                 **item.model_dump(), start_s=clip.start_s, end_s=clip.end_s, tags=clip.tags,
-                involves_her=clip.involves_her, rating=clip.rating, note=clip.note,
+                involves_her=clip.involves_her, rating=clip.rating, note=clip.note, has_callout=clip.callout is not None,
                 kickoff_1h_s=game.kickoff_1h_s, kickoff_2h_s=game.kickoff_2h_s,
             ))
         renders = []
@@ -260,7 +268,8 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.post("/api/reels", status_code=201)
     def create_reel(body: ReelCreate) -> ReelView:
         check_items(body.items)
-        reel = Reel(title=body.title.strip() or "Untitled reel", items=body.items, card_s=body.card_s)
+        reel = Reel(title=body.title.strip() or "Untitled reel", items=body.items,
+                    card_s=body.card_s, callout_s=body.callout_s)
         store.save_reel(reel)
         return reel_view(reel)
 
@@ -280,6 +289,8 @@ def create_app(store: Store | None = None) -> FastAPI:
                 reel.items = patch.items
             if patch.card_s is not None:
                 reel.card_s = patch.card_s
+            if patch.callout_s is not None:
+                reel.callout_s = patch.callout_s
         return reel_view(reel)
 
     @app.delete("/api/reels/{reel_id}", status_code=204)

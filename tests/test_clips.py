@@ -107,3 +107,17 @@ def test_export_clip(client, settings, fast):
 
 def test_export_unknown_clip_is_404(client):
     assert client.post(f"/api/games/{GAME}/export", json={"clip_ids": ["nope"]}).status_code == 404
+
+
+def test_callout_set_validate_and_clear(client):
+    clip = client.post(f"/api/games/{GAME}/clips", json={"start_s": 1.0, "end_s": 2.0}).json()
+    url = f"/api/games/{GAME}/clips/{clip['id']}"
+    callout = {"t_s": 1.5, "x": 0.4, "y": 0.6, "r": 0.05}
+    assert client.patch(url, json={"callout": callout}).json()["callout"] == callout
+    assert client.patch(url, json={"callout": {**callout, "t_s": 2.5}}).status_code == 422  # outside the clip
+    assert client.patch(url, json={"callout": {**callout, "x": 1.5}}).status_code == 422  # off the frame
+    # moving the end keeps a callout that's still inside; moving the start past it drops it
+    assert client.patch(url, json={"end_s": 2.2}).json()["callout"] == callout
+    assert client.patch(url, json={"start_s": 1.6}).json()["callout"] is None
+    client.patch(url, json={"start_s": 1.0, "callout": callout})
+    assert client.patch(url, json={"callout": None}).json()["callout"] is None

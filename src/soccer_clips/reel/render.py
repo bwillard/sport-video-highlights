@@ -21,6 +21,7 @@ from pathlib import Path
 from soccer_clips import ffmpeg
 from soccer_clips.jobs import Job
 from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment
+from soccer_clips.reel.callout import STYLE_VERSION, callout_frame, splice_callout
 from soccer_clips.reel.cards import clip_card_lines, draw_card, font_path, start_card_lines
 from soccer_clips.store import Store
 
@@ -160,22 +161,35 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
 
     start_lines = start_card_lines(reel) if reel.card_s > 0 else []
     start_card = card(start_lines)
-    entries = []  # (game, clip, card lines, card path or None, clip path)
+    entries = []  # (game, clip, card lines, card path or None, clip path, callout frame or None)
+    used = set()  # cache files to keep
+    freeze_s = float(max(1, round(reel.callout_s * OUTPUT_FPS)) / OUTPUT_FPS) if reel.callout_s > 0 else 0.0
     for (game, clip), (seek_s, duration_s) in zip(parts, windows):
         lines = clip_card_lines(game, clip) if reel.card_s > 0 else []
         card_path = card(lines)
         path = cache / _cache_name(preset, game.id, game.original, round(seek_s, 6), round(duration_s, 6))
-        if not path.exists():
+        frame_n = callout_frame(game, clip) if freeze_s else None
+        spliced = None
+        if frame_n is not None:
+            spliced = cache / _cache_name(preset, "callout", path.name, frame_n, clip.callout.model_dump(),
+                                          round(reel.callout_s, 3), STYLE_VERSION)
+        needs_clip = spliced is None or not spliced.exists()  # the splice is made from the clip
+        if needs_clip and not path.exists():
             _normalise(store, game, seek_s, duration_s, spec, path, lambda f: report(f, duration_s))
+        if spliced and not spliced.exists():
+            splice_callout(store, path, frame_n, clip.callout, game, reel.callout_s, OUTPUT_FPS,
+                           spec.intermediate_preset, spec.intermediate_crf, spliced)
         done += duration_s
-        entries.append((game, clip, lines, card_path, path))
+        if path.exists():
+            used.add(path)  # kept even when spliced, so moving the callout only redoes the splice
+        entries.append((game, clip, lines, card_path, spliced or path, frame_n))
 
     length = lambda p: max(ffmpeg.stream_durations(s, p).values())
     intermediates, segments, t = [], [], 0.0
     if start_card:
         intermediates.append(start_card)
         t += length(start_card)
-    for game, clip, lines, card_path, path in entries:
+    for game, clip, lines, card_path, path, frame_n in entries:
         card_start = None
         if card_path:
             intermediates.append(card_path)
@@ -190,6 +204,9 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
             source_start_s=game.frame_at(clip.start_s) * frame_s,
             source_end_s=game.frame_at(clip.end_s) * frame_s,
             card_start_s=card_start, card_lines=lines if card_path else [],
+            freeze_at_s=None if frame_n is None else t + float(frame_n / OUTPUT_FPS),
+            freeze_s=0.0 if frame_n is None else freeze_s,
+            callout=None if frame_n is None else clip.callout,
         ))
         t += clip_len
 
@@ -219,7 +236,7 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
     store.save_render(render)
 
     # Drop cached intermediates this preset no longer uses (clips edited or removed).
-    used = set(intermediates)
+    used |= set(intermediates)
     for p in cache.glob(f"{preset}-*.mp4"):
         if p not in used:
             p.unlink()
@@ -233,10 +250,12 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
         reasons.append("clips were added, removed or reordered")
     if reel.card_s != render.reel.card_s:
         reasons.append("card length changed")
+    if reel.callout_s != render.reel.callout_s:
+        reasons.append("callout freeze length changed")
     elif reel.card_s > 0 and start_card_lines(reel) != render.start_card_lines:
         reasons.append("title card changed")
     games: dict[str, Game] = {}
-    changed = deleted = cards = 0
+    changed = deleted = cards = callouts = 0
     for seg in render.segments:
         try:
             game = games.get(seg.game_id) or store.load_game(seg.game_id)
@@ -250,8 +269,13 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
             round(seg.source_start_s, 6), round(seg.source_end_s, 6)
         ):
             changed += 1
-        elif seg.card_lines and clip_card_lines(game, clip) != seg.card_lines:
-            cards += 1
+        else:
+            if seg.card_lines and clip_card_lines(game, clip) != seg.card_lines:
+                cards += 1
+            if reel.callout_s > 0 and (clip.callout if callout_frame(game, clip) is not None else None) != seg.callout:
+                callouts += 1
+    if callouts:
+        reasons.append(f"{callouts} callout(s) added, moved or removed")
     if cards:
         reasons.append(f"{cards} clip card(s) changed (note or kickoff time)")
     if changed:

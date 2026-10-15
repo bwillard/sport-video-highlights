@@ -198,3 +198,61 @@ def test_draw_card_wraps_long_notes():
     px = img.load()
     border = [px[x, y] for x in range(960) for y in list(range(0, 27)) + list(range(513, 540))]
     assert set(border) == {(17, 17, 17)}
+
+
+def frame_at(settings, path, t):
+    from io import BytesIO
+
+    from PIL import Image
+
+    png = subprocess.run([settings.ffmpeg, "-v", "error", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1",
+                          "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True, check=True).stdout
+    return Image.open(BytesIO(png)).convert("RGB")
+
+
+def test_callout_freeze(client, settings, reel):
+    from soccer_clips.models import Segment
+
+    rid = reel["id"]
+    a2 = reel["items"][1]["clip_id"]  # game A 0.5s -> 2.0s
+    callout = {"t_s": 1.0, "x": 0.5, "y": 0.5, "r": 0.1}
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": callout})
+    [r] = render(client, rid)["renders"]
+    fps = 30000 / 1001
+    freeze = 45 / fps  # default 1.5s = 45 frames
+
+    segs = [Segment(**s) for s in r["segments"]]
+    s = segs[1]
+    assert s.callout.model_dump() == callout and s.freeze_s == pytest.approx(freeze)
+    # the freeze starts on frame 15 of the clip (1.0s - 0.5s)
+    assert s.freeze_at_s - s.reel_start_s == pytest.approx(15 / fps, abs=0.001)
+    assert s.reel_end_s - s.reel_start_s == pytest.approx(1.5 + freeze, abs=0.03)
+    assert segs[2].reel_start_s == pytest.approx(s.reel_end_s)
+    assert segs[0].freeze_at_s is None
+
+    # jump-back: before, during and after the freeze
+    assert s.source_time(s.reel_start_s + 0.2) == pytest.approx(0.7, abs=0.02)
+    assert s.source_time(s.freeze_at_s + 1.0) == pytest.approx(1.0, abs=0.02)
+    assert s.source_time(s.freeze_at_s + freeze + 0.3) == pytest.approx(1.3, abs=0.02)
+
+    out = settings.reels_dir / rid / f"{PRESET}.mp4"
+    streams = probe(settings, out)
+    assert int(streams["video"]["nb_read_frames"]) == 105 + 45
+    assert float(streams["audio"]["duration"]) == pytest.approx(float(streams["video"]["duration"]), abs=0.05)
+
+    # the held frame has a white ring around the callout and is dimmed outside it
+    held = frame_at(settings, out, s.freeze_at_s + 0.7)
+    w, h = held.size
+    ring_x = round(w * 0.5 + 0.1 * h)  # right edge of the ring
+    assert min(held.getpixel((ring_x, h // 2))) > 200
+    before = frame_at(settings, out, s.freeze_at_s - 0.05)
+    corner = lambda img: sum(img.getpixel((w - 20, 20)))
+    assert corner(held) < corner(before) * 0.7
+
+    # moving the callout makes the render out of date; turning freezes off changes the length
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": {**callout, "x": 0.3}})
+    assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["1 callout(s) added, moved or removed"]
+    client.patch(f"/api/reels/{rid}", json={"callout_s": 0})
+    [r] = render(client, rid)["renders"]
+    assert all(seg["freeze_at_s"] is None for seg in r["segments"])
+    assert int(probe(settings, out)["video"]["nb_read_frames"]) == 105

@@ -10,6 +10,9 @@
   #detail .lbl { color: var(--muted); width: 52px; }
   #detail textarea { width: 100%; min-height: 48px; padding: 4px 6px; resize: vertical; }
   #back { font-weight: 600; }
+  #stage { position: relative; }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #stage.placing #overlay { pointer-events: auto; cursor: crosshair; }
 </style>
 </head>
 <body>
@@ -26,7 +29,10 @@
 </div>
 <div class="layout">
   <section>
-    <video id="v" preload="auto"></video>
+    <div id="stage">
+      <video id="v" preload="auto"></video>
+      <canvas id="overlay"></canvas>
+    </div>
     <canvas id="timeline"></canvas>
     <p class="help">
       <kbd>Space</kbd> play/pause · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× ·
@@ -36,7 +42,9 @@
       <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>5</kbd> rating · <kbd>F</kbd> her ·
       <kbd>N</kbd> note · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next clip · <kbd>R</kbd> replay clip ·
       <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
-      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff
+      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff<br>
+      <kbd>C</kbd> callout: pause inside the selected clip, press C, click on her (drag to size the ring) ·
+      <kbd>Shift</kbd>+<kbd>C</kbd> remove it
     </p>
   </section>
   <aside>
@@ -145,6 +153,7 @@ async function deleteSelected() {
 }
 
 function select(id, seek = true) {
+  cancelCallout();
   selectedId = id;
   const c = selected();
   if (c && seek) seekTo(c.start_s);
@@ -222,7 +231,7 @@ function render() {
     return `<li data-id="${c.id}" class="${c.id === selectedId ? "sel" : ""}">
       <span class="t" title="${fmt(c.start_s)}">${esc(label(c.start_s))}</span>
       <span class="d">${(c.end_s - c.start_s).toFixed(1)}s</span>
-      <span class="tags">${c.involves_her ? '<span class="her">● her</span> ' : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
+      <span class="tags">${c.involves_her ? '<span class="her">● her</span> ' : ""}${c.callout ? "◎ " : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
       <span>${c.rating ? "★".repeat(c.rating) : ""} ${cls === "done"
         ? `<a class="x done" href="${exportUrl(c)}" download title="download exported clip">⬇ mp4</a>`
         : `<span class="x ${cls}">${esc(txt)}</span>`}</span>
@@ -251,6 +260,11 @@ function renderDetail() {
       <button data-act="her" class="her ${c.involves_her ? "on" : ""}">her<span class="hk">F</span></button></div>
     <div class="row"><span class="lbl">rating</span>
       ${[1, 2, 3, 4, 5].map((n) => `<button data-rating="${n}" class="${c.rating === n ? "on" : ""}">${n}</button>`).join("")}</div>
+    <div class="row"><span class="lbl">callout</span>
+      ${c.callout
+        ? `<span>◎ at ${fmt(c.callout.t_s)}</span><button data-act="calloutGo">go to</button>
+           <button data-act="calloutSet" title="C">move</button><button data-act="calloutRemove" title="Shift+C">remove</button>`
+        : `<button data-act="calloutSet" title="C">set</button><span class="stat">pause inside the clip, press C, click on her</span>`}</div>
     <div class="row"><textarea id="note" placeholder="note (N to edit, Esc to leave)">${esc(c.note || "")}</textarea></div>
     <div class="row">
       <button data-act="export" title="E">Export</button>
@@ -274,6 +288,9 @@ $("detail").addEventListener("click", (e) => {
     her: () => patchSelected({ involves_her: !selected().involves_her }),
     export: () => exportClips([selectedId]),
     delete: deleteSelected,
+    calloutSet: startCallout,
+    calloutGo: () => { v.pause(); seekTo(selected().callout.t_s); },
+    calloutRemove: () => patchSelected({ callout: null }),
   })[b.dataset.act]?.();
 });
 $("clips").addEventListener("click", (e) => {
@@ -313,6 +330,12 @@ function drawTimeline() {
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 2;
       ctx.strokeRect(x(c.start_s) - 1, 18, cw + 2, h - 22);
+    }
+    if (c.callout) {  // ◎ marker at the callout moment
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(x(c.callout.t_s), h / 2 + 7, 3, 0, 2 * Math.PI);
+      ctx.fill();
     }
   }
   ctx.globalAlpha = 1;
@@ -359,9 +382,101 @@ function frame() {
   $("time").textContent = fmt(v.currentTime);
   $("clock").textContent = (game && matchClock(v.currentTime)) || "–";
   drawTimeline();
+  drawOverlay();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ---------- callout (Phase 3.1) ----------
+// The reel freezes on this frame with a spotlight + ring on her. Positions are
+// stored as fractions of the video frame (x of width, y and r of height).
+const overlay = $("overlay"), stage = $("stage");
+const DEFAULT_R = 0.06;
+let placing = null;  // {t, x, y, r, dragging} while choosing a callout spot
+
+function videoRect() {
+  // where the video picture sits inside the <video> box (letterboxed)
+  const W = v.clientWidth, H = v.clientHeight, vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+  const s = Math.min(W / vw, H / vh);
+  return { x: (W - vw * s) / 2, y: (H - vh * s) / 2, w: vw * s, h: vh * s };
+}
+
+function startCallout() {
+  const c = selected();
+  if (!c) return flash("select a clip first", true);
+  if (v.currentTime < c.start_s || v.currentTime >= c.end_s) {
+    return flash("move the playhead inside the selected clip first", true);
+  }
+  v.pause();
+  placing = { t: v.currentTime, x: null, y: null, r: c.callout?.r ?? DEFAULT_R, dragging: false };
+  stage.classList.add("placing");
+  flash("click on her (drag to size the ring) — Esc cancels");
+}
+function cancelCallout() {
+  placing = null;
+  stage.classList.remove("placing");
+}
+function pointerToFrame(e) {
+  const box = overlay.getBoundingClientRect(), r = videoRect();
+  return {
+    x: Math.max(0, Math.min(1, (e.clientX - box.left - r.x) / r.w)),
+    y: Math.max(0, Math.min(1, (e.clientY - box.top - r.y) / r.h)),
+  };
+}
+overlay.addEventListener("pointerdown", (e) => {
+  if (!placing) return;
+  overlay.setPointerCapture(e.pointerId);
+  Object.assign(placing, pointerToFrame(e), { dragging: true, downX: e.clientX, downY: e.clientY });
+});
+overlay.addEventListener("pointermove", (e) => {
+  if (!placing?.dragging) return;
+  const px = Math.hypot(e.clientX - placing.downX, e.clientY - placing.downY);
+  if (px > 6) placing.r = Math.max(0.02, Math.min(0.3, px / videoRect().h));
+});
+overlay.addEventListener("pointerup", async () => {
+  if (!placing?.dragging) return;
+  const { t, x, y, r } = placing;
+  cancelCallout();
+  await patchSelected({ callout: { t_s: t, x, y, r } });
+  flash(`callout set at ${fmt(t)}`);
+});
+
+function drawOverlay() {
+  const dpr = window.devicePixelRatio || 1;
+  const W = overlay.clientWidth, H = overlay.clientHeight;
+  if (overlay.width !== W * dpr || overlay.height !== H * dpr) { overlay.width = W * dpr; overlay.height = H * dpr; }
+  const ctx = overlay.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  let co = null;
+  if (placing) {
+    co = placing.x == null ? null : placing;
+  } else {
+    // preview the selected clip's callout when the playhead is at (or passing) its frame
+    const c = selected()?.callout;
+    if (c && Math.abs(v.currentTime - c.t_s) < (v.paused ? 0.5 / fps : 0.3)) co = c;
+  }
+  if (!co) return;
+  // same look as the render: dim outside a spotlight, white ring, arrow
+  const r = videoRect(), cx = r.x + co.x * r.w, cy = r.y + co.y * r.h, rad = Math.max(co.r * r.h, r.h * 0.02);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.beginPath();
+  ctx.rect(r.x, r.y, r.w, r.h);
+  ctx.arc(cx, cy, rad * 1.15, 0, 2 * Math.PI, true);
+  ctx.fill("evenodd");
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = Math.max(2, r.h * 0.006);
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad, 0, 2 * Math.PI);
+  ctx.stroke();
+  const size = Math.max(r.h * 0.03, rad * 0.5), gap = rad + ctx.lineWidth + size * 0.4;
+  const dir = cy - gap - size * 1.6 > r.y ? -1 : 1, tip = cy + dir * gap, base = tip + dir * size;
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.moveTo(cx, tip); ctx.lineTo(cx - size * 0.6, base); ctx.lineTo(cx + size * 0.6, base);
+  ctx.fill();
+  ctx.fillRect(cx - size * 0.18, Math.min(base, base + dir * size * 0.6), size * 0.36, size * 0.6);
+}
 
 // ---------- playback & keys ----------
 function seekTo(t) {
@@ -382,6 +497,7 @@ async function setKickoff(half) {
 document.addEventListener("keydown", (e) => {
   if (typingInField(e)) return;
   if (!game || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (placing && e.key === "Escape") { e.preventDefault(); cancelCallout(); return; }
 
   // Digits by physical key, since Shift+1 types "!" on most layouts.
   if (e.code.startsWith("Digit")) {
@@ -425,6 +541,7 @@ document.addEventListener("keydown", (e) => {
     Delete: deleteSelected,
     Backspace: deleteSelected,
     h: () => setKickoff(e.shiftKey ? 2 : 1),
+    c: () => (e.shiftKey ? patchSelected({ callout: null }) : startCallout()),
   };
   const act = actions[key];
   if (!act) return;

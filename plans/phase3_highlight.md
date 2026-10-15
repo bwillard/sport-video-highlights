@@ -1,6 +1,6 @@
 # Phase 3 — Highlight Her
 
-**Status:** Not started. 3.1 depends on Phases 1–2; 3.2 and 3.3 build on 3.1.
+**Status:** 3.1 built (2026-10-15): freeze-frame callout set with `C` in the tagger, rendered as a spotlight + ring + arrow freeze in reels. YOLO snap not done (optional). 3.2 and 3.3 not started.
 **Goal:** Make it obvious who to watch in each clip, with as few clicks as possible, on a CPU-only machine.
 
 ## Constraints that shape this phase
@@ -24,11 +24,21 @@ One click, no tracking — the standard technique in recruiting/highlight videos
 
 Overlays are drawn with Pillow/OpenCV onto the frozen frame (or with supervision's annotators for a consistent look with 3.2).
 
+**As built (2026-10-15)**
+- **Placing it:** select a clip, pause inside it, press `C` (or "set" in the clip editor), click on her. Drag instead of clicking to size the ring. `Esc` cancels; `Shift+C` (or "remove") deletes it. One callout per clip.
+- **Storage:** `Clip.callout = {t_s, x, y, r}`, with x as a fraction of the frame width, y and r as fractions of the height; default r = 0.06 (about 130 px across at 1080p, which frames one player). Moving the clip's start/end so the callout falls outside the clip removes it.
+- **Preview:** when the playhead is on the callout frame (or passing it), the tagger draws the same overlay on top of the video. The clip list shows ◎ and the timeline has a white dot at the callout moment.
+- **Look (default style):** everything outside a soft-edged spotlight dimmed to 45%, a white ring, and a white arrow pointing down at her (flipped below the ring if she's near the top). Drawn with Pillow in `soccer_clips/reel/callout.py`; the tagger's canvas preview mirrors it.
+- **Render:** the clip's cached intermediate is split at the callout frame and the frozen, overlaid frame is held for `Reel.callout_s` seconds (default 1.5s, set in the "freeze … s" box on the reel page; 0 turns freezes off) with silence, then the clip carries on. The spliced version is cached separately, so moving a callout only redoes the splice.
+- **Time map:** `Segment.freeze_at_s`, `freeze_s` and `callout`. `G` during the freeze goes to the callout moment in the game; after it, game time is offset by the freeze length. The reel page header shows "(callout)" during the freeze, the timeline draws it white, and chapters with a callout show ◎.
+- **Out of date:** a render is flagged when a callout is added, moved or removed, or the freeze length changes.
+- **Phase 4:** no crops are saved yet. Callout clicks are stored on each clip, so crops of her can be generated from them whenever Phase 4 needs them.
+
 **Tasks**
-- [ ] Callout storage + `C` click interaction in the player
-- [ ] Single-frame YOLO snap (optional, behind a flag)
-- [ ] Freeze + overlay + resume in the render pipeline
-- [ ] Pick a visual style (ellipse vs spotlight vs arrow)
+- [x] Callout storage + `C` click interaction in the player
+- [ ] Single-frame YOLO snap (optional, behind a flag) — not done; needs ultralytics/torch in the env
+- [x] Freeze + overlay + resume in the render pipeline
+- [x] Pick a visual style (ellipse vs spotlight vs arrow) — spotlight + ring + arrow by default; change after seeing it on real reels
 
 ## 3.2 — Tracked marker (click + correct)
 Keep a marker on her for the whole clip.
@@ -88,15 +98,18 @@ Crops are saved as image files in `player_gallery/`, and each one gets a line ap
 - 3.3: vertical export keeps her in frame without nauseating motion.
 
 ## Open questions
-- Visual style for the marker — ellipse under feet, spotlight, arrow, or name tag?
+- Visual style for the marker — 3.1 uses spotlight + ring + arrow; revisit after real reels. Name tag?
 - Is it OK for the tracked marker to just disappear when tracking loses her, or should it fall back to the last known spot briefly?
 - How small is she in typical follow-cam frames? (Determines imgsz/tiling choices.)
 
 ## Benchmarks / findings
 | Measure | Value |
 |---|---|
-| Her typical height in px (1080p) | |
+| Her typical height in px (1080p) | ~70 px for players in one midfield frame of the SAA game (rough, one sample) |
 | YOLO11n @640, fps on CPU | |
 | YOLO11s @1280, fps on CPU | |
 | Avg correction clicks / clip | |
 | SAM 2 tiny, sec per clip-second | |
+
+## Findings
+- **2026-10-15** — 3.1 tested: 27 unit tests (callout API rules, exact 45-frame freeze, A/V sync, the held frame has the ring and is dimmed outside it, jump-back before/during/after the freeze, out-of-date detection) and a headless-Chrome run of placing (click, drag to size, Esc, Shift+C) and the reel freeze + `G`.

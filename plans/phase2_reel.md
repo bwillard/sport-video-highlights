@@ -1,10 +1,10 @@
 # Phase 2 — Highlight Reel
 
-**Status:** In progress. Built first (2026-10-14): reels from tagged clips, hard-cut render (preview 540p / full 1080p) with cached intermediates and a segment map, and the reel page (watch, chapters, jump to full game and back, download, reorder, out-of-date warning). Title cards added the same day. Next: per-clip trim and lower third, if still wanted (the first preview reel's clip lengths were fine). Fades, music, vertical and speed/slow-mo moved to [Future ideas](#future-ideas) (2026-10-14).
+**Status:** Done (2026-10-15). Built 2026-10-14: reels from tagged clips, hard-cut render (preview 540p / full 1080p) with cached intermediates and a segment map, and the reel page (watch, chapters, jump to full game and back, download, reorder, out-of-date warning). Title cards added the same day. A real reel was rendered and looked good. Fades, music, vertical, speed/slow-mo, per-clip trim, lower thirds and OTIO export are in [Future ideas](#future-ideas).
 **Goal:** Pick clips, order them, and render a reel (landscape, for TV/YouTube and sharing) with hard cuts.
 
 ## Scope
-- Reel builder UI (select, reorder, per-clip trim and lower third).
+- Reel builder UI (select, reorder, remove).
 - Render pipeline with ffmpeg: normalise → title card → join with hard cuts.
 - Output presets: 16:9 full and a quick 16:9 preview.
 - Optional timeline export for finishing in an NLE (DaVinci Resolve / Kdenlive).
@@ -46,7 +46,7 @@ A vertical (9:16) preset is a [future idea](#future-ideas).
 
 ## As built (first slice, 2026-10-14)
 - **Making a reel:** in the tagger, filter the clip list, pick "new reel…" (or an existing reel) and press **Add shown to reel**. Clips already in the reel aren't added twice. Clips can come from several games.
-- **Storage:** `<SOCCER_REELS_DIR>/<reel_id>/reel.json` holds `{id, title, items: [{game_id, clip_id}]}`. Per-item options (trim, lower third) and the title card aren't in the model yet; they'll be added with defaults so existing reels keep loading.
+- **Storage:** `<SOCCER_REELS_DIR>/<reel_id>/reel.json` holds `{id, title, items: [{game_id, clip_id}]}`. New options get defaults so existing reels keep loading (e.g. `card_s` was added this way).
 - **Render** (`soccer_clips/reel/render.py`), run on the shared single-worker job queue (`jobs.py`) with exports:
   1. Each clip is cut frame-exactly from the original and normalised to the preset size (letterboxed if the aspect differs), 29.97 fps, yuv420p, 48 kHz stereo AAC; games with no audio get silence. These intermediates are cached in `<reel_id>/cache/<preset>-<hash>.mp4`, keyed on the source and the frame-snapped range, so re-rendering after reordering only redoes the final join. Unused cache files for that preset are deleted after each render.
   2. Each intermediate is measured with ffprobe and the segment map is built from those lengths.
@@ -79,34 +79,29 @@ Requested 2026-10-14: watch a rendered reel in the tagger app, jump from any mom
 - **Reels list:** the tagger header gets a "Reels" menu listing each reel's renders (date, length, preset).
 - **Stale renders:** if a referenced clip has been edited or deleted since the render, the reel page shows "clips changed since this render" with a re-render button. The jump-back map still points at the old source times, which is what was actually rendered.
 
-## Optional: NLE export
-Export the reel as OpenTimelineIO (`opentimelineio`) or CMX EDL pointing at the original files, for finishing by hand in DaVinci Resolve / Kdenlive.
-
 ## Tasks
 - [x] `Reel` model + `reel.json` storage + API
 - [x] Per-clip normalise step with caching
 - [x] Title cards (Pillow): opening card + a card before each clip, length set per reel
 - [x] Join with hard cuts (concat filter)
-- [ ] Per-clip trim and lower third on the reel page
 - [x] Reel builder UI, basic: add from the tagger, reorder, remove
 - [x] `render.json` segment map written by each render (measured from the intermediates)
 - [x] Reel page: player, chapter list, jump to full game (`G`), download links, stale-render warning
 - [x] Tagger accepts `#game=&t=&clip=` and shows "← back to reel"
-- [ ] *(Optional)* OTIO export
-- [ ] Render a real reel; record timings below
+- [x] Render a real reel; record timings below
 
 ## Acceptance criteria
 - A 2–3 minute reel from 10–20 clips renders on CPU in a reasonable time (target: < 10 min for the final render, < 2 min for preview) with no audio drift. Met 2026-10-14 (see benchmarks).
 
-## Open questions
-- Lower-third style/branding: name + number, team colours?
-
 ## Future ideas
-Moved out of Phase 2 on 2026-10-14 to keep it small. The design notes are kept here for when we come back to them.
+Moved out of Phase 2 on 2026-10-14/15 to keep it small. The design notes are kept here for when we come back to them.
 
 - **Fades / transitions.** `xfade` + `acrossfade` chain over the intermediates, falling back to hard cuts if long reels make the filter graph unwieldy. Fades overlap neighbouring clips, so segment spans must still come from measurement (the renderer already does this), and the reel page's chapter boundaries would sit mid-fade. Open question: fades only, or hard cuts for fast action?
 - **Music.** `amix` the music with the game audio at reduced volume (e.g. music 0.6, game 0.3) and fade it out at the end. Reel option like `"music": {"path": "...", "volume": 0.6, "game_audio_volume": 0.3}`. Open question: music source (your own files?). Platforms may mute copyrighted music.
 - **Vertical version (9:16) for phones.** Preset `vertical_1080x1920`. A 9:16 crop of 1080p follow-cam footage is about 608 px wide, upscaled to 1080, so it'll be soft and players are already small. A **blurred-background fill** (full 16:9 frame in the middle, blurred zoomed copy behind) may look better than a centre crop; try both. Phase 3.3 (crop that follows her) builds on this preset, so 3.3 waits for it too.
+- **Per-clip trim.** Shave the start/end of a clip for one reel without changing the tagged clip (`trim_start_s` / `trim_end_s` on the reel item). Low priority: real clip lengths have been fine, and the clip itself can be fixed via `G` → `Shift+I`/`O`.
+- **Lower thirds.** A caption over the bottom of the video while a clip plays (e.g. "23' — Goal"). Mostly covered by the clip cards. Open question if revived: style/branding (name + number, team colours?).
+- **NLE export (OTIO / EDL).** Export the reel as OpenTimelineIO (`opentimelineio`) or CMX EDL pointing at the original files, for finishing by hand in DaVinci Resolve / Kdenlive.
 - **Speed changes and slow-mo replays.** Per-item `"speed": 1.0` and `"slowmo_replay": {"start_s": 4.0, "end_s": 6.0, "speed": 0.5}`, applied in the normalise step (`setpts` / `atempo`). Jump-back inside a slowed segment maps with `source_start_s + (t − reel_start_s) × speed`; `Segment.speed` is already in the model for this.
 
 ## Benchmarks / findings
