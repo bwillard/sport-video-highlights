@@ -22,7 +22,7 @@ from soccer_clips import ffmpeg
 from soccer_clips.jobs import Job
 from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment
 from soccer_clips.reel.callout import STYLE_VERSION, callout_frame, splice_callout
-from soccer_clips.reel.cards import clip_card_lines, draw_card, font_path, start_card_lines
+from soccer_clips.reel.cards import card_seconds, clip_card_lines, draw_card, font_path, start_card_lines
 from soccer_clips.store import Store
 
 # Bump to invalidate every cached intermediate (e.g. after changing the normalise filters).
@@ -154,9 +154,10 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
     def card(lines: list[str]) -> Path | None:
         if not lines or reel.card_s <= 0:
             return None
-        path = cache / _cache_name(preset, "card", lines, round(reel.card_s, 3), font_path())
+        seconds = card_seconds(lines, reel.card_s)
+        path = cache / _cache_name(preset, "card", lines, round(seconds, 3), font_path())
         if not path.exists():
-            _card(store, lines, spec, reel.card_s, path)
+            _card(store, lines, spec, seconds, path)
         return path
 
     start_lines = start_card_lines(reel, [game for game, _ in parts]) if reel.card_s > 0 else []
@@ -249,7 +250,7 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
     if reel.items != render.reel.items:
         reasons.append("clips were added, removed or reordered")
     if reel.card_s != render.reel.card_s:
-        reasons.append("card length changed")
+        reasons.append("minimum card length changed")
     if reel.callout_s != render.reel.callout_s:
         reasons.append("callout freeze length changed")
     elif reel.card_s > 0 and start_card_lines(reel, [g for g, _ in _resolve(store, reel)[0]]) != render.start_card_lines:

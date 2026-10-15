@@ -17,6 +17,15 @@ from PIL import Image, ImageDraw, ImageFont
 
 from soccer_clips.models import Clip, Game, Reel
 
+# How long a card stays up: time to take in the card, plus time to read its
+# text at subtitle speed. Subtitle guides allow 17-20 characters/second for
+# adults and less for children (Netflix's English guide: 20 adult, 17
+# children); 15 leaves room for young viewers and for a glance at the game
+# time. Every card is shown for at least the reel's minimum (Reel.card_s).
+READING_CPS = 15
+ORIENT_S = 1.0
+MAX_CARD_S = 15.0
+
 BACKGROUND = (17, 17, 17)
 TEXT = (255, 255, 255)
 SUBTEXT = (210, 210, 210)
@@ -39,6 +48,12 @@ def font_path() -> str | None:
 def _font(size: int) -> ImageFont.FreeTypeFont:
     path = font_path()
     return ImageFont.truetype(path, size) if path else ImageFont.load_default(size)
+
+
+def card_seconds(lines: list[str], min_s: float) -> float:
+    """Seconds to show a card with these lines: long enough to read, at least min_s."""
+    chars = sum(len(line.strip()) for line in lines)
+    return min(MAX_CARD_S, max(min_s, ORIENT_S + chars / READING_CPS))
 
 
 def long_date(d: date) -> str:

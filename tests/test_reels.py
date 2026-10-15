@@ -155,28 +155,35 @@ def test_reel_crud(client, settings, reel):
 
 
 def test_title_cards(client, settings, carded_reel):
+    from soccer_clips.reel.cards import card_seconds
+
     rid = carded_reel["id"]
     client.patch(f"/api/games/{GAME_A}", json={"kickoff_1h_s": 0.0})
     a1 = carded_reel["items"][0]["clip_id"]
     client.patch(f"/api/games/{GAME_A}/clips/{a1}", json={"note": "Shot from outside the box"})
     [r] = render(client, rid)["renders"]
-    card = 30 / (30000 / 1001)  # 1s rounds to 30 frames = 1.001s
+    fps = 30000 / 1001
+    frames = lambda lines: round(card_seconds(lines, 1) * fps)  # carded_reel's minimum is 1s
 
     assert r["start_card_lines"] == ["Fall 2026: vs Rovers!", "2 games · January 1 – January 8, 2026"]
     segs = r["segments"]
     # game A has a kickoff, so its cards show the match minute; game B has none, so video time
     assert [s["card_lines"] for s in segs] == [["1'", "Shot from outside the box"], ["1'"], ["0:01"]]
-    # layout: start card, then card + clip for each clip
-    assert segs[0]["card_start_s"] == pytest.approx(card, abs=0.03)
-    assert segs[0]["reel_start_s"] == pytest.approx(2 * card, abs=0.03)
-    for prev, nxt in zip(segs, segs[1:]):
-        assert nxt["card_start_s"] == pytest.approx(prev["reel_end_s"])
-        assert nxt["reel_start_s"] - nxt["card_start_s"] == pytest.approx(card, abs=0.03)
+    # layout: start card, then card + clip for each clip; each card as long as its text needs
+    start_frames = frames(r["start_card_lines"])
+    assert segs[0]["card_start_s"] == pytest.approx(start_frames / fps, abs=0.03)
+    for prev, s in zip([None, *segs], segs):
+        if prev:
+            assert s["card_start_s"] == pytest.approx(prev["reel_end_s"])
+        assert s["reel_start_s"] - s["card_start_s"] == pytest.approx(frames(s["card_lines"]) / fps, abs=0.03)
+    # the card with a note is longer than the one without
+    assert segs[0]["reel_start_s"] - segs[0]["card_start_s"] > segs[1]["reel_start_s"] - segs[1]["card_start_s"] + 1
 
-    # every frame present: 4 cards x 30 + clips 30 + 45 + 30
+    # every frame present: 4 cards + clips 30 + 45 + 30
     out = settings.reels_dir / rid / f"{PRESET}.mp4"
     streams = probe(settings, out)
-    assert int(streams["video"]["nb_read_frames"]) == 4 * 30 + 105
+    card_frames = start_frames + sum(frames(s["card_lines"]) for s in segs)
+    assert int(streams["video"]["nb_read_frames"]) == card_frames + 105
     assert float(streams["audio"]["duration"]) == pytest.approx(float(streams["video"]["duration"]), abs=0.05)
 
     # card text changes make the render out of date
@@ -185,8 +192,17 @@ def test_title_cards(client, settings, carded_reel):
     client.patch(f"/api/reels/{rid}", json={"title": "Season"})
     assert "title card changed" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
     client.patch(f"/api/reels/{rid}", json={"card_s": 2})
-    assert "card length changed" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
+    assert "minimum card length changed" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
     assert client.patch(f"/api/reels/{rid}", json={"card_s": 99}).status_code == 422
+
+
+def test_card_seconds():
+    from soccer_clips.reel.cards import card_seconds
+
+    assert card_seconds(["23'"], 2) == 2  # short cards get the minimum
+    assert card_seconds(["23'", "x" * 57], 2) == pytest.approx(1 + 60 / 15)  # 60 characters -> 5s
+    assert card_seconds(["23'", "x" * 2000], 2) == 15  # capped
+    assert card_seconds(["  23'  "], 0) == pytest.approx(1 + 3 / 15)  # spaces around lines don't count
 
 
 def test_draw_card_wraps_long_notes():

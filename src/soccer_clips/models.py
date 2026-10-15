@@ -125,8 +125,9 @@ class Reel(BaseModel):
     id: str = Field(default_factory=lambda: secrets.token_hex(4))
     title: str
     items: list[ReelItem] = []
-    # Seconds for the opening title card and the card before each clip; 0 = no cards.
-    card_s: float = Field(default=3.0, ge=0, le=15)
+    # Shortest a title card is shown, in seconds; cards with more text stay up
+    # longer, long enough to read it (see reel/cards.py). 0 = no cards.
+    card_s: float = Field(default=2.0, ge=0, le=15)
     # Seconds to freeze on each clip's callout; 0 = ignore callouts.
     callout_s: float = Field(default=1.5, ge=0, le=10)
     created_at: datetime = Field(default_factory=_now)

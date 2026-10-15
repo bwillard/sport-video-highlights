@@ -64,7 +64,7 @@ class ExportRequest(BaseModel):
 class ReelCreate(BaseModel):
     title: str
     items: list[ReelItem] = []
-    card_s: float = Field(default=3.0, ge=0, le=15)
+    card_s: float = Field(default=2.0, ge=0, le=15)
     callout_s: float = Field(default=1.5, ge=0, le=10)
 
 
