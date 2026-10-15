@@ -125,3 +125,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-15** — API request bodies reject unknown fields, so a page newer than the running server fails loudly (found when a stale server silently dropped game descriptions).
 - **2026-10-15** — Reel page: game date + description under the title, clip notes in both lists, ▶ preview of any clip straight from its game.
 - **2026-10-15** — Callout freeze default shortened to 0.5s (was 1.5s). Reels created earlier keep their stored value.
+- **2026-10-15** — After watching a real reel: freeze default 0.75s; title cards a little shorter (0.75s + 17 characters/second, 2s minimum). Renders made with the old timing are flagged "title card timing changed".

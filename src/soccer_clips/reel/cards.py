@@ -20,10 +20,11 @@ from soccer_clips.models import Clip, Game, Reel
 # How long a card stays up: time to take in the card, plus time to read its
 # text at subtitle speed. Subtitle guides allow 17-20 characters/second for
 # adults and less for children (Netflix's English guide: 20 adult, 17
-# children); 15 leaves room for young viewers and for a glance at the game
-# time. Every card is shown for at least the reel's minimum (Reel.card_s).
-READING_CPS = 15
-ORIENT_S = 1.0
+# children). We started at 15 cps + 1s, which felt a little long on a real
+# reel, so now it's the children's rate plus 0.75s. Every card is shown for
+# at least the reel's minimum (Reel.card_s).
+READING_CPS = 17
+ORIENT_S = 0.75
 MAX_CARD_S = 15.0
 
 BACKGROUND = (17, 17, 17)

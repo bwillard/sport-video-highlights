@@ -244,6 +244,20 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
     return render
 
 
+def _card_timing_changed(reel: Reel, render: Render) -> bool:
+    """True if the cards in a render aren't the length card_seconds() would give them now."""
+    def expected(lines: list[str]) -> float:
+        return float(max(1, round(card_seconds(lines, reel.card_s) * OUTPUT_FPS)) / OUTPUT_FPS)
+
+    shown = []  # (lines, measured length)
+    if render.start_card_lines and render.segments:
+        first = render.segments[0]
+        shown.append((render.start_card_lines, first.card_start_s if first.card_start_s is not None else first.reel_start_s))
+    shown += [(s.card_lines, s.reel_start_s - s.card_start_s) for s in render.segments if s.card_start_s is not None]
+    # measured lengths include a few ms of audio past the last frame
+    return any(abs(length - expected(lines)) > 0.05 for lines, length in shown)
+
+
 def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
     """Why a render no longer matches its reel and clips (empty if it's current)."""
     reasons = []
@@ -253,8 +267,10 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
         reasons.append("minimum card length changed")
     if reel.callout_s != render.reel.callout_s:
         reasons.append("callout freeze length changed")
-    elif reel.card_s > 0 and start_card_lines(reel, [g for g, _ in _resolve(store, reel)[0]]) != render.start_card_lines:
+    if reel.card_s > 0 and start_card_lines(reel, [g for g, _ in _resolve(store, reel)[0]]) != render.start_card_lines:
         reasons.append("title card changed")
+    if reel.card_s == render.reel.card_s and _card_timing_changed(reel, render):
+        reasons.append("title card timing changed")
     games: dict[str, Game] = {}
     changed = deleted = cards = callouts = 0
     for seg in render.segments:

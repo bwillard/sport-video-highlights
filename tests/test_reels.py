@@ -200,9 +200,9 @@ def test_card_seconds():
     from soccer_clips.reel.cards import card_seconds
 
     assert card_seconds(["23'"], 2) == 2  # short cards get the minimum
-    assert card_seconds(["23'", "x" * 57], 2) == pytest.approx(1 + 60 / 15)  # 60 characters -> 5s
+    assert card_seconds(["23'", "x" * 57], 2) == pytest.approx(0.75 + 60 / 17)  # 60 characters -> ~4.3s
     assert card_seconds(["23'", "x" * 2000], 2) == 15  # capped
-    assert card_seconds(["  23'  "], 0) == pytest.approx(1 + 3 / 15)  # spaces around lines don't count
+    assert card_seconds(["  23'  "], 0) == pytest.approx(0.75 + 3 / 17)  # spaces around lines don't count
 
 
 def test_draw_card_wraps_long_notes():
@@ -235,7 +235,7 @@ def test_callout_freeze(client, settings, reel):
     client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": callout})
     [r] = render(client, rid)["renders"]
     fps = 30000 / 1001
-    freeze = 15 / fps  # default 0.5s = 15 frames
+    freeze = round(0.75 * fps) / fps  # default 0.75s = 22 frames
 
     segs = [Segment(**s) for s in r["segments"]]
     s = segs[1]
@@ -253,7 +253,7 @@ def test_callout_freeze(client, settings, reel):
 
     out = settings.reels_dir / rid / f"{PRESET}.mp4"
     streams = probe(settings, out)
-    assert int(streams["video"]["nb_read_frames"]) == 105 + 15
+    assert int(streams["video"]["nb_read_frames"]) == 105 + 22
     assert float(streams["audio"]["duration"]) == pytest.approx(float(streams["video"]["duration"]), abs=0.05)
 
     # the held frame has a white ring around the callout and is dimmed outside it
@@ -316,3 +316,13 @@ def test_draw_card_keeps_body_lines_separate():
     two = draw_card(["Title", "Home vs SAA", "Saturday, October 10, 2026"], 960, 540)
     rows = lambda img: sum(1 for y in range(540) if any(img.getpixel((x, y)) != (17, 17, 17) for x in range(0, 960, 2)))
     assert rows(two) > rows(one)  # an extra text row
+
+
+def test_card_timing_change_marks_render_stale(client, carded_reel, monkeypatch):
+    from soccer_clips.reel import cards
+
+    rid = carded_reel["id"]
+    render(client, rid)
+    assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == []
+    monkeypatch.setattr(cards, "READING_CPS", 5)  # e.g. after retuning the reading speed
+    assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["title card timing changed"]

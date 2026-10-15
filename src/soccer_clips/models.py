@@ -129,7 +129,7 @@ class Reel(BaseModel):
     # longer, long enough to read it (see reel/cards.py). 0 = no cards.
     card_s: float = Field(default=2.0, ge=0, le=15)
     # Seconds to freeze on each clip's callout; 0 = ignore callouts.
-    callout_s: float = Field(default=0.5, ge=0, le=10)
+    callout_s: float = Field(default=0.75, ge=0, le=10)
     created_at: datetime = Field(default_factory=_now)
 
 
