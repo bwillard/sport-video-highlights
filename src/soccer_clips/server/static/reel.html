@@ -25,6 +25,7 @@
   <span class="stat">time <b id="time">0:00.0</b> / <b id="dur">–</b></span>
   <span class="stat">clip <b id="chap">–</b></span>
   <span class="stat">rate <b id="rate">1</b>×</span>
+  <button id="sound" title="M">🔇 sound off</button>
   <span id="flash"></span>
 </div>
 
@@ -41,7 +42,7 @@
     <div id="placeholder" class="placeholder" hidden>Not rendered yet. Use “Render preview” (quick) or “Render full” on the right.</div>
     <canvas id="timeline"></canvas>
     <p class="help">
-      <kbd>Space</kbd> play/pause · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× · <kbd>←</kbd>/<kbd>→</kbd> ±5s ·
+      <kbd>Space</kbd> play/pause · <kbd>M</kbd> sound on/off · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× · <kbd>←</kbd>/<kbd>→</kbd> ±5s ·
       <kbd>↑</kbd>/<kbd>↓</kbd> previous / next clip ·
       <kbd>G</kbd> go to this moment in the full game (Back returns here)
     </p>
@@ -348,6 +349,7 @@ $("reelPick").addEventListener("change", (e) => {
   e.target.value ? openReel(e.target.value) : showReelList();
 });
 v.addEventListener("ratechange", () => ($("rate").textContent = v.playbackRate));
+const toggleMute = setupMute(v);
 v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
 
 document.addEventListener("keydown", (e) => {
@@ -355,6 +357,7 @@ document.addEventListener("keydown", (e) => {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const actions = {
     " ": () => (v.paused ? v.play() : v.pause()),
+    m: () => toggleMute(),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - 5),

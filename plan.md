@@ -120,3 +120,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-14** — Title cards: an opening card with the reel title, and a card before each clip with the time in the game and the clip's note. Dark background, white text, length set per reel (default 3s, 0 = off). Pillow added to the env.
 - **2026-10-15** — Phase 2 closed: per-clip trim, lower thirds and OTIO export moved to its Future ideas. Phase 3.1 built: callout set with `C` + click in the tagger, rendered as a 1.5s spotlight freeze (configurable per reel). YOLO snap deferred (needs the ML stack).
 - **2026-10-15** — Game date + description editable in the tagger; reel opening cards show them (one game) or the game count + date range (several games). `Game.title` renamed `description`.
+- **2026-10-15** — Video starts muted in the app (`M` toggles). Measured: removing audio from reels would save ~2% file size and ~1% render time, so reels keep their audio.

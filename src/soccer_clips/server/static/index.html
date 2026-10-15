@@ -22,6 +22,7 @@
   <span class="stat">time <b id="time">0:00.0</b></span>
   <span class="stat">match <b id="clock">–</b></span>
   <span class="stat">rate <b id="rate">1</b>×</span>
+  <button id="sound" title="M">🔇 sound off</button>
   <span class="stat">in <b id="markin">–</b></span>
   <span class="stat">kickoff <b id="kickoffs">–</b></span>
   <span id="flash"></span>
@@ -35,7 +36,7 @@
     </div>
     <canvas id="timeline"></canvas>
     <p class="help">
-      <kbd>Space</kbd> play/pause · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× ·
+      <kbd>Space</kbd> play/pause · <kbd>M</kbd> sound on/off · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× ·
       <kbd>←</kbd>/<kbd>→</kbd> ±5s (<kbd>Shift</kbd> ±60s) · <kbd>,</kbd>/<kbd>.</kbd> frame step<br>
       <kbd>Enter</kbd> save clip (no in point: last 8s + next 2s) · <kbd>I</kbd>/<kbd>O</kbd> mark in/out ·
       <kbd>Shift</kbd>+<kbd>I</kbd>/<kbd>O</kbd> move selected clip's start/end here · <kbd>Esc</kbd> clear<br>
@@ -490,6 +491,7 @@ function seekTo(t) {
   v.currentTime = Math.max(0, Math.min(v.duration || 0, t));
 }
 v.addEventListener("ratechange", () => ($("rate").textContent = v.playbackRate));
+const toggleMute = setupMute(v);
 v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
 
 async function setKickoff(half) {
@@ -521,6 +523,7 @@ document.addEventListener("keydown", (e) => {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const actions = {
     " ": () => (v.paused ? v.play() : v.pause()),
+    m: () => toggleMute(),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),

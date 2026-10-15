@@ -56,3 +56,17 @@ function typingInField(e) {
   }
   return false;
 }
+
+// Sound starts off; the #sound button in the header and the M key toggle it.
+function setupMute(video) {
+  const button = $("sound");
+  const show = () => {
+    button.textContent = video.muted ? "🔇 sound off" : "🔊 sound on";
+    button.classList.toggle("on", !video.muted);
+  };
+  video.muted = true;
+  video.addEventListener("volumechange", show);
+  button.addEventListener("click", () => { button.blur(); video.muted = !video.muted; });
+  show();
+  return () => { video.muted = !video.muted; };
+}

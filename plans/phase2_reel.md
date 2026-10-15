@@ -114,6 +114,14 @@ Moved out of Phase 2 on 2026-10-14/15 to keep it small. The design notes are kep
 
 Measured 2026-10-14 on `gu11-vs-saa-2026-10-10` (real 1080p Veo footage), CPU only.
 
+**Does dropping audio help? (2026-10-15, same 15 × 10s reel, back-to-back runs)**
+| Step | With audio | Video only |
+|---|---|---|
+| Final 1080p join | 265s, 154.0 MB | 263s, 150.8 MB |
+| Normalise one 10s clip | 9.2s | 8.9s |
+
+Audio is ~2% of the file (160 kbps AAC) and ~1% of the time (AAC is cheap next to x264). Not worth removing; keep it. (Absolute times were about twice the 2026-10-14 numbers because the machine was busier; only the with/without comparison matters here.)
+
 ## Findings
 - **2026-10-14** — Segment lengths are max(video, audio) of each intermediate, which is a few ms longer than the video, because the concat filter starts the next clip after the longest stream ends. The reel page allows 50 ms of slack at chapter boundaries; without it, seeking to a chapter start landed in the previous chapter.
 - **2026-10-14** — Tested: 23 unit tests (including frame counts, A/V sync, segment mapping, cache reuse, out-of-date detection, a game with no audio) and a headless-Chrome run of the whole flow (tagger → new reel → render → ↓ → G → tagger at the right frame with the clip selected → Back → same reel position).
