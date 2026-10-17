@@ -7,7 +7,7 @@ import secrets
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 
 def _now() -> datetime:
@@ -38,6 +38,9 @@ class Callout(BaseModel):
     r: float = Field(default=0.06, gt=0, le=0.5)  # ring radius, fraction of the frame height
 
 
+Rating = Literal["happy", "sad"]
+
+
 class Clip(BaseModel):
     # Random rather than sequential so reels can reference (game_id, clip_id)
     # and clips can be deleted without renumbering.
@@ -45,12 +48,20 @@ class Clip(BaseModel):
     start_s: float = Field(ge=0)
     end_s: float
     tags: list[str] = []
-    rating: int | None = Field(default=None, ge=1, le=5)
+    rating: Rating | None = None
     involves_her: bool = False
     note: str | None = None
     callout: Callout | None = None  # dropped if start/end change so it falls outside the clip
     export: str | None = None  # relative to clips_dir; cleared when start/end change
     created_at: datetime = Field(default_factory=_now)
+
+    @field_validator("rating", mode="before")
+    @classmethod
+    def _from_stars(cls, v):
+        """Ratings used to be 1-5 stars: 4-5 became happy, 1-2 sad, 3 unrated."""
+        if isinstance(v, int) and not isinstance(v, bool):
+            return "happy" if v >= 4 else "sad" if v <= 2 else None
+        return v
 
     @model_validator(mode="after")
     def _check_range(self) -> "Clip":

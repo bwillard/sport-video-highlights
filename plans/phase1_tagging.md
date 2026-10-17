@@ -39,7 +39,7 @@ Layout: large video on the left; clip list on the right; timeline strip undernea
 | Enter | save clip (if no in point: in = now − 8s, out = now + 2s); the new clip is selected |
 | Esc | clear marks and deselect (in the note box: leave it, which saves) |
 | 1–9 | toggle tag on selected clip (hotkeys from `tags.json`) |
-| Shift+1–5 | rating (same number again clears it) |
+| + / - | rate the clip 😊 / 🙁 (same key again clears it) |
 | F | toggle "her" flag |
 | N | edit note |
 | ↑ / ↓ | previous / next clip (in the filtered list) and seek to it |
@@ -66,7 +66,7 @@ class Clip(BaseModel):
     start_s: float
     end_s: float
     tags: list[str] = []          # tag names, from tags.json
-    rating: int | None = None     # 1..5
+    rating: "happy" | "sad" | None  # was 1–5 stars until 2026-10-17: 4–5 → happy, 1–2 → sad, 3 → none
     involves_her: bool = False
     note: str | None = None
     callout: Callout | None = None   # Phase 3.1

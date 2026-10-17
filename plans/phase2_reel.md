@@ -40,7 +40,7 @@ MoviePy 2.x is an alternative if ffmpeg filter graphs become painful. It's slowe
 A vertical (9:16) preset is a [future idea](#future-ideas).
 
 ## UI
-- From the clip list (Phase 1): filter (e.g. `her` + rating ≥ 4) → "add to reel".
+- From the clip list (Phase 1): filter (e.g. `her` + 😊) → "add to reel".
 - Reel page: reorder, per-item trim/lower-third, total running time, preview render, final render with progress.
 - Clips can come from **multiple games** (season reel).
 

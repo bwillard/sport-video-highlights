@@ -44,8 +44,8 @@ def test_clip_crud(client):
     assert len(clip["id"]) == 8
 
     r = client.patch(f"/api/games/{GAME}/clips/{clip['id']}",
-                     json={"rating": 4, "involves_her": True, "note": "nice"})
-    assert r.json()["rating"] == 4 and r.json()["involves_her"] and r.json()["note"] == "nice"
+                     json={"rating": "happy", "involves_her": True, "note": "nice"})
+    assert r.json()["rating"] == "happy" and r.json()["involves_her"] and r.json()["note"] == "nice"
     assert r.json()["tags"] == ["shot"]  # untouched fields kept
 
     # explicit null clears a field
@@ -64,7 +64,7 @@ def test_clip_crud(client):
     {"start_s": 2, "end_s": 1},     # end before start
     {"start_s": -1, "end_s": 1},    # negative
     {"start_s": 1, "end_s": 99},    # past the end of the 3s video
-    {"start_s": 0, "end_s": 1, "rating": 6},
+    {"start_s": 0, "end_s": 1, "rating": "meh"},
 ])
 def test_invalid_clips_rejected(client, body):
     assert client.post(f"/api/games/{GAME}/clips", json=body).status_code == 422
@@ -127,3 +127,10 @@ def test_unknown_fields_are_rejected(client):
     # e.g. a newer page talking to an older server: fail loudly, don't silently drop the field
     assert client.patch(f"/api/games/{GAME}", json={"descriptoin": "typo"}).status_code == 422
     assert client.post(f"/api/games/{GAME}/clips", json={"start_s": 0, "end_s": 1, "colour": "red"}).status_code == 422
+
+
+def test_old_star_ratings_convert_to_faces():
+    from soccer_clips.models import Clip
+
+    faces = [Clip(start_s=0, end_s=1, rating=n).rating for n in (1, 2, 3, 4, 5, None)]
+    assert faces == ["sad", "sad", None, "happy", "happy", None]

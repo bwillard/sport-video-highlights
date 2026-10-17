@@ -40,7 +40,7 @@
       <kbd>←</kbd>/<kbd>→</kbd> ±5s (<kbd>Shift</kbd> ±60s) · <kbd>,</kbd>/<kbd>.</kbd> frame step<br>
       <kbd>Enter</kbd> save clip (no in point: last 8s + next 2s) · <kbd>I</kbd>/<kbd>O</kbd> mark in/out ·
       <kbd>Shift</kbd>+<kbd>I</kbd>/<kbd>O</kbd> move selected clip's start/end here · <kbd>Esc</kbd> clear<br>
-      <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>5</kbd> rating · <kbd>F</kbd> her ·
+      <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>+</kbd>/<kbd>-</kbd> 😊/🙁 · <kbd>F</kbd> her ·
       <kbd>N</kbd> note · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next clip · <kbd>R</kbd> replay clip ·
       <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
       <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff<br>
@@ -55,9 +55,9 @@
     </div>
     <div class="box filters">
       <select id="ftag" aria-label="filter by tag"><option value="">all tags</option></select>
-      <select id="frating" aria-label="minimum rating">
-        <option value="0">any rating</option><option value="2">2+</option>
-        <option value="3">3+</option><option value="4">4+</option><option value="5">5</option>
+      <select id="frating" aria-label="filter by rating">
+        <option value="">any rating</option><option value="happy">😊 only</option>
+        <option value="notsad">hide 🙁</option><option value="sad">🙁 only</option>
       </select>
       <label><input type="checkbox" id="fher"> her only</label>
       <span class="stat" id="count"></span>
@@ -100,9 +100,10 @@ const selected = () => clips.find((c) => c.id === selectedId) || null;
 const clamp = (t) => Math.max(0, Math.min(game.duration_s, t));
 
 function visibleClips() {
-  const tag = $("ftag").value, minRating = +$("frating").value, herOnly = $("fher").checked;
+  const tag = $("ftag").value, rating = $("frating").value, herOnly = $("fher").checked;
+  const ratingOk = (r) => !rating || (rating === "notsad" ? r !== "sad" : r === rating);
   return clips.filter((c) =>
-    (!tag || c.tags.includes(tag)) && (c.rating || 0) >= minRating && (!herOnly || c.involves_her));
+    (!tag || c.tags.includes(tag)) && ratingOk(c.rating) && (!herOnly || c.involves_her));
 }
 
 function upsert(clip) {
@@ -146,6 +147,7 @@ function toggleTag(name) {
   next.push(...c.tags.filter((n) => !tags.some((t) => t.name === n)));
   patchSelected({ tags: next });
 }
+const RATING_ICONS = { happy: "😊", sad: "🙁" };
 const setRating = (n) => patchSelected({ rating: selected()?.rating === n ? null : n });
 
 async function deleteSelected() {
@@ -237,7 +239,7 @@ function render() {
       <span class="t" title="${fmt(c.start_s)}">${esc(label(c.start_s))}</span>
       <span class="d">${(c.end_s - c.start_s).toFixed(1)}s</span>
       <span class="tags">${c.involves_her ? '<span class="her">● her</span> ' : ""}${c.callout ? "◎ " : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
-      <span>${c.rating ? "★".repeat(c.rating) : ""} ${cls === "done"
+      <span>${RATING_ICONS[c.rating] || ""} ${cls === "done"
         ? `<a class="x done" href="${exportUrl(c)}" download title="download exported clip">⬇ mp4</a>`
         : `<span class="x ${cls}">${esc(txt)}</span>`}</span>
     </li>`;
@@ -266,7 +268,7 @@ function renderDetail() {
       ${tags.map((t) => `<button data-tag="${esc(t.name)}" class="${c.tags.includes(t.name) ? "on" : ""}">${esc(t.name)}${t.hotkey ? `<span class="hk">${esc(t.hotkey)}</span>` : ""}</button>`).join("")}
       <button data-act="her" class="her ${c.involves_her ? "on" : ""}">her<span class="hk">F</span></button></div>
     <div class="row"><span class="lbl">rating</span>
-      ${[1, 2, 3, 4, 5].map((n) => `<button data-rating="${n}" class="${c.rating === n ? "on" : ""}">${n}</button>`).join("")}</div>
+      ${[["happy", "+"], ["sad", "-"]].map(([n, hk]) => `<button data-rating="${n}" title="${n}" class="${c.rating === n ? "on" : ""}">${RATING_ICONS[n]}<span class="hk">${hk}</span></button>`).join("")}</div>
     <div class="row"><span class="lbl">callout</span>
       ${c.callout
         ? `<span>◎ at ${fmt(c.callout.t_s)}</span><button data-act="calloutGo">go to</button>
@@ -287,7 +289,7 @@ $("detail").addEventListener("click", (e) => {
   if (!b) return;
   b.blur();  // so Space/Enter go back to the player
   if (b.dataset.tag) return toggleTag(b.dataset.tag);
-  if (b.dataset.rating) return setRating(+b.dataset.rating);
+  if (b.dataset.rating) return setRating(b.dataset.rating);
   ({
     start: () => patchSelected({ start_s: v.currentTime }),
     end: () => patchSelected({ end_s: v.currentTime }),
@@ -510,12 +512,8 @@ document.addEventListener("keydown", (e) => {
   // Digits by physical key, since Shift+1 types "!" on most layouts.
   if (e.code.startsWith("Digit")) {
     const d = e.code.slice(5);
-    if (e.shiftKey) {
-      if (d >= "1" && d <= "5") setRating(+d);
-    } else {
-      const t = tags.find((t) => t.hotkey === d);
-      if (t) toggleTag(t.name);
-    }
+    const t = !e.shiftKey && tags.find((t) => t.hotkey === d);
+    if (t) toggleTag(t.name);
     e.preventDefault();
     return;
   }
@@ -551,6 +549,10 @@ document.addEventListener("keydown", (e) => {
     Backspace: deleteSelected,
     h: () => setKickoff(e.shiftKey ? 2 : 1),
     c: () => (e.shiftKey ? patchSelected({ callout: null }) : startCallout()),
+    "=": () => setRating("happy"),  // the +/= key, with or without Shift
+    "+": () => setRating("happy"),
+    "-": () => setRating("sad"),
+    _: () => setRating("sad"),
   };
   const act = actions[key];
   if (!act) return;

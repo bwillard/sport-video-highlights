@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from soccer_clips.config import get_settings
 from soccer_clips.export import export_job, run_export
 from soccer_clips.jobs import Job, JobQueue
-from soccer_clips.models import Callout, CardStyle, Clip, Game, Preset, Reel, ReelItem, Render, Tag
+from soccer_clips.models import Callout, CardStyle, Clip, Game, Preset, Rating, Reel, ReelItem, Render, Tag
 from soccer_clips.reel.render import render_job, run_render, stale_reasons
 from soccer_clips.scan import scan
 from soccer_clips.store import Store
@@ -47,7 +47,7 @@ class ClipCreate(RequestBody):
     start_s: float
     end_s: float
     tags: list[str] = []
-    rating: int | None = Field(default=None, ge=1, le=5)
+    rating: Rating | None = None
     involves_her: bool = False
     note: str | None = None
 
@@ -56,7 +56,7 @@ class ClipPatch(RequestBody):
     start_s: float | None = None
     end_s: float | None = None
     tags: list[str] | None = None
-    rating: int | None = Field(default=None, ge=1, le=5)
+    rating: Rating | None = None
     involves_her: bool | None = None
     note: str | None = None
     callout: Callout | None = None  # null removes it
@@ -95,7 +95,7 @@ class ReelItemView(ReelItem):
     end_s: float | None = None
     tags: list[str] = []
     involves_her: bool = False
-    rating: int | None = None
+    rating: Rating | None = None
     note: str | None = None
     has_callout: bool = False
     kickoff_1h_s: float | None = None
