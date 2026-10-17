@@ -23,7 +23,7 @@ from soccer_clips.jobs import Job
 from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment
 from soccer_clips.reel.callout import STYLE_VERSION, callout_frame, splice_callout
 from soccer_clips.reel.cards import (
-    card_seconds, clip_card_lines, draw_caption, draw_card, font_path, start_card_lines,
+    card_seconds, clip_card_lines, draw_caption, draw_card, font_path, LAYOUT_VERSION, start_card_lines,
 )
 from soccer_clips.store import Store
 
@@ -181,7 +181,7 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
         if not lines or reel.card_s <= 0:
             return None
         seconds = card_seconds(lines, reel.card_s)
-        path = cache / _cache_name(preset, "card", lines, round(seconds, 3), font_path())
+        path = cache / _cache_name(preset, "card", lines, round(seconds, 3), font_path(), LAYOUT_VERSION)
         if not path.exists():
             _card(store, lines, spec, seconds, path)
         return path
@@ -212,7 +212,7 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
                 cap_windows.append((at, at + freeze_s))
             captioned = cache / _cache_name(preset, "caption", (spliced or path).name, lines,
                                             [(round(a, 4), round(b, 4)) for a, b in cap_windows],
-                                            font_path(), CAPTION_VERSION)
+                                            font_path(), CAPTION_VERSION, LAYOUT_VERSION)
         # Each step is made from the one before (clip -> splice -> caption) and
         # each is cached, so an edit only redoes the steps after it.
         final = captioned or spliced or path

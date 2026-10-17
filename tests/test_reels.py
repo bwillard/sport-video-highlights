@@ -223,6 +223,21 @@ def test_draw_card_wraps_long_notes():
     assert set(border) == {(17, 17, 17)}
 
 
+
+def test_long_text_shrinks_instead_of_cutting_off():
+    from soccer_clips.reel.cards import MAX_CAPTION_LINES, MAX_NOTE_LINES, _fit
+
+    note = ("Wins it in midfield, beats two defenders, plays a one-two on the edge of the box, shifts it "
+            "onto her left foot and curls it into the far corner past the diving keeper, then runs to the corner flag")
+    font, lines = _fit([note], 22, 960 * 0.8, MAX_CAPTION_LINES)  # caption size at 540p
+    assert font.size < 22 and len(lines) * font.size <= MAX_CAPTION_LINES * 22  # no taller than 3 full-size lines
+    assert " ".join(lines) == note  # nothing cut off
+    font, lines = _fit(["Short note"], 22, 960 * 0.8, MAX_CAPTION_LINES)
+    assert font.size == 22 and lines == ["Short note"]  # short text keeps the normal size
+    font, lines = _fit(["word " * 400], 30, 960 * 0.8, MAX_NOTE_LINES)
+    assert font.size == 15 and len(lines) == 2 * MAX_NOTE_LINES and lines[-1].endswith("…")  # past half size it's cut off after all
+
+
 def frame_at(settings, path, t):
     from io import BytesIO
 

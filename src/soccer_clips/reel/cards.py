@@ -34,6 +34,10 @@ BACKGROUND = (17, 17, 17)
 TEXT = (255, 255, 255)
 SUBTEXT = (210, 210, 210)
 MAX_NOTE_LINES = 4
+# Text that doesn't fit in its lines is drawn smaller rather than cut off,
+# down to this fraction of the normal size; only past that does it get "…".
+MIN_FONT_SCALE = 0.5
+LAYOUT_VERSION = 2  # bump when card or caption layout changes (render cache key)
 
 # A bold system font if there is one; otherwise Pillow's built-in font.
 FONT_CANDIDATES = [
@@ -119,21 +123,36 @@ def _wrap(text: str, font: ImageFont.FreeTypeFont, max_width: float, max_lines: 
     return lines
 
 
+def _fit(texts: list[str], size: int, max_width: float, max_lines: int
+         ) -> tuple[ImageFont.FreeTypeFont, list[str]]:
+    """
+    The largest font, from size down to MIN_FONT_SCALE of it, at which each
+    text wraps without cutting anything off; the wrapped lines. Smaller text
+    may use more lines, as long as they take no more height than max_lines
+    at the full size.
+    """
+    smallest = max(1, round(size * MIN_FONT_SCALE))
+    for s in range(size, smallest - 1, -1):
+        font, limit = _font(s), max_lines * size // s
+        if all(len(_wrap(t, font, max_width, limit + 1)) <= limit for t in texts):
+            break
+    return font, [part for t in texts for part in _wrap(t, font, max_width, limit)]
+
+
 def draw_card(lines: list[str], width: int, height: int) -> Image.Image:
     """
     First line is the headline (title or game time); each further line is
     wrapped body text (game description, date, or the clip's note). Everything
-    is centred; sizes scale with the height.
+    is centred; sizes scale with the height, and long text is drawn smaller
+    so it fits.
     """
     img = Image.new("RGB", (width, height), BACKGROUND)
     draw = ImageDraw.Draw(img)
     max_w = width * 0.8
-    head_font = _font(round(height * 0.11))
-    body_font = _font(round(height * 0.055))
     gap = round(height * 0.04)
 
-    head = _wrap(lines[0], head_font, max_w, 2) if lines else []
-    body = [part for line in lines[1:] for part in _wrap(line, body_font, max_w, MAX_NOTE_LINES)]
+    head_font, head = _fit(lines[:1], round(height * 0.11), max_w, 2)
+    body_font, body = _fit(lines[1:], round(height * 0.055), max_w, MAX_NOTE_LINES)
     blocks = [(t, head_font, TEXT) for t in head] + [(t, body_font, SUBTEXT) for t in body]
 
     def line_h(font: ImageFont.FreeTypeFont) -> int:
@@ -161,13 +180,11 @@ def draw_caption(lines: list[str], width: int, height: int) -> Image.Image:
     """
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    head_font = _font(round(height * 0.05))
-    body_font = _font(round(height * 0.04))
     max_w = width * 0.8
     pad = round(height * 0.02)
 
-    head = _wrap(lines[0], head_font, max_w, 1) if lines else []
-    body = [part for line in lines[1:] for part in _wrap(line, body_font, max_w, MAX_CAPTION_LINES)]
+    head_font, head = _fit(lines[:1], round(height * 0.05), max_w, 1)
+    body_font, body = _fit(lines[1:], round(height * 0.04), max_w, MAX_CAPTION_LINES)
     blocks = [(t, head_font, TEXT) for t in head] + [(t, body_font, SUBTEXT) for t in body]
     if not blocks:
         return img

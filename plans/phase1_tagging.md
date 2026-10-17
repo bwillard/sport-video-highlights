@@ -53,7 +53,7 @@ Layout: large video on the left; clip list on the right; timeline strip undernea
 "Quick clip" with Enter is the main workflow: watch at 2×, hit Enter right after something good happens, adjust the in/out points later.
 
 ### Tags (default set, editable)
-goal, shot, assist, pass, dribble, tackle/defense, save, celebration, funny. Plus a **"her"** flag (is she involved?), which is the main filter for highlight reels.
+goal, shot, assist, pass, dribble, tackle/defense, save. Plus a **"her"** flag (is she involved?), which is the main filter for highlight reels.
 
 ### Match clock
 Store `kickoff_1h_s` / `kickoff_2h_s`; display "23'" / "2H 7'" next to timestamps. This makes it easy to cross-reference what you remember ("her shot right before halftime").

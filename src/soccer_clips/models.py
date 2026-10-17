@@ -22,7 +22,7 @@ class Tag(BaseModel):
 DEFAULT_TAGS = [
     Tag(name=name, hotkey=str(i))
     for i, name in enumerate(
-        ["goal", "shot", "assist", "pass", "dribble", "defense", "save", "celebration", "funny"],
+        ["goal", "shot", "assist", "pass", "dribble", "defense", "save"],
         start=1,
     )
 ]
