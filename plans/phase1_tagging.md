@@ -48,7 +48,7 @@ Layout: large video on the left; clip list on the right; timeline strip undernea
 | R | replay selected clip, stopping at its end |
 | E | export selected clip |
 | Delete / Backspace | delete selected clip (asks first; also deletes its export) |
-| H / Shift+H | set 1st / 2nd half kickoff to now |
+| H / Shift+H | set 1st / 2nd half kickoff to now (plain H 30+ minutes after the 1st half kickoff asks: OK sets the 2nd half, Cancel moves the 1st) |
 
 `[`/`]` became speed controls during Phase 0 testing, so previous/next clip moved to ↑/↓. J/K/L were dropped (2026-10-14) as unneeded.
 

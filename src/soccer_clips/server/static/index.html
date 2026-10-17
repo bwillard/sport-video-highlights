@@ -43,7 +43,7 @@
       <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>+</kbd>/<kbd>-</kbd> 😊/🙁 · <kbd>F</kbd> default player · <kbd>P</kbd> add a player number · <kbd>T</kbd> team play ·
       <kbd>N</kbd> note · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next clip · <kbd>R</kbd> replay clip ·
       <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
-      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff<br>
+      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff (H late in the game asks which)<br>
       <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
       <kbd>Shift</kbd>+<kbd>C</kbd> remove it
     </p>
@@ -529,6 +529,21 @@ v.addEventListener("ratechange", () => ($("rate").textContent = v.playbackRate))
 const toggleMute = setupMute(v);
 v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
 
+// Plain H well into the game is probably a forgotten Shift: ask before moving
+// the 1st half kickoff.
+const SECOND_HALF_HINT_S = 30 * 60;
+function kickoffKey(shift) {
+  if (shift) return setKickoff(2);
+  const k1 = game.kickoff_1h_s;
+  if (k1 != null && v.currentTime - k1 >= SECOND_HALF_HINT_S) {
+    v.pause();
+    const second = confirm(`This is ${Math.floor((v.currentTime - k1) / 60)} minutes after the 1st half kickoff.\n\n` +
+      `OK: set the 2nd half kickoff here (Shift+H).\nCancel: move the 1st half kickoff here.`);
+    return setKickoff(second ? 2 : 1);
+  }
+  return setKickoff(1);
+}
+
 async function setKickoff(half) {
   const key = half === 1 ? "kickoff_1h_s" : "kickoff_2h_s";
   game = await api("PATCH", gameUrl(), { [key]: v.currentTime });
@@ -582,7 +597,7 @@ document.addEventListener("keydown", (e) => {
     ArrowDown: () => step(1),
     Delete: deleteSelected,
     Backspace: deleteSelected,
-    h: () => setKickoff(e.shiftKey ? 2 : 1),
+    h: () => kickoffKey(e.shiftKey),
     c: () => (e.shiftKey ? patchSelected({ callout: null }) : startCallout()),
     "=": () => setRating("happy"),  // the +/= key, with or without Shift
     "+": () => setRating("happy"),
