@@ -148,3 +148,12 @@ def test_her_flag_becomes_default_player(client, settings):
     assert "involves_her" not in clips[0]
     assert client.get("/api/settings").json() == {"default_player": 38}
     assert client.patch(f"/api/games/{GAME}/clips/a", json={"players": [-1]}).status_code == 422
+
+
+def test_pages_and_scripts_are_revalidated(client):
+    """A cached common.js paired with a newer page breaks the tagger, so browsers must re-check."""
+    for path in ["/", "/reel", "/static/common.js", "/static/common.css"]:
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+    assert "cache-control" not in client.get("/api/tags").headers
+

@@ -363,4 +363,16 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    # Pages and their scripts change together, so browsers must check for a
+    # newer copy every time (a cheap 304 if unchanged). Without this, a
+    # browser can reuse a cached common.js with a newer page, which breaks
+    # the page (the match clock and kickoffs stopped updating that way).
+    @app.middleware("http")
+    async def revalidate_pages(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path in ("/", "/reel") or path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     return app
