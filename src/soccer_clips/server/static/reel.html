@@ -106,6 +106,7 @@ const PRESET_NAMES = { landscape_1080p: "full 1080p", preview_540p: "preview 540
 const v = $("v"), canvas = $("timeline");
 
 let reels = [], view = null, preset = null, games = {}, pollTimer = null, hoverX = null;
+let defaultPlayer = null;  // SOCCER_DEFAULT_PLAYER, highlighted in the lists
 
 const reelId = () => view?.reel.id;
 // "2026-10-10" -> "Saturday, October 10, 2026" (parsed as a local date, not UTC)
@@ -238,7 +239,7 @@ function render() {
     return `<li data-i="${i}" class="${i === now ? "sel" : ""}" title="from ${esc(s.game_id)} at ${fmt(s.source_start_s)}">
       <span class="d">${i + 1}</span>
       <span class="t">${esc(clipLabel(s.game_id, s.source_start_s))}</span>
-      <span class="tags">${info?.involves_her ? '<span class="her">● her</span> ' : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}${s.callout ? " · ◎" : ""}</span>
+      <span class="tags">${info ? whoBadges(info, defaultPlayer) : ""}${esc(shortGame(s.game_id))}${info?.tags.length ? " · " + esc(info.tags.join(", ")) : ""}${s.callout ? " · ◎" : ""}</span>
       <a href="#" data-go="${i}" title="go to this clip in the full game (G)">game ↗</a>
       ${info?.note ? `<span class="note">${esc(info.note)}</span>` : ""}
     </li>`;
@@ -248,7 +249,7 @@ function render() {
     <li data-i="${i}">
       <span class="d">${i + 1}</span>
       <span class="tags">${it.missing ? '<span class="warn">clip deleted</span> · ' + esc(shortGame(it.game_id))
-        : `${it.involves_her ? '<span class="her">● her</span> ' : ""}<a href="${taggerLink(it.game_id, it.start_s, it.clip_id)}">${esc(clipLabel(it.game_id, it.start_s))}</a> ${esc(shortGame(it.game_id))} · ${(it.end_s - it.start_s).toFixed(1)}s${it.tags.length ? " · " + esc(it.tags.join(", ")) : ""}${it.has_callout ? " · ◎" : ""}`}</span>
+        : `${whoBadges(it, defaultPlayer)}<a href="${taggerLink(it.game_id, it.start_s, it.clip_id)}">${esc(clipLabel(it.game_id, it.start_s))}</a> ${esc(shortGame(it.game_id))} · ${(it.end_s - it.start_s).toFixed(1)}s${it.tags.length ? " · " + esc(it.tags.join(", ")) : ""}${it.has_callout ? " · ◎" : ""}`}</span>
       <span>${it.missing ? "" : `<button data-preview title="preview this clip from the game">▶</button>`}<button data-move="-1" title="move up" ${i === 0 ? "disabled" : ""}>↑</button><button data-move="1" title="move down" ${i === items.length - 1 ? "disabled" : ""}>↓</button><button data-remove title="remove from reel" class="danger">✕</button></span>
       ${it.note ? `<span class="note">${esc(it.note)}</span>` : ""}
     </li>`).join("") : `<li class="empty">No clips in this reel yet.</li>`;
@@ -491,7 +492,7 @@ function drawTimeline() {
   const now = segmentAt(v.currentTime);
   r.segments.forEach((s, i) => {
     const info = itemInfo(s);
-    ctx.fillStyle = info?.involves_her ? "#ff8a3d" : "#4ea1ff";
+    ctx.fillStyle = info ? clipColour(info, defaultPlayer) : "#4ea1ff";
     ctx.globalAlpha = i === now ? 1 : 0.55;
     ctx.fillRect(x(s.reel_start_s), 20, Math.max(1, x(s.reel_end_s) - x(s.reel_start_s) - 1), h - 26);
     if (s.freeze_at_s != null) {  // the callout freeze
@@ -556,6 +557,7 @@ window.addEventListener("hashchange", () => {
 
 // ---------- start ----------
 (async () => {
+  ({ default_player: defaultPlayer } = await getJson("/api/settings"));
   for (const g of await getJson("/api/games")) games[g.id] = g;
   await loadReels();
   const h = readHash();

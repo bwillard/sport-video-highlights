@@ -62,7 +62,7 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 <SOCCER_GAMES_DIR>/
   tags.json                                      # tag list + hotkeys
   <year>/<game_id>/
-    game.json                                    # game info + clips (tags, rating, her flag, callout)
+    game.json                                    # game info + clips (tags, rating, players, team, callout)
     probe.json                                   # raw ffprobe output
     tracks/<clip_id>.json                        # Phase 3 tracks
 <SOCCER_REELS_DIR>/<reel_id>/reel.json, *.mp4    # reel definitions + renders
@@ -127,3 +127,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-15** — Callout freeze default shortened to 0.5s (was 1.5s). Reels created earlier keep their stored value.
 - **2026-10-15** — After watching a real reel: freeze default 0.75s; title cards a little shorter (0.75s + 17 characters/second, 2s minimum). Renders made with the old timing are flagged "title card timing changed".
 - **2026-10-15** — Clip descriptions can be a caption overlaid on the start of the clip (new default, per reel) instead of a title card. The freeze default follows the style: 1.5s with overlays, 0.75s with cards.
+- **2026-10-17** — Ratings are 😊/🙁 instead of 1–5 (4–5 → 😊, 1–2 → 🙁, 3 → none). The "her" flag became player numbers plus a team-play flag, so other players and team moments can be tagged and filtered; old flags converted to `SOCCER_DEFAULT_PLAYER` (38). Tags "celebration" and "funny" dropped.

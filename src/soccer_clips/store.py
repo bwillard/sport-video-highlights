@@ -63,8 +63,21 @@ class Store:
     def has_game(self, year: int, game_id: str) -> bool:
         return self._game_path(year, game_id).exists()
 
+    def _parse_game(self, text: str) -> Game:
+        """
+        Game from its JSON. Clips saved before players existed have an
+        involves_her flag instead; that becomes the default player's number.
+        """
+        data = json.loads(text)
+        for clip in data.get("clips", []):
+            if clip.pop("involves_her", False) and "players" not in clip:
+                if self.settings.default_player is None:
+                    raise ValueError("clips flagged 'her' need SOCCER_DEFAULT_PLAYER set in .env to convert them")
+                clip["players"] = [self.settings.default_player]
+        return Game.model_validate(data)
+
     def load_game(self, game_id: str) -> Game:
-        return Game.model_validate_json(self._find_game_path(game_id).read_text())
+        return self._parse_game(self._find_game_path(game_id).read_text())
 
     def save_game(self, game: Game) -> None:
         path = self._game_path(game.year, game.id)
@@ -76,13 +89,13 @@ class Store:
         """Load-modify-save under the file's lock: `with store.edit_game(id) as g: g.x = 1`."""
         path = self._find_game_path(game_id)
         with _lock_for(path):
-            game = Game.model_validate_json(path.read_text())
+            game = self._parse_game(path.read_text())
             yield game
             atomic_write_text(path, game.model_dump_json(indent=2) + "\n")
 
     def list_games(self) -> list[Game]:
         paths = sorted(self.settings.games_dir.glob("*/*/game.json"))
-        games = [Game.model_validate_json(p.read_text()) for p in paths]
+        games = [self._parse_game(p.read_text()) for p in paths]
         return sorted(games, key=lambda g: (g.played_on is None, g.played_on, g.id))
 
     @property

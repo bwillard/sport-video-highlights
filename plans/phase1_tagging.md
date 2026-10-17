@@ -40,7 +40,9 @@ Layout: large video on the left; clip list on the right; timeline strip undernea
 | Esc | clear marks and deselect (in the note box: leave it, which saves) |
 | 1–9 | toggle tag on selected clip (hotkeys from `tags.json`) |
 | + / - | rate the clip 😊 / 🙁 (same key again clears it) |
-| F | toggle "her" flag |
+| F | toggle the default player (`SOCCER_DEFAULT_PLAYER` in `.env`) |
+| P | type another player's number, Enter to add it |
+| T | toggle "team play" |
 | N | edit note |
 | ↑ / ↓ | previous / next clip (in the filtered list) and seek to it |
 | R | replay selected clip, stopping at its end |
@@ -53,7 +55,10 @@ Layout: large video on the left; clip list on the right; timeline strip undernea
 "Quick clip" with Enter is the main workflow: watch at 2×, hit Enter right after something good happens, adjust the in/out points later.
 
 ### Tags (default set, editable)
-goal, shot, assist, pass, dribble, tackle/defense, save. Plus a **"her"** flag (is she involved?), which is the main filter for highlight reels.
+goal, shot, assist, pass, dribble, tackle/defense, save.
+
+### Who (players and team)
+Each clip has a list of **player numbers** it's noteworthy for, and a separate **team play** flag; a clip can have either, both or neither. This replaced the original "her" flag (2026-10-17) so other players and whole-team moments can be tagged too. The default player (`SOCCER_DEFAULT_PLAYER` in `.env`) is on `F`; other numbers are added with `P` or the `#` box, and every number already used in the game gets a button. The "who" filter (everyone / team plays / #N) narrows the clip list, so "Export shown" and "Add shown to reel" give a team reel or a reel for one player. Old `involves_her` flags are converted to the default player when a game is loaded.
 
 ### Match clock
 Store `kickoff_1h_s` / `kickoff_2h_s`; display "23'" / "2H 7'" next to timestamps. This makes it easy to cross-reference what you remember ("her shot right before halftime").
@@ -67,7 +72,8 @@ class Clip(BaseModel):
     end_s: float
     tags: list[str] = []          # tag names, from tags.json
     rating: "happy" | "sad" | None  # was 1–5 stars until 2026-10-17: 4–5 → happy, 1–2 → sad, 3 → none
-    involves_her: bool = False
+    players: list[int] = []      # jersey numbers; sorted, no repeats (was involves_her: bool)
+    team: bool = False           # a noteworthy team play
     note: str | None = None
     callout: Callout | None = None   # Phase 3.1
     export: str | None = None     # relative to SOCCER_CLIPS_DIR, e.g. "2026/<game_id>/<id>.mp4"
@@ -99,7 +105,7 @@ class Clip(BaseModel):
 - [x] `Clip` model, `tags.json`, clip API on top of `store.py`
 - [x] Player page: playback controls + keyboard map
 - [x] In/out marking, quick-clip, clip list, edit/delete
-- [x] Tags, rating, "her" flag, notes; filter the clip list
+- [x] Tags, rating, "her" flag, notes; filter the clip list (her flag → player numbers + team flag, 2026-10-17)
 - [x] Timeline strip with clip ranges
 - [x] Kickoff markers + match clock
 - [x] Export job (single + batch)

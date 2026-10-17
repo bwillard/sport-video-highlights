@@ -22,6 +22,7 @@ def settings(tmp_path: Path) -> Settings:
         port=0,
         ffmpeg=_find_tool("ffmpeg", "FFMPEG"),
         ffprobe=_find_tool("ffprobe", "FFPROBE"),
+        default_player=38,
     )
 
 

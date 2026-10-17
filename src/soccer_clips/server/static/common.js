@@ -16,6 +16,14 @@ function matchClockFor(t, k1, k2) {
 }
 
 // "gu11-vs-saa-2026-10-10" -> "gu11-vs-saa"
+// Who a clip is noteworthy for: "#38 #7 team", the default player highlighted.
+function whoBadges(c, defaultPlayer) {
+  const nums = (c.players || []).map((n) => `<span class="${n === defaultPlayer ? "her" : "player"}">#${n}</span>`);
+  if (c.team) nums.push('<span class="team">team</span>');
+  return nums.length ? nums.join(" ") + " " : "";
+}
+const clipColour = (c, defaultPlayer) =>
+  c.players?.includes(defaultPlayer) ? "#ff8a3d" : c.team ? "#b48cff" : "#4ea1ff";
 const shortGame = (id) => id.replace(/-\d{4}-\d{2}-\d{2}$/, "");
 
 function flash(msg, err = false) {

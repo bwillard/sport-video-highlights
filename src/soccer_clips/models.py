@@ -29,7 +29,7 @@ DEFAULT_TAGS = [
 
 
 class Callout(BaseModel):
-    """A freeze-frame highlight of her at one moment in a clip (Phase 3.1)."""
+    """A freeze-frame highlight of a player at one moment in a clip (Phase 3.1)."""
 
     t_s: float  # game time of the frozen frame; inside the clip's range
     # Position in the frame: x as a fraction of the width, y of the height.
@@ -49,11 +49,22 @@ class Clip(BaseModel):
     end_s: float
     tags: list[str] = []
     rating: Rating | None = None
-    involves_her: bool = False
+    # Jersey numbers of the players the clip is noteworthy for, and whether
+    # it's a noteworthy team play; either, both or neither. (Replaced the old
+    # involves_her flag, which the store converts to the default player.)
+    players: list[int] = []
+    team: bool = False
     note: str | None = None
     callout: Callout | None = None  # dropped if start/end change so it falls outside the clip
     export: str | None = None  # relative to clips_dir; cleared when start/end change
     created_at: datetime = Field(default_factory=_now)
+
+    @field_validator("players")
+    @classmethod
+    def _sorted_players(cls, v: list[int]) -> list[int]:
+        if any(n < 0 or n > 999 for n in v):
+            raise ValueError("player numbers must be 0-999")
+        return sorted(set(v))
 
     @field_validator("rating", mode="before")
     @classmethod

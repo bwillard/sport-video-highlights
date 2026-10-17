@@ -48,7 +48,8 @@ class ClipCreate(RequestBody):
     end_s: float
     tags: list[str] = []
     rating: Rating | None = None
-    involves_her: bool = False
+    players: list[int] = []
+    team: bool = False
     note: str | None = None
 
 
@@ -57,7 +58,8 @@ class ClipPatch(RequestBody):
     end_s: float | None = None
     tags: list[str] | None = None
     rating: Rating | None = None
-    involves_her: bool | None = None
+    players: list[int] | None = None
+    team: bool | None = None
     note: str | None = None
     callout: Callout | None = None  # null removes it
 
@@ -94,7 +96,8 @@ class ReelItemView(ReelItem):
     start_s: float | None = None
     end_s: float | None = None
     tags: list[str] = []
-    involves_her: bool = False
+    players: list[int] = []
+    team: bool = False
     rating: Rating | None = None
     note: str | None = None
     has_callout: bool = False
@@ -160,6 +163,11 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.get("/api/tags")
     def list_tags() -> list[Tag]:
         return store.load_tags()
+
+    @app.get("/api/settings")
+    def ui_settings() -> dict:
+        """What the pages need from .env: the player the F key tags."""
+        return {"default_player": store.settings.default_player}
 
     @app.get("/api/games/{game_id}/clips")
     def list_clips(game_id: str) -> list[Clip]:
@@ -261,7 +269,7 @@ def create_app(store: Store | None = None) -> FastAPI:
                 continue
             items.append(ReelItemView(
                 **item.model_dump(), start_s=clip.start_s, end_s=clip.end_s, tags=clip.tags,
-                involves_her=clip.involves_her, rating=clip.rating, note=clip.note, has_callout=clip.callout is not None,
+                players=clip.players, team=clip.team, rating=clip.rating, note=clip.note, has_callout=clip.callout is not None,
                 kickoff_1h_s=game.kickoff_1h_s, kickoff_2h_s=game.kickoff_2h_s,
             ))
         renders = []

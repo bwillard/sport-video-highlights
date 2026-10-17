@@ -1,6 +1,6 @@
 """
 Freeze-frame callout (Phase 3.1): the reel stops on one frame of a clip, dims
-everything except a spotlight on her, draws a ring and an arrow, holds for a
+everything except a spotlight on the player, draws a ring and an arrow, holds for a
 moment, then plays on.
 
 The overlay is drawn with Pillow onto the frozen frame; the renderer splices

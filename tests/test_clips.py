@@ -44,8 +44,9 @@ def test_clip_crud(client):
     assert len(clip["id"]) == 8
 
     r = client.patch(f"/api/games/{GAME}/clips/{clip['id']}",
-                     json={"rating": "happy", "involves_her": True, "note": "nice"})
-    assert r.json()["rating"] == "happy" and r.json()["involves_her"] and r.json()["note"] == "nice"
+                     json={"rating": "happy", "players": [7, 38, 7], "team": True, "note": "nice"})
+    assert r.json()["rating"] == "happy" and r.json()["note"] == "nice"
+    assert r.json()["players"] == [7, 38] and r.json()["team"]  # sorted, no repeats
     assert r.json()["tags"] == ["shot"]  # untouched fields kept
 
     # explicit null clears a field
@@ -134,3 +135,16 @@ def test_old_star_ratings_convert_to_faces():
 
     faces = [Clip(start_s=0, end_s=1, rating=n).rating for n in (1, 2, 3, 4, 5, None)]
     assert faces == ["sad", "sad", None, "happy", "happy", None]
+
+
+def test_her_flag_becomes_default_player(client, settings):
+    path = next(settings.games_dir.rglob("game.json"))
+    data = json.loads(path.read_text())
+    data["clips"] = [{"id": "a", "start_s": 0, "end_s": 1, "involves_her": True},
+                     {"id": "b", "start_s": 1, "end_s": 2, "involves_her": False}]
+    path.write_text(json.dumps(data))
+    clips = client.get(f"/api/games/{GAME}/clips").json()
+    assert [c["players"] for c in clips] == [[38], []]
+    assert "involves_her" not in clips[0]
+    assert client.get("/api/settings").json() == {"default_player": 38}
+    assert client.patch(f"/api/games/{GAME}/clips/a", json={"players": [-1]}).status_code == 422

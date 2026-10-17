@@ -34,6 +34,7 @@ class Settings:
     port: int
     ffmpeg: str
     ffprobe: str
+    default_player: int | None = None  # jersey number the F key tags; old "her" flags become this
 
 
 def _required_dir(name: str) -> Path:
@@ -94,4 +95,5 @@ def get_settings() -> Settings:
         port=int(os.environ.get("SOCCER_PORT", "8000")),
         ffmpeg=ffmpeg,
         ffprobe=_find_tool("ffprobe", "FFPROBE"),
+        default_player=int(os.environ["SOCCER_DEFAULT_PLAYER"]) if os.environ.get("SOCCER_DEFAULT_PLAYER") else None,
     )

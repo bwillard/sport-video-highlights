@@ -40,11 +40,11 @@
       <kbd>←</kbd>/<kbd>→</kbd> ±5s (<kbd>Shift</kbd> ±60s) · <kbd>,</kbd>/<kbd>.</kbd> frame step<br>
       <kbd>Enter</kbd> save clip (no in point: last 8s + next 2s) · <kbd>I</kbd>/<kbd>O</kbd> mark in/out ·
       <kbd>Shift</kbd>+<kbd>I</kbd>/<kbd>O</kbd> move selected clip's start/end here · <kbd>Esc</kbd> clear<br>
-      <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>+</kbd>/<kbd>-</kbd> 😊/🙁 · <kbd>F</kbd> her ·
+      <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>+</kbd>/<kbd>-</kbd> 😊/🙁 · <kbd>F</kbd> default player · <kbd>P</kbd> add a player number · <kbd>T</kbd> team play ·
       <kbd>N</kbd> note · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next clip · <kbd>R</kbd> replay clip ·
       <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
       <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff<br>
-      <kbd>C</kbd> callout: pause inside the selected clip, press C, click on her (drag to size the ring) ·
+      <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
       <kbd>Shift</kbd>+<kbd>C</kbd> remove it
     </p>
   </section>
@@ -59,7 +59,7 @@
         <option value="">any rating</option><option value="happy">😊 only</option>
         <option value="notsad">hide 🙁</option><option value="sad">🙁 only</option>
       </select>
-      <label><input type="checkbox" id="fher"> her only</label>
+      <select id="fwho" aria-label="filter by player"><option value="">everyone</option></select>
       <span class="stat" id="count"></span>
     </div>
     <div class="box"><ul id="clips" class="list"></ul></div>
@@ -88,6 +88,7 @@ let game = null, tags = [], clips = [];
 let selectedId = null, markIn = null, markOut = null, stopAt = null;
 let jobsByClip = {}, pollTimer = null, hoverX = null;
 let fps = 30000 / 1001;
+let defaultPlayer = null;  // SOCCER_DEFAULT_PLAYER from .env; the F key
 
 const matchClock = (t) => matchClockFor(t, game?.kickoff_1h_s, game?.kickoff_2h_s);
 const label = (t) => matchClock(t) || fmt(t);
@@ -100,10 +101,10 @@ const selected = () => clips.find((c) => c.id === selectedId) || null;
 const clamp = (t) => Math.max(0, Math.min(game.duration_s, t));
 
 function visibleClips() {
-  const tag = $("ftag").value, rating = $("frating").value, herOnly = $("fher").checked;
+  const tag = $("ftag").value, rating = $("frating").value, who = $("fwho").value;
   const ratingOk = (r) => !rating || (rating === "notsad" ? r !== "sad" : r === rating);
-  return clips.filter((c) =>
-    (!tag || c.tags.includes(tag)) && ratingOk(c.rating) && (!herOnly || c.involves_her));
+  const whoOk = (c) => !who || (who === "team" ? c.team : c.players.includes(+who));
+  return clips.filter((c) => (!tag || c.tags.includes(tag)) && ratingOk(c.rating) && whoOk(c));
 }
 
 function upsert(clip) {
@@ -148,6 +149,24 @@ function toggleTag(name) {
   patchSelected({ tags: next });
 }
 const RATING_ICONS = { happy: "😊", sad: "🙁" };
+function togglePlayer(n) {
+  const c = selected();
+  if (!c) return flash("no clip selected", true);
+  patchSelected({ players: c.players.includes(n) ? c.players.filter((p) => p !== n) : [...c.players, n] });
+}
+// Numbers to offer as buttons: the default player, then anyone tagged in this game.
+function knownPlayers(c = null) {
+  const all = new Set([defaultPlayer, ...clips.flatMap((x) => x.players), ...(c?.players || [])]);
+  all.delete(null);
+  return [...all].sort((a, b) => (a === defaultPlayer ? -1 : b === defaultPlayer ? 1 : a - b));
+}
+function fillWhoFilter() {
+  const f = $("fwho"), keep = f.value;
+  f.length = 1;
+  f.append(new Option("team plays", "team"));
+  for (const n of knownPlayers()) f.append(new Option(`#${n}`, String(n)));
+  f.value = [...f.options].some((o) => o.value === keep) ? keep : "";
+}
 const setRating = (n) => patchSelected({ rating: selected()?.rating === n ? null : n });
 
 async function deleteSelected() {
@@ -230,6 +249,7 @@ function exportStatus(c) {
 
 // ---------- rendering ----------
 function render() {
+  fillWhoFilter();
   const list = visibleClips();
   $("count").textContent = `${list.length}/${clips.length} clips`;
   $("exportShown").textContent = `Export shown (${list.length})`;
@@ -238,7 +258,7 @@ function render() {
     return `<li data-id="${c.id}" class="${c.id === selectedId ? "sel" : ""}">
       <span class="t" title="${fmt(c.start_s)}">${esc(label(c.start_s))}</span>
       <span class="d">${(c.end_s - c.start_s).toFixed(1)}s</span>
-      <span class="tags">${c.involves_her ? '<span class="her">● her</span> ' : ""}${c.callout ? "◎ " : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
+      <span class="tags">${whoBadges(c, defaultPlayer)}${c.callout ? "◎ " : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
       <span>${RATING_ICONS[c.rating] || ""} ${cls === "done"
         ? `<a class="x done" href="${exportUrl(c)}" download title="download exported clip">⬇ mp4</a>`
         : `<span class="x ${cls}">${esc(txt)}</span>`}</span>
@@ -255,7 +275,7 @@ function render() {
 function renderDetail() {
   const c = selected(), el = $("detail");
   if (!c) { el.dataset.id = ""; el.innerHTML = `<div class="empty">Select a clip to edit it.</div>`; return; }
-  if (el.dataset.id === c.id && document.activeElement?.id === "note") return;  // don't clobber typing
+  if (el.dataset.id === c.id && ["note", "addPlayer"].includes(document.activeElement?.id)) return;  // don't clobber typing
   el.dataset.id = c.id;
   const [cls, txt] = exportStatus(c);
   el.innerHTML = `
@@ -266,14 +286,18 @@ function renderDetail() {
       <button data-act="replay" title="R">▶ replay</button></div>
     <div class="row"><span class="lbl">tags</span>
       ${tags.map((t) => `<button data-tag="${esc(t.name)}" class="${c.tags.includes(t.name) ? "on" : ""}">${esc(t.name)}${t.hotkey ? `<span class="hk">${esc(t.hotkey)}</span>` : ""}</button>`).join("")}
-      <button data-act="her" class="her ${c.involves_her ? "on" : ""}">her<span class="hk">F</span></button></div>
+    </div>
+    <div class="row"><span class="lbl">who</span>
+      ${knownPlayers(c).map((n) => `<button data-player="${n}" class="${n === defaultPlayer ? "her" : ""} ${c.players.includes(n) ? "on" : ""}">#${n}${n === defaultPlayer ? '<span class="hk">F</span>' : ""}</button>`).join("")}
+      <input id="addPlayer" inputmode="numeric" placeholder="#" title="add a player number (P), Enter to save" style="width:3.5em">
+      <button data-act="team" class="team ${c.team ? "on" : ""}">team<span class="hk">T</span></button></div>
     <div class="row"><span class="lbl">rating</span>
       ${[["happy", "+"], ["sad", "-"]].map(([n, hk]) => `<button data-rating="${n}" title="${n}" class="${c.rating === n ? "on" : ""}">${RATING_ICONS[n]}<span class="hk">${hk}</span></button>`).join("")}</div>
     <div class="row"><span class="lbl">callout</span>
       ${c.callout
         ? `<span>◎ at ${fmt(c.callout.t_s)}</span><button data-act="calloutGo">go to</button>
            <button data-act="calloutSet" title="C">move</button><button data-act="calloutRemove" title="Shift+C">remove</button>`
-        : `<button data-act="calloutSet" title="C">set</button><span class="stat">pause inside the clip, press C, click on her</span>`}</div>
+        : `<button data-act="calloutSet" title="C">set</button><span class="stat">pause inside the clip, press C, click on the player</span>`}</div>
     <div class="row"><textarea id="note" placeholder="note (N to edit, Esc to leave)">${esc(c.note || "")}</textarea></div>
     <div class="row">
       <button data-act="export" title="E">Export</button>
@@ -282,6 +306,14 @@ function renderDetail() {
       <span style="flex:1"></span>
       <button data-act="delete" class="danger" title="Del">Delete</button></div>`;
   $("note").addEventListener("change", (e) => patchSelected({ note: e.target.value.trim() || null }));
+  $("addPlayer").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") return e.target.blur();
+    if (e.key !== "Enter") return;
+    const n = parseInt(e.target.value, 10);
+    e.target.blur();
+    if (!(n >= 0 && n <= 999)) return flash("type a jersey number", true);
+    if (!selected().players.includes(n)) togglePlayer(n);
+  });
 }
 
 $("detail").addEventListener("click", (e) => {
@@ -290,11 +322,12 @@ $("detail").addEventListener("click", (e) => {
   b.blur();  // so Space/Enter go back to the player
   if (b.dataset.tag) return toggleTag(b.dataset.tag);
   if (b.dataset.rating) return setRating(b.dataset.rating);
+  if (b.dataset.player) return togglePlayer(+b.dataset.player);
   ({
     start: () => patchSelected({ start_s: v.currentTime }),
     end: () => patchSelected({ end_s: v.currentTime }),
     replay,
-    her: () => patchSelected({ involves_her: !selected().involves_her }),
+    team: () => patchSelected({ team: !selected().team }),
     export: () => exportClips([selectedId]),
     delete: deleteSelected,
     calloutSet: startCallout,
@@ -313,7 +346,7 @@ $("exportShown").addEventListener("click", (e) => {
   if (ids.length > 5 && !confirm(`Export ${ids.length} clips?`)) return;
   exportClips(ids);
 });
-for (const id of ["ftag", "frating", "fher", "fast"]) {
+for (const id of ["ftag", "frating", "fwho", "fast"]) {
   $(id).addEventListener("change", (e) => { e.target.blur(); render(); });
 }
 
@@ -333,7 +366,7 @@ function drawTimeline() {
   for (const c of clips) {
     const cw = Math.max(2, x(c.end_s) - x(c.start_s));
     ctx.globalAlpha = visible.has(c.id) ? 1 : 0.3;
-    ctx.fillStyle = c.involves_her ? "#ff8a3d" : "#4ea1ff";
+    ctx.fillStyle = clipColour(c, defaultPlayer);
     ctx.fillRect(x(c.start_s), 20, cw, h - 26);
     if (c.id === selectedId) {
       ctx.strokeStyle = "#fff";
@@ -397,7 +430,7 @@ function frame() {
 requestAnimationFrame(frame);
 
 // ---------- callout (Phase 3.1) ----------
-// The reel freezes on this frame with a spotlight + ring on her. Positions are
+// The reel freezes on this frame with a spotlight + ring on the player. Positions are
 // stored as fractions of the video frame (x of width, y and r of height).
 const overlay = $("overlay"), stage = $("stage");
 const DEFAULT_R = 0.06;
@@ -419,7 +452,7 @@ function startCallout() {
   v.pause();
   placing = { t: v.currentTime, x: null, y: null, r: c.callout?.r ?? DEFAULT_R, dragging: false };
   stage.classList.add("placing");
-  flash("click on her (drag to size the ring) — Esc cancels");
+  flash("click on the player (drag to size the ring) — Esc cancels");
 }
 function cancelCallout() {
   placing = null;
@@ -539,7 +572,9 @@ document.addEventListener("keydown", (e) => {
     },
     Enter: saveClip,
     Escape: () => { markIn = markOut = null; selectedId = null; render(); },
-    f: () => patchSelected({ involves_her: !selected()?.involves_her }),
+    f: () => (defaultPlayer == null ? flash("set SOCCER_DEFAULT_PLAYER in .env to use F", true) : togglePlayer(defaultPlayer)),
+    p: () => ($("addPlayer") ? $("addPlayer").focus() : flash("no clip selected", true)),
+    t: () => patchSelected({ team: !selected()?.team }),
     n: () => $("note")?.focus(),
     r: replay,
     e: () => (selectedId ? exportClips([selectedId]) : flash("no clip selected", true)),
@@ -652,6 +687,7 @@ window.addEventListener("hashchange", applyHash);
 
 (async () => {
   tags = await getJson("/api/tags");
+  ({ default_player: defaultPlayer } = await getJson("/api/settings"));
   for (const t of tags) $("ftag").append(new Option(t.name, t.name));
   const games = await getJson("/api/games");
   for (const g of games) sel.append(new Option(g.id, g.id));

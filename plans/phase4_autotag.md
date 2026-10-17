@@ -27,7 +27,7 @@ Track per-game counts; aim for examples from several games and lighting conditio
 - **"Her on screen" timeline** on the game page (Phase 1) — jump to stretches where she's visible.
 - **Clip suggestions:** clips where she's visible, ranked by score. Confirm/reject in one key press; each answer is added to the gallery (active learning).
 - **Auto-select in Phase 3:** when tracking a clip, pre-pick the most likely track ID as her. You only click if it's wrong.
-- **Auto-tag existing clips:** set/suggest the `involves_her` flag.
+- **Auto-tag existing clips:** set/suggest her number (the default player) on clips.
 
 ## Even-more-stretch: event suggestions
 - Ball detection (YOLO's `sports ball` class is weak on small, distant balls; may need a fine-tuned model) → moments when the ball is near her = candidate clips.
