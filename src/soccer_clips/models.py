@@ -219,6 +219,7 @@ class Render(BaseModel):
     skipped: list[ReelItem] = []  # items whose clip was missing at render time
     start_card_lines: list[str] = []  # empty if there was no opening card
     card_style: CardStyle = "card"  # renders made before overlays existed used cards
+    encoder: str | None = None  # e.g. "GPU qp 22"; None for renders made before this was recorded
     reel: Reel  # the definition this was rendered from, so it can be reproduced
     created_at: datetime = Field(default_factory=_now)
 

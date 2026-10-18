@@ -6,6 +6,10 @@ it with hard cuts into <reels_dir>/<reel_id>/<name>.mp4, where the name is
 the preset plus the variant (see models.Variant: a render can leave out the
 clip notes, or the notes and the callout freezes).
 
+Every piece is encoded once, at the final quality, by the same encoder (the
+GPU when there is one; see encode.py), so the join copies the video instead of
+encoding it again; only the audio is re-encoded there, to smooth the joins.
+
 Next to the mp4, <name>.render.json records where each clip landed in the
 reel and where it came from in its game, so the reel page can jump back to the
 full game. Segment spans come from the measured intermediates, not from the
@@ -16,40 +20,48 @@ import hashlib
 import json
 import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import partial
 from pathlib import Path
 
+from PIL import Image
+
 from soccer_clips import ffmpeg
+from soccer_clips.encode import FROM_RGB, Encoder, choose_encoder
 from soccer_clips.jobs import Job
-from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment, Variant, render_name
-from soccer_clips.reel.callout import STYLE_VERSION, callout_frame, splice_callout
+from soccer_clips.models import Callout, Clip, Game, Preset, Reel, ReelItem, Render, Segment, Variant, render_name
+from soccer_clips.reel.callout import STYLE_VERSION, callout_frame, draw_callout
 from soccer_clips.reel.cards import (
     card_seconds, clip_card_lines, draw_caption, draw_card, font_path, LAYOUT_VERSION, start_card_lines,
 )
 from soccer_clips.store import Store, atomic_write_text
 
 # Bump to invalidate every cached intermediate (e.g. after changing the normalise filters).
-CACHE_VERSION = 1
+CACHE_VERSION = 4
 CAPTION_VERSION = 1  # bump when the caption look changes
 OUTPUT_FPS = Fraction(30000, 1001)  # Veo's rate, so normally no frame-rate conversion
+# Pieces keep uncompressed audio, which (unlike AAC) can end exactly with the
+# video, so pieces join without tiny gaps; the join encodes it to AAC.
+PIECE = ".mov"
+PIECE_AUDIO = "pcm_s16le"
+PIECE_WORKERS = 2  # pieces made at once (see _make_pieces)
 
 
 @dataclass(frozen=True)
 class PresetSpec:
     width: int
     height: int
-    x264_preset: str  # for the final encode
-    crf: int  # for the final encode
-    # Intermediates are re-encoded once more, so they're made at higher quality.
-    intermediate_preset: str
-    intermediate_crf: int
+    preview: bool  # fixed fast settings instead of the .env encoder and quality
 
 
 PRESETS: dict[str, PresetSpec] = {
-    "landscape_1080p": PresetSpec(1920, 1080, "medium", 20, "veryfast", 16),
-    "preview_540p": PresetSpec(960, 540, "ultrafast", 26, "ultrafast", 23),
+    "landscape_1080p": PresetSpec(1920, 1080, False),
+    "preview_540p": PresetSpec(960, 540, True),
 }
+# Share of the progress bar for the final join (it copies the video, so it's quick).
+JOIN_SHARE = 0.05
 
 
 def shows_notes(variant: Variant) -> bool:
@@ -83,88 +95,192 @@ def _resolve(store: Store, reel: Reel) -> tuple[list[tuple[Game, Clip]], list[Re
     return parts, skipped
 
 
-def _normalise(store: Store, game: Game, seek_s: float, duration_s: float, spec: PresetSpec,
-               out: Path, on_progress: Callable[[float], None]) -> None:
-    s = store.settings
+def _shape(game: Game, spec: PresetSpec) -> str:
+    """CPU filters that make a game's frames the preset's size and rate (letterboxed if needed)."""
     w, h = spec.width, spec.height
     vf = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
     if Fraction(game.fps_num, game.fps_den) != OUTPUT_FPS:
         vf += f",fps={OUTPUT_FPS}"
-    vf += ",format=yuv420p"
-    inputs = ["-ss", f"{seek_s:.6f}", "-i", str(store.original_path(game))]
-    if game.has_audio:
-        audio_map = "0:a:0"
+    return vf + ",format=yuv420p"
+
+
+@dataclass(frozen=True)
+class Span:
+    """One piece of a clip: its frames [start, end), or (hold) the callout frame held still."""
+
+    start: int = 0
+    end: int = 0
+    hold: bool = False
+    caption: bool = False  # drawn with the caption over it
+
+
+def clip_spans(frames: int, caption_frames: int, freeze_at: int | None, freeze_frames: int) -> list[Span]:
+    """
+    How a clip is cut into pieces. The caption shows for the first
+    caption_frames frames of the clip as it plays in the reel (a freeze
+    counts) and during the freeze. Only the captioned pieces need the CPU;
+    the rest can stay on the GPU, and a note edit only redoes those.
+    """
+    c = caption_frames
+    if freeze_at is None:
+        spans = [Span(0, min(c, frames), caption=True), Span(min(c, frames), frames)]
     else:
+        n = freeze_at
+        after = max(0, min(c - n - freeze_frames, frames - n))  # caption frames left after the freeze
+        spans = [Span(0, min(c, n), caption=True), Span(min(c, n), n), Span(hold=True, caption=c > 0),
+                 Span(n, n + after, caption=True), Span(n + after, frames)]
+    return [s for s in spans if s.hold or s.end > s.start]
+
+
+def _encode(store: Store, enc: Encoder, inputs: list[str], graph: str, seconds: float, out: Path,
+            on_progress: Callable[[float], None] | None = None) -> None:
+    """Run a filter graph with [v] and [a] outputs into a piece of the reel."""
+    tmp = out.with_name(out.stem + ".part" + out.suffix)
+    cmd = [
+        store.settings.ffmpeg, "-y", "-v", "error", *enc.global_args(), *inputs,
+        "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+        *enc.video_args(), "-c:a", PIECE_AUDIO, str(tmp),
+    ]
+    try:
+        ffmpeg.run(cmd, seconds, on_progress)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, out)
+
+
+def _make_pieces(todo: list[tuple[float, Callable]], total_s: float, on_progress: Callable[[float], None]) -> None:
+    """
+    Make the pieces, PIECE_WORKERS at a time: each ffmpeg run spends a while
+    starting up and seeking, and captioned pieces mostly use the CPU while
+    plain ones mostly use the GPU, so two at once finish sooner.
+    """
+    done = [0.0] * len(todo)
+    cached = total_s - sum(seconds for seconds, _ in todo)
+
+    def report(i: int, seconds: float, fraction: float) -> None:
+        done[i] = fraction * seconds
+        on_progress((cached + sum(done)) / total_s)
+
+    with ThreadPoolExecutor(PIECE_WORKERS) as pool:
+        futures = [pool.submit(make, partial(report, i, seconds)) for i, (seconds, make) in enumerate(todo)]
+        try:
+            for f in futures:
+                f.result()
+        except BaseException:
+            pool.shutdown(cancel_futures=True)
+            raise
+
+
+def _video_piece(store: Store, game: Game, seek_s: float, span: Span, spec: PresetSpec, enc: Encoder,
+                 caption: Image.Image | None, out: Path, on_progress: Callable[[float], None]) -> None:
+    """Frames [span.start, span.end) of the clip that starts at seek_s, with the caption drawn over if given."""
+    frames = span.end - span.start
+    seconds = float(frames / OUTPUT_FPS)
+    start_s = seek_s + float(span.start / OUTPUT_FPS)
+    same_shape = (game.width, game.height) == (spec.width, spec.height) and \
+        Fraction(game.fps_num, game.fps_den) == OUTPUT_FPS
+    on_gpu = enc.gpu and same_shape and caption is None
+    if on_gpu:
+        # Already the right size and rate (Veo downloads are) and nothing to
+        # draw: decode on the GPU and keep the frames there.
+        decode = enc.gpu_decode_args()
+    else:
+        # The GPU still decodes when there is one; frames come back for the CPU filters.
+        decode = ["-hwaccel", "vaapi", "-hwaccel_device", enc.gpu_device] if enc.gpu else []
+    # -t stops reading the game soon after the piece; trim/atrim cut it exactly.
+    inputs = [*decode, "-ss", f"{start_s:.6f}", "-t", f"{seconds + 1:.6f}", "-i", str(store.original_path(game))]
+    audio_in = "0:a:0"
+    if not game.has_audio:
         inputs += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
-        audio_map = "1:a:0"
+        audio_in = "1:a:0"
+    graph = (f"[{audio_in}]aresample=48000,aformat=channel_layouts=stereo,"
+             f"apad=whole_dur={seconds:.6f},atrim=end={seconds:.6f},asetpts=PTS-STARTPTS[a];")
+    if on_gpu:
+        graph += f"[0:v:0]setsar=1,scale_vaapi=format=nv12,trim=end_frame={frames}[v]"
+    else:
+        graph += f"[0:v:0]{_shape(game, spec)},trim=end_frame={frames},setpts=PTS-STARTPTS"
+        if caption:
+            caption_png = out.with_suffix(".caption.png")
+            caption.save(caption_png)
+            inputs += ["-loop", "1", "-i", str(caption_png)]
+            graph += f"[m];[m][{inputs.count('-i') - 1}:v]overlay=0:0:shortest=1"
+        graph += f",format=yuv420p{enc.upload}[v]"
+    try:
+        _encode(store, enc, inputs, graph, seconds, out, on_progress)
+    finally:
+        if caption:
+            caption_png.unlink(missing_ok=True)
+
+
+def _still_piece(store: Store, png: Path, frames: int, enc: Encoder, out: Path) -> None:
+    """A silent piece showing one picture (a title card, or a held callout frame) for `frames` frames."""
+    seconds = float(frames / OUTPUT_FPS)
+    inputs = ["-loop", "1", "-framerate", str(OUTPUT_FPS), "-i", str(png),
+              "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+    graph = (f"[0:v]setsar=1,{FROM_RGB},trim=end_frame={frames}{enc.upload}[v];"
+             f"[1:a]atrim=end={seconds:.6f}[a]")
+    _encode(store, enc, inputs, graph, seconds, out)
+
+
+def _card(store: Store, lines: list[str], spec: PresetSpec, enc: Encoder, duration_s: float, out: Path) -> None:
+    """A silent piece of a title card, exactly round(duration_s * fps) frames long."""
+    png = out.with_suffix(".png")
+    draw_card(lines, spec.width, spec.height).save(png)
+    try:
+        _still_piece(store, png, max(1, round(duration_s * OUTPUT_FPS)), enc, out)
+    finally:
+        png.unlink(missing_ok=True)
+
+
+def _hold(store: Store, game: Game, seek_s: float, frame_n: int, spec: PresetSpec, enc: Encoder,
+          callout: Callout, frames: int, caption: Image.Image | None, out: Path,
+          on_progress: Callable[[float], None] = lambda f: None) -> None:
+    """The clip's frame frame_n with the callout drawn on (and the caption, if given), held for `frames` frames."""
+    png = out.with_suffix(".png")
+    # seek_s is half a frame before the clip's first frame, so this lands half a frame before frame_n
+    at_s = seek_s + float(frame_n / OUTPUT_FPS)
+    ffmpeg.run([store.settings.ffmpeg, "-y", "-v", "error", "-ss", f"{at_s:.6f}", "-i", str(store.original_path(game)),
+                "-vf", _shape(game, spec), "-frames:v", "1", str(png)], 0)
+    try:
+        picture = draw_callout(Image.open(png).convert("RGB"), callout, game.width, game.height)
+        if caption:
+            picture = Image.alpha_composite(picture.convert("RGBA"), caption).convert("RGB")
+        picture.save(png)
+        _still_piece(store, png, frames, enc, out)
+    finally:
+        png.unlink(missing_ok=True)
+
+
+def _join(store: Store, pieces: list[Path], duration_s: float, out: Path,
+          on_progress: Callable[[float], None]) -> None:
+    """
+    Join the pieces end to end. The video is copied (every piece was encoded
+    with the same settings); the audio is re-encoded, with aresample filling or
+    trimming the few ms where one piece's audio runs past its video.
+    """
+    listing = out.with_name(out.stem + ".concat.txt")
+    listing.write_text("".join("file '{}'\n".format(str(p).replace("'", "'\\''")) for p in pieces))
     tmp = out.with_name(out.stem + ".part.mp4")
     cmd = [
-        s.ffmpeg, "-y", "-v", "error", *inputs,
-        # Output-side -t trims both streams; apad makes sure audio is never shorter than video.
-        "-t", f"{duration_s:.6f}", "-map", "0:v:0", "-map", audio_map,
-        "-vf", vf, "-af", "aresample=48000,aformat=channel_layouts=stereo,apad",
-        "-c:v", "libx264", "-preset", spec.intermediate_preset, "-crf", str(spec.intermediate_crf),
-        "-c:a", "aac", "-b:a", "192k", str(tmp),
+        store.settings.ffmpeg, "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(listing),
+        "-map", "0:v", "-map", "0:a", "-c:v", "copy",
+        "-af", "aresample=async=1:first_pts=0", "-c:a", "aac", "-b:a", "160k",
+        "-movflags", "+faststart", str(tmp),
     ]
     try:
         ffmpeg.run(cmd, duration_s, on_progress)
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
-    os.replace(tmp, out)
-
-
-def _card(store: Store, lines: list[str], spec: PresetSpec, duration_s: float, out: Path) -> None:
-    """A silent clip of a still title card, exactly round(duration_s * fps) frames long."""
-    png = out.with_suffix(".png")
-    draw_card(lines, spec.width, spec.height).save(png)
-    frames = max(1, round(duration_s * OUTPUT_FPS))
-    tmp = out.with_name(out.stem + ".part.mp4")
-    cmd = [
-        store.settings.ffmpeg, "-y", "-v", "error",
-        "-loop", "1", "-framerate", str(OUTPUT_FPS), "-i", str(png),
-        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
-        "-map", "0:v", "-map", "1:a", "-frames:v", str(frames), "-t", f"{frames / OUTPUT_FPS:.6f}",
-        "-vf", "setsar=1,format=yuv420p",
-        "-c:v", "libx264", "-preset", spec.intermediate_preset, "-crf", str(spec.intermediate_crf),
-        "-tune", "stillimage", "-c:a", "aac", "-b:a", "192k", str(tmp),
-    ]
-    try:
-        ffmpeg.run(cmd, frames / OUTPUT_FPS)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
     finally:
-        png.unlink(missing_ok=True)
-    os.replace(tmp, out)
-
-
-def _caption(store: Store, src: Path, lines: list[str], spec: PresetSpec,
-             windows: list[tuple[float, float]], out: Path) -> None:
-    """Copy an intermediate with a caption overlaid during the given (start, end) times."""
-    png = out.with_name(out.stem + ".caption.png")
-    draw_caption(lines, spec.width, spec.height).save(png)
-    enable = "+".join(f"between(t,{a:.4f},{b:.4f})" for a, b in windows)
-    tmp = out.with_name(out.stem + ".part.mp4")
-    cmd = [
-        store.settings.ffmpeg, "-y", "-v", "error", "-i", str(src), "-loop", "1", "-i", str(png),
-        "-filter_complex", f"[0:v][1:v]overlay=0:0:shortest=1:enable='{enable}',format=yuv420p[v]",
-        "-map", "[v]", "-map", "0:a", "-c:a", "copy",
-        "-c:v", "libx264", "-preset", spec.intermediate_preset, "-crf", str(spec.intermediate_crf), str(tmp),
-    ]
-    try:
-        ffmpeg.run(cmd, 0)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
-    finally:
-        png.unlink(missing_ok=True)
+        listing.unlink(missing_ok=True)
     os.replace(tmp, out)
 
 
 def _cache_name(preset: str, *key) -> str:
     digest = hashlib.sha1(json.dumps([CACHE_VERSION, preset, *key]).encode()).hexdigest()[:16]
-    return f"{preset}-{digest}.mp4"
+    return f"{preset}-{digest}{PIECE}"
 
 
 def render_reel(store: Store, reel_id: str, preset: Preset,
@@ -174,6 +290,8 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
     spec = PRESETS[preset]
     name = render_name(preset, variant)
     notes = shows_notes(variant)
+    enc = choose_encoder(s, spec.width, spec.height, spec.preview)
+    cache_name = lambda *key: _cache_name(preset, enc.key, *key)  # pieces from other settings can't be joined
     folder = store.reel_dir(reel_id)
     cache = folder / "cache"
     cache.mkdir(parents=True, exist_ok=True)
@@ -183,130 +301,105 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
         raise ValueError("reel has no clips to render (all missing or none added)")
     windows = [ffmpeg.cut_window(game, clip.start_s, clip.end_s) for game, clip in parts]
     total = sum(d for _, d in windows)
-    # Progress: normalising clips is the first half of the work, the final
-    # encode the second. Cards are quick and aren't counted.
-    done = 0.0
-
-    def report(fraction: float, weight: float) -> None:
-        on_progress((done + fraction * weight) / (2 * total))
-
     def card(lines: list[str]) -> Path | None:
         if not lines or reel.card_s <= 0:
             return None
         seconds = card_seconds(lines, reel.card_s)
-        path = cache / _cache_name(preset, "card", lines, round(seconds, 3), font_path(), LAYOUT_VERSION)
+        path = cache / cache_name("card", lines, round(seconds, 3), font_path(), LAYOUT_VERSION)
         if not path.exists():
-            _card(store, lines, spec, seconds, path)
+            _card(store, lines, spec, enc, seconds, path)
         return path
 
     start_lines = start_card_lines(reel, [game for game, _ in parts]) if reel.card_s > 0 else []
     start_card = card(start_lines)
     overlay = reel.card_style == "overlay" and reel.card_s > 0
-    entries = []  # (game, clip, card lines, card path or None, clip path, callout frame or None, caption)
-    used = set()  # cache files to keep
-    freeze_s = float(max(1, round(reel.freeze_s * OUTPUT_FPS)) / OUTPUT_FPS) \
-        if reel.freeze_s > 0 and shows_callouts(variant) else 0.0
+    entries = []  # (game, clip, card lines, card path or None, [(span, piece)], caption)
+    todo = []  # (seconds of video, make(on_progress)) for each piece that isn't cached
+    freeze_frames = max(1, round(reel.freeze_s * OUTPUT_FPS)) if reel.freeze_s > 0 and shows_callouts(variant) else 0
+    freeze_s = float(freeze_frames / OUTPUT_FPS)
     for (game, clip), (seek_s, duration_s) in zip(parts, windows):
         lines = clip_card_lines(game, clip, notes) if reel.card_s > 0 else []
         card_path = None if overlay else card(lines)
-        path = cache / _cache_name(preset, game.id, game.original, round(seek_s, 6), round(duration_s, 6))
-        frame_n = callout_frame(game, clip) if freeze_s else None
-        spliced = None
-        if frame_n is not None:
-            spliced = cache / _cache_name(preset, "callout", path.name, frame_n, clip.callout.model_dump(),
-                                          round(reel.freeze_s, 3), STYLE_VERSION)
+        frame_n = callout_frame(game, clip) if freeze_frames else None
         caption = None  # (lines, seconds shown from the clip start)
-        captioned = None
+        caption_frames = 0
         if overlay and lines:
-            caption_s = float(max(1, round(card_seconds(lines, reel.card_s) * OUTPUT_FPS)) / OUTPUT_FPS)
-            caption = (lines, caption_s)
-            cap_windows = [(0.0, caption_s)]
-            if frame_n is not None:  # also show it during the callout freeze
-                at = float(frame_n / OUTPUT_FPS)
-                cap_windows.append((at, at + freeze_s))
-            captioned = cache / _cache_name(preset, "caption", (spliced or path).name, lines,
-                                            [(round(a, 4), round(b, 4)) for a, b in cap_windows],
-                                            font_path(), CAPTION_VERSION, LAYOUT_VERSION)
-        # Each step is made from the one before (clip -> splice -> caption) and
-        # each is cached, so an edit only redoes the steps after it.
-        final = captioned or spliced or path
-        need_caption = captioned is not None and not captioned.exists()
-        need_splice = spliced is not None and not spliced.exists() and (need_caption or final == spliced)
-        need_clip = not path.exists() and (need_splice or need_caption and spliced is None or final == path)
-        if need_clip:
-            _normalise(store, game, seek_s, duration_s, spec, path, lambda f: report(f, duration_s))
-        if need_splice:
-            splice_callout(store, path, frame_n, clip.callout, game, reel.freeze_s, OUTPUT_FPS,
-                           spec.intermediate_preset, spec.intermediate_crf, spliced)
-        if need_caption:
-            _caption(store, spliced or path, caption[0], spec, cap_windows, captioned)
-        done += duration_s
-        for p in (path, spliced):  # kept so moving a callout or editing a note redoes only the later steps
-            if p and p.exists():
-                used.add(p)
-        entries.append((game, clip, lines, card_path, final, frame_n, caption))
+            caption_frames = max(1, round(card_seconds(lines, reel.card_s) * OUTPUT_FPS))
+            caption = (lines, float(caption_frames / OUTPUT_FPS))
+        source = [game.id, game.original, round(seek_s, 6)]
+        caption_key = [lines, font_path(), CAPTION_VERSION, LAYOUT_VERSION] if caption else None
+        caption_img = None  # drawn when a piece needs it
+        pieces = []
+        for span in clip_spans(round(duration_s * OUTPUT_FPS), caption_frames, frame_n, freeze_frames):
+            if span.hold:
+                path = cache / cache_name("hold", *source, frame_n, clip.callout.model_dump(), STYLE_VERSION,
+                                          freeze_frames, span.caption and caption_key)
+            else:
+                path = cache / cache_name("clip", *source, span.start, span.end, span.caption and caption_key)
+            if not path.exists():
+                if span.caption and caption_img is None:
+                    caption_img = draw_caption(lines, spec.width, spec.height)
+                over = caption_img if span.caption else None
+                if span.hold:
+                    todo.append((0.0, partial(_hold, store, game, seek_s, frame_n, spec, enc, clip.callout,
+                                              freeze_frames, over, path)))
+                else:
+                    todo.append((float((span.end - span.start) / OUTPUT_FPS),
+                                 partial(_video_piece, store, game, seek_s, span, spec, enc, over, path)))
+            pieces.append((span, path))
+        entries.append((game, clip, lines, card_path, pieces, caption))
+    # Progress: making the pieces is nearly all of the work, then the join
+    # (JOIN_SHARE). Cards and callout holds are quick and aren't counted.
+    _make_pieces(todo, total, lambda f: on_progress(f * (1 - JOIN_SHARE)))
 
     length = lambda p: max(ffmpeg.stream_durations(s, p).values())
     intermediates, segments, t = [], [], 0.0
     if start_card:
         intermediates.append(start_card)
         t += length(start_card)
-    for game, clip, lines, card_path, path, frame_n, caption in entries:
+    for game, clip, lines, card_path, pieces, caption in entries:
         card_start = None
         if card_path:
             intermediates.append(card_path)
             card_start = t
             t += length(card_path)
-        intermediates.append(path)
-        clip_len = length(path)
+        start, freeze_at = t, None
+        for span, path in pieces:
+            intermediates.append(path)
+            if span.hold:
+                freeze_at = t
+            t += length(path)
         frame_s = game.fps_den / game.fps_num
         segments.append(Segment(
             game_id=game.id, clip_id=clip.id,
-            reel_start_s=t, reel_end_s=t + clip_len,
+            reel_start_s=start, reel_end_s=t,
             source_start_s=game.frame_at(clip.start_s) * frame_s,
             source_end_s=game.frame_at(clip.end_s) * frame_s,
             card_start_s=card_start, card_lines=lines if card_path else [],
-            freeze_at_s=None if frame_n is None else t + float(frame_n / OUTPUT_FPS),
-            freeze_s=0.0 if frame_n is None else freeze_s,
-            callout=None if frame_n is None else clip.callout,
+            freeze_at_s=freeze_at,
+            freeze_s=0.0 if freeze_at is None else freeze_s,
+            callout=None if freeze_at is None else clip.callout,
             caption_lines=caption[0] if caption else [],
             caption_s=caption[1] if caption else 0.0,
         ))
-        t += clip_len
 
     out = folder / f"{name}.mp4"
-    tmp = folder / f"{name}.part.mp4"
-    inputs = [arg for p in intermediates for arg in ("-i", str(p))]
-    n = len(intermediates)
-    graph = "".join(f"[{i}:v][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
-    cmd = [
-        s.ffmpeg, "-y", "-v", "error", *inputs,
-        "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", spec.x264_preset, "-crf", str(spec.crf), "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(tmp),
-    ]
-    try:
-        ffmpeg.run(cmd, t, lambda f: report(f, total))
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
-    os.replace(tmp, out)
+    _join(store, intermediates, t, out, lambda f: on_progress(1 - JOIN_SHARE + f * JOIN_SHARE))
 
     render = Render(
         reel_id=reel.id, preset=preset, variant=variant, file=out.name,
         duration_s=length(out), segments=segments, skipped=skipped, reel=reel,
         start_card_lines=start_lines if start_card else [],
-        card_style=reel.card_style,
+        card_style=reel.card_style, encoder=enc.label,
     )
     store.save_render(render)
 
     # Drop cached intermediates no render of this preset uses any more (clips
     # edited or removed). Each variant lists what it used, since they share
     # intermediates (the same clip, or a card without a note).
-    used |= set(intermediates)
-    atomic_write_text(cache / f"{name}.used.json", json.dumps(sorted(p.name for p in used)) + "\n")
+    atomic_write_text(cache / f"{name}.used.json", json.dumps(sorted(p.name for p in intermediates)) + "\n")
     keep = {n for f in cache.glob(f"{preset}*.used.json") for n in json.loads(f.read_text())}
-    for p in cache.glob(f"{preset}-*.mp4"):
+    for p in [*cache.glob(f"{preset}-*{PIECE}"), *cache.glob(f"{preset}-*.mp4")]:  # .mp4: before CACHE_VERSION 4
         if p.name not in keep:
             p.unlink()
     return render

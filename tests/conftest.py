@@ -26,14 +26,14 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-def make_video(settings: Settings, rel: str, duration_s: int = 3, audio: bool = True) -> Path:
+def make_video(settings: Settings, rel: str, duration_s: int = 3, audio: bool = True, size: str = "320x180") -> Path:
     """29.97 fps test pattern (with a tone unless audio=False), laid out like a Veo download."""
     out = settings.full_dir / rel
     out.parent.mkdir(parents=True, exist_ok=True)
     audio_args = ["-f", "lavfi", "-i", f"sine=frequency=440:duration={duration_s}", "-c:a", "aac"] if audio else []
     subprocess.run(
         [settings.ffmpeg, "-v", "error",
-         "-f", "lavfi", "-i", f"testsrc2=size=320x180:rate=30000/1001:duration={duration_s}",
+         "-f", "lavfi", "-i", f"testsrc2=size={size}:rate=30000/1001:duration={duration_s}",
          *audio_args, "-c:v", "libx264", "-shortest", str(out)],
         check=True,
     )

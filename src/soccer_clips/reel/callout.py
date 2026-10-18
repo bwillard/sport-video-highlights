@@ -4,18 +4,12 @@ everything except a spotlight on the player, draws a ring and an arrow, holds fo
 moment, then plays on.
 
 The overlay is drawn with Pillow onto the frozen frame; the renderer splices
-it into the clip's intermediate with ffmpeg.
+it into the clip as it makes the clip's piece of the reel.
 """
-
-import os
-from fractions import Fraction
-from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from soccer_clips import ffmpeg
 from soccer_clips.models import Callout, Clip, Game
-from soccer_clips.store import Store
 
 DIM = 0.45  # brightness outside the spotlight
 RING = (255, 255, 255)
@@ -61,51 +55,3 @@ def draw_callout(frame: Image.Image, callout: Callout, src_w: int, src_h: int) -
     draw.rectangle((cx - size * 0.18, min(base_y, base_y + direction * size * 0.6),
                     cx + size * 0.18, max(base_y, base_y + direction * size * 0.6)), fill=RING)
     return out
-
-
-def splice_callout(store: Store, clip_path: Path, frame_n: int, callout: Callout, game: Game,
-                   freeze_s: float, fps: Fraction, x264_preset: str, crf: int, out: Path) -> float:
-    """
-    Copy a normalised clip intermediate to `out` with a freeze inserted at
-    frame `frame_n`: frames [0, n) play, frame n is held (with the overlay)
-    for `freeze_s` seconds with silence, then frames [n, end) play. Returns
-    the actual freeze length (a whole number of frames).
-    """
-    s = store.settings
-    png = out.with_name(out.stem + ".callout.png")
-    raw = out.with_name(out.stem + ".frame.png")
-    ffmpeg.run([s.ffmpeg, "-y", "-v", "error", "-i", str(clip_path),
-                "-vf", f"select=eq(n\\,{frame_n})", "-frames:v", "1", "-fps_mode", "vfr", str(raw)], 0)
-    frame = Image.open(raw).convert("RGB")
-    draw_callout(frame, callout, game.width, game.height).save(png)
-    raw.unlink(missing_ok=True)
-
-    freeze_frames = max(1, round(freeze_s * fps))
-    freeze = freeze_frames / fps
-    split_t = frame_n / fps
-    graph = (
-        f"[0:v]trim=end_frame={frame_n},setpts=PTS-STARTPTS[va];"
-        f"[0:v]trim=start_frame={frame_n},setpts=PTS-STARTPTS[vb];"
-        f"[0:a]atrim=end={float(split_t):.6f},asetpts=PTS-STARTPTS[aa];"
-        f"[0:a]atrim=start={float(split_t):.6f},asetpts=PTS-STARTPTS[ab];"
-        f"[1:v]setsar=1,format=yuv420p[vf];"
-        f"[va][aa][vf][2:a][vb][ab]concat=n=3:v=1:a=1[v][a]"
-    )
-    tmp = out.with_name(out.stem + ".part.mp4")
-    cmd = [
-        s.ffmpeg, "-y", "-v", "error", "-i", str(clip_path),
-        "-loop", "1", "-framerate", str(fps), "-t", f"{float(freeze):.6f}", "-i", str(png),
-        "-f", "lavfi", "-t", f"{float(freeze):.6f}", "-i", "anullsrc=r=48000:cl=stereo",
-        "-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-r", str(fps),
-        "-c:v", "libx264", "-preset", x264_preset, "-crf", str(crf),
-        "-c:a", "aac", "-b:a", "192k", str(tmp),
-    ]
-    try:
-        ffmpeg.run(cmd, 0)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
-    finally:
-        png.unlink(missing_ok=True)
-    os.replace(tmp, out)
-    return float(freeze)

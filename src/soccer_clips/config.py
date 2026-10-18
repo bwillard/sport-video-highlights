@@ -35,6 +35,12 @@ class Settings:
     ffmpeg: str
     ffprobe: str
     default_player: int | None = None  # jersey number the F key tags; old "her" flags become this
+    # Video encoding for full-size reel renders (see .env.example and encode.py).
+    encoder: str = "auto"  # auto | gpu | cpu
+    gpu_device: str = "/dev/dri/renderD128"
+    gpu_qp: int = 22  # GPU quality: lower = better picture, bigger file
+    cpu_crf: int = 20  # CPU quality: same scale
+    cpu_speed: str = "medium"  # x264 preset: slower = smaller file at the same quality
 
 
 def _required_dir(name: str) -> Path:
@@ -78,6 +84,24 @@ def check_ffmpeg_version(ffmpeg: str) -> int:
     return major
 
 
+ENCODERS = ("auto", "gpu", "cpu")
+X264_SPEEDS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
+
+
+def _int(name: str, default: int, lo: int, hi: int) -> int:
+    value = os.environ.get(name) or str(default)
+    if not value.isdigit() or not lo <= int(value) <= hi:
+        raise ConfigError(f"{name} must be a whole number from {lo} to {hi}, not {value!r}")
+    return int(value)
+
+
+def _choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    value = os.environ.get(name) or default
+    if value not in choices:
+        raise ConfigError(f"{name} must be one of {', '.join(choices)}, not {value!r}")
+    return value
+
+
 @cache
 def get_settings() -> Settings:
     # Real environment variables win over .env, so tests and one-offs can override.
@@ -96,4 +120,9 @@ def get_settings() -> Settings:
         ffmpeg=ffmpeg,
         ffprobe=_find_tool("ffprobe", "FFPROBE"),
         default_player=int(os.environ["SOCCER_DEFAULT_PLAYER"]) if os.environ.get("SOCCER_DEFAULT_PLAYER") else None,
+        encoder=_choice("SOCCER_ENCODER", "auto", ENCODERS),
+        gpu_device=os.environ.get("SOCCER_GPU_DEVICE") or "/dev/dri/renderD128",
+        gpu_qp=_int("SOCCER_GPU_QP", 22, 1, 51),
+        cpu_crf=_int("SOCCER_CPU_CRF", 20, 0, 51),
+        cpu_speed=_choice("SOCCER_CPU_SPEED", "medium", X264_SPEEDS),
     )

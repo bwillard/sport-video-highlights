@@ -44,6 +44,12 @@ def probe(settings, path) -> dict:
     return {s["codec_type"]: s for s in json.loads(out)["streams"]}
 
 
+def decode_errors(settings, path) -> str:
+    """What ffmpeg complains about decoding every frame (empty if the file is clean)."""
+    return subprocess.run([settings.ffmpeg, "-v", "error", "-i", str(path), "-f", "null", "-"],
+                          capture_output=True, text=True).stderr
+
+
 def make_reel(client, card_s, card_style="overlay"):
     """Two clips from game A (out of order) and one from game B (no audio)."""
     a1 = add_clip(client, GAME_A, 3.0, 4.0)
@@ -116,10 +122,11 @@ def test_segment_maps_back_to_source_time(client, reel):
 def test_rerender_reuses_cached_intermediates(client, settings, reel):
     render(client, reel["id"])
     cache = settings.reels_dir / reel["id"] / "cache"
-    before = {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mp4")}
+    before = {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mov")}
+    assert before
     assert len(before) == 3
     render(client, reel["id"])
-    assert {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mp4")} == before
+    assert {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mov")} == before
 
 
 def test_stale_after_edits_and_missing_clips_skipped(client, reel):
@@ -287,6 +294,15 @@ def test_callout_freeze(client, settings, reel):
     corner = lambda img: sum(img.getpixel((w - 20, 20)))
     assert corner(held) < corner(before) * 0.7
 
+    # a callout on the clip's first frame: the hold comes first, then the whole clip
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": {**callout, "t_s": 0.5}})
+    [r] = render(client, rid)["renders"]
+    s = Segment(**r["segments"][1])
+    assert s.freeze_at_s == pytest.approx(s.reel_start_s) and s.reel_end_s - s.reel_start_s == pytest.approx(1.5 + freeze, abs=0.03)
+    assert int(probe(settings, out)["video"]["nb_read_frames"]) == 105 + 45
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": callout})
+    render(client, rid)
+
     # moving the callout makes the render out of date; turning freezes off changes the length
     client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"callout": {**callout, "x": 0.3}})
     assert client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"] == ["1 callout(s) added, moved or removed"]
@@ -384,6 +400,7 @@ def test_caption_overlay(client, settings, captioned_reel):
     start = round(card_seconds(r["start_card_lines"], 1) * fps)
     out = settings.reels_dir / rid / f"{PRESET}.mp4"
     assert int(probe(settings, out)["video"]["nb_read_frames"]) == start + 105 + 45
+    assert decode_errors(settings, out) == ""  # the joined pieces play cleanly
     assert segs[0].reel_start_s == pytest.approx(start / fps, abs=0.03)
 
     # the caption box darkens the bottom middle of the picture while shown, and is gone after
@@ -431,9 +448,10 @@ def test_variants_without_notes_or_callouts(client, settings, captioned_reel):
 
     # rendering one variant keeps the cached pieces the others use
     cache = settings.reels_dir / rid / "cache"
-    before = {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mp4")}
+    before = {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mov")}
+    assert before
     render(client, rid)
-    assert {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mp4")} == before
+    assert {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mov")} == before
 
     # a variant only goes out of date for what it shows
     client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"note": "Goal!", "callout": {"t_s": 1.0, "x": 0.5, "y": 0.3, "r": 0.1}})
@@ -442,3 +460,35 @@ def test_variants_without_notes_or_callouts(client, settings, captioned_reel):
     assert stale[f"{PRESET}-plain"] == []
     assert stale[f"{PRESET}-no_notes"] == ["callout freeze length changed", "1 callout(s) added, moved or removed"]
     assert "1 clip description(s) changed (note or kickoff time)" in stale[PRESET]
+
+
+def test_clip_spans():
+    from soccer_clips.reel.render import Span, clip_spans
+
+    # caption over the first 30 of 100 frames
+    assert clip_spans(100, 30, None, 0) == [Span(0, 30, caption=True), Span(30, 100)]
+    assert clip_spans(100, 0, None, 0) == [Span(0, 100)]
+    assert clip_spans(20, 30, None, 0) == [Span(0, 20, caption=True)]
+    # freeze at frame 50 for 10 frames: the caption is over 0-30 and the freeze
+    assert clip_spans(100, 30, 50, 10) == [Span(0, 30, caption=True), Span(30, 50), Span(hold=True, caption=True),
+                                          Span(50, 100)]
+    # caption longer than the part before the freeze: it carries on after it (70 - 20 - 10 = 40 frames)
+    assert clip_spans(100, 70, 20, 10) == [Span(0, 20, caption=True), Span(hold=True, caption=True),
+                                          Span(20, 60, caption=True), Span(60, 100)]
+    # freeze on the first frame, no caption
+    assert clip_spans(100, 0, 0, 10) == [Span(hold=True), Span(0, 100)]
+
+
+def test_note_edit_redoes_only_the_captioned_piece(client, settings, captioned_reel):
+    rid = captioned_reel["id"]
+    a2 = captioned_reel["items"][1]["clip_id"]  # game A 0.5s -> 2.0s
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"note": "Wins it"})
+    render(client, rid)
+    cache = settings.reels_dir / rid / "cache"
+    before = {p.name for p in cache.glob("*.mov")}
+    # same length, so the caption stays up as long (a longer note moves where the captioned piece ends)
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"note": "Lost it"})
+    render(client, rid)
+    after = {p.name for p in cache.glob("*.mov")}
+    # the old captioned piece is replaced by a new one; the plain rest of the clip and the other clips are reused
+    assert len(before - after) == 1 and len(after - before) == 1

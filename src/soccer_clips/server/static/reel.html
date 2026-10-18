@@ -237,7 +237,7 @@ function render() {
   }).join("");
 
   $("versions").innerHTML = view.renders.map((x) => `
-    <span class="version"><button data-version="${x.name}" class="${x.name === version ? "on" : ""}" title="watch this version">${versionLabel(x)}</button><a href="/reels/${reelId()}/${x.name}.mp4" download="${slugify(reel.title)}-${x.name}.mp4" title="download">⬇</a></span>`).join("");
+    <span class="version"><button data-version="${x.name}" class="${x.name === version ? "on" : ""}" title="watch this version${x.encoder ? ` (made with ${esc(x.encoder)})` : ""}">${versionLabel(x)}</button><a href="/reels/${reelId()}/${x.name}.mp4" download="${slugify(reel.title)}-${x.name}.mp4" title="download">⬇</a></span>`).join("");
 
   const stale = r?.stale || [];
   $("stale").hidden = !stale.length && !(r?.skipped.length);
