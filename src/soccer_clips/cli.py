@@ -30,6 +30,21 @@ def cmd_serve(store: Store, args: argparse.Namespace) -> None:
     uvicorn.run(create_app(store), host=args.host or s.host, port=args.port or s.port)
 
 
+def cmd_bench(store: Store, args: argparse.Namespace) -> None:
+    from soccer_clips.track import bench
+
+    if args.bench_command == "add":
+        c = bench.add_clip(store, args.game_id, args.clip_id, args.name, args.why or "")
+        print(f"added {c.name}: {c.game_id} {c.start_s:.1f}-{c.end_s:.1f}s")
+    elif args.bench_command == "cut":
+        names = bench.cut(store, force=args.force)
+        print(f"cut {len(names)} clip(s) into {bench.bench_dir(store.settings) / 'clips'}")
+    else:
+        for c in bench.load_set(store.settings).clips:
+            who = f"  callout #{c.callout_player}" if c.callout_player is not None else ("  callout" if c.callout else "")
+            print(f"{c.name:24} {c.end_s - c.start_s:5.1f}s  {c.game_id}{who}  {c.why}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="soccer-clips")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -38,10 +53,19 @@ def main() -> None:
     serve = sub.add_parser("serve", help="run the web server (scans on startup)")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
+    bench = sub.add_parser("bench", help="tracking benchmark clips (list them with no subcommand)")
+    bench_sub = bench.add_subparsers(dest="bench_command")
+    add = bench_sub.add_parser("add", help="add a tagged clip to the set (same name replaces it)")
+    add.add_argument("game_id")
+    add.add_argument("clip_id")
+    add.add_argument("name", help="file name, e.g. fc1-corner")
+    add.add_argument("--why", help="what it tests (default: the clip's note)")
+    cut = bench_sub.add_parser("cut", help="cut the set's mp4s (only new or changed ones)")
+    cut.add_argument("--force", action="store_true", help="recut everything")
     args = parser.parse_args()
 
     store = Store(get_settings())
-    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve}[args.command](store, args)
+    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench}[args.command](store, args)
 
 
 if __name__ == "__main__":

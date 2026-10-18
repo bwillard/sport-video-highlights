@@ -64,7 +64,8 @@ Detect and track every person (and the ball, see [Phase 4.1](phase4_identify.md#
 `tracklets.json` goes through `store.py` like every other JSON file; the `.npz` files are written once by the job (temp file + rename) and only read afterwards.
 
 **Tasks**
-- [ ] Benchmark YOLO11n/s × imgsz 640/1280 × frame step on a real 15s clip, for people *and* the ball (speed, does it find her, how often does it find the ball)
+- [x] Benchmark clip set: 7 clips (87s) from all 5 games in `bench/clips.json`, cut with `soccer-clips bench cut` (2026-10-18)
+- [ ] Benchmark YOLO11n/s × imgsz 640/1280 × frame step on the benchmark clips, for people *and* the ball (speed, does it find her, how often does it find the ball)
 - [ ] Whole-game tracking job (background worker, resumable, progress in the UI)
 - [ ] Gap interpolation + smoothing
 - [ ] Track store (`run.json`, `boxes.npz`, `tracklets.json`) + API returning boxes for a time window and player/tracklet

@@ -41,6 +41,7 @@ class Settings:
     gpu_qp: int = 22  # GPU quality: lower = better picture, bigger file
     cpu_crf: int = 20  # CPU quality: same scale
     cpu_speed: str = "medium"  # x264 preset: slower = smaller file at the same quality
+    bench_dir: Path | None = None  # tracking benchmark clips; None = a "bench" folder next to games_dir
 
 
 def _required_dir(name: str) -> Path:
@@ -125,4 +126,5 @@ def get_settings() -> Settings:
         gpu_qp=_int("SOCCER_GPU_QP", 22, 1, 51),
         cpu_crf=_int("SOCCER_CPU_CRF", 20, 0, 51),
         cpu_speed=_choice("SOCCER_CPU_SPEED", "medium", X264_SPEEDS),
+        bench_dir=Path(os.environ["SOCCER_BENCH_DIR"]) if os.environ.get("SOCCER_BENCH_DIR") else None,
     )
