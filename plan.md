@@ -6,19 +6,19 @@
 > - Log meaningful decisions/findings in **Decisions & Findings Log** (dated).
 > - Each phase has its own detailed doc in [plans/](plans/) — refine those as we build, and keep this doc as the summary.
 
-## Status (last updated 2026-10-15)
+## Status (last updated 2026-10-18)
 **Current phase:** Phase 3 in progress: 3.1 (freeze-frame callout) built. Phase 2 done. Reels: add clips from the tagger, render preview/full with hard cuts, watch on the reel page with chapters, jump to the full game (G) and back, download. 23 unit tests + headless-Chrome runs pass.
-**Next action:** Try callouts on a real reel and decide on the style. Then 3.2 (tracked marker), which starts with benchmarking YOLO11 on a real clip. Still open from Phase 1: tag a full real game and note friction. Still open from Phase 1: tag a full real game and note friction. Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
+**Next action:** Benchmark YOLO11 on a real 15s clip for players *and* the ball (Phase 3.2's first task): CPU speed, whether it finds her, how often it finds the ball. That decides the whole-game frame step and whether the ball needs its own model. Still open from Phase 1: tag a full real game and note friction. Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
 **Blocked on:** nothing, but forbeck_env needs cleanup: `soccer_clips` + fastapi/pydantic/uvicorn/httpx2 stack were accidentally pip-installed there and idna was upgraded 3.7 → 3.20 (see 2026-10-13 log).
 
 ## Goals
 1. **Tag clips** from a full-game Veo MP4 quickly — much faster than Veo's website.
-2. **Highlight my daughter** in a clip (callout circle at minimum, tracked marker ideally).
+2. **Highlight a player** (my daughter by default, or any teammate): a callout circle at minimum, and a marker that follows them during playback and in reels.
 3. **Build a highlight reel** from selected clips (landscape; a phone-friendly vertical version is a future idea).
-4. *(Stretch)* **Auto-find her** in the footage, using appearance (build, hair, cleats, socks, movement) rather than relying on her jersey number, which is often hidden.
+4. **Track the ball and every player on our team** through each game, and name the players, to power (a) highlighting any chosen player and (b) pulling together clips where that player is close to the ball. Identify players by appearance (build, hair, cleats, socks) as well as jersey numbers, which are often hidden.
 
 ## Constraints
-- **CPU only** — no GPU. Any ML step (tracking, segmentation, re-ID) must be benchmarked on CPU and designed to run on short clips, in the background, or at reduced frame rate.
+- **CPU for ML:** a 4-core Ryzen 3 3200G. Its Vega iGPU encodes/decodes video (VA-API) but can't run the models (no CUDA, no usable ROCm). ML steps must be benchmarked on the CPU; whole-game tracking runs once per game as an overnight background job, at a reduced frame rate if needed.
 - **Follow-cam MP4 only** — no Veo panorama. The virtual camera pans and zooms, so trackers must cope with camera motion, players are small, and she may leave the frame.
 - **Everything runs locally.** No uploading video of a minor to third-party services.
 - Reuse existing tools wherever possible; write glue code, not frameworks.
@@ -26,10 +26,11 @@
 ## Architecture (high level)
 - **Python package** (`soccer_clips`) in a dedicated **conda env** (`soccer-clips`, conda-forge channel), matching other projects. Defined in `environment.yml`; the package itself is installed into it with `pip install -e .`.
 - **FastAPI** backend + a single plain HTML/JS page using the browser's `<video>` element. No frontend build step.
-- **JSON files** for all state (no database): one `game.json` per game (game info + its clips), one `reel.json` per reel, per-clip track files, and JSONL for append-heavy data. **Pydantic** models are the schema. All reads/writes go through one `store.py` module (atomic writes, per-file locks), so swapping in SQLite later would stay cheap.
+- **JSON files** for all state (no database): one `game.json` per game (game info + its clips), one `reel.json` per reel, per-game track data (boxes in a compact `.npz` array file, labels in JSON), and JSONL for append-heavy data. **Pydantic** models are the schema. All reads/writes go through one `store.py` module (atomic writes, per-file locks), so swapping in SQLite later would stay cheap.
 - **ffmpeg** (≥ 6, installed from conda-forge into the project env; the 4.2 in miniconda's base env is too old) for all cutting, encoding and reel rendering.
-- **Ultralytics YOLO11 + BoT-SORT** for player detection/tracking; **supervision** for drawing overlays; **SAM 2 (tiny)** as a fallback tracker for hard clips.
-- **Re-ID embeddings** (OSNet via BoxMOT, or DINOv2) for the stretch auto-tagging.
+- **Ultralytics YOLO11 + BoT-SORT** for player (and stock ball) detection/tracking over whole games; a fine-tuned small YOLO for the ball if the stock class isn't good enough, plus a temporal filter.
+- **Re-ID embeddings** (OSNet via BoxMOT, or DINOv2) + jersey-number OCR to name players.
+- **Live highlights** are drawn in the browser on a `<canvas>` over the `<video>`, synced per frame with `requestVideoFrameCallback`; reels burn the same marker in.
 
 ### Repo layout (proposed)
 ```
@@ -64,9 +65,10 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
   <year>/<game_id>/
     game.json                                    # game info + clips (tags, rating, players, team, callout)
     probe.json                                   # raw ffprobe output
-    tracks/<clip_id>.json                        # Phase 3 tracks
+    tracks/run.json, boxes.npz, tracklets.json, ball.npz   # Phase 3/4 whole-game tracking
 <SOCCER_REELS_DIR>/<reel_id>/reel.json, *.mp4    # reel definitions + renders
-<SOCCER_GALLERY_DIR>/index.jsonl, crops/         # Phase 4 labelled crops of her
+<SOCCER_GAMES_DIR>/roster.json                   # Phase 4 team roster (number → name)
+<SOCCER_GALLERY_DIR>/index.jsonl, crops/         # Phase 4 labelled crops of each player
 ```
 - The `game_id` is the video's filename without `.mp4`, e.g. `gu11-vs-saa-2026-10-10`. The game date is parsed from the trailing `YYYY-MM-DD`.
 - In `.env`, all six directories are siblings under one root folder on the data drive: `full/`, `proxy/`, `clips/`, `games/`, `reels/`, `player_gallery/`.
@@ -86,15 +88,17 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
   Keyboard-driven web player: mark in/out, tag, rate, export clips.
 - [x] **Phase 2 — Highlight reel** → [plans/phase2_reel.md](plans/phase2_reel.md)
   Order clips, render with hard cuts and a title card, landscape. Watch reels in the app, jump back to the full game, download. (Fades, music, vertical, speed/slow-mo: future ideas.)
-- [ ] **Phase 3 — Highlight her** → [plans/phase3_highlight.md](plans/phase3_highlight.md)
-  3.1 freeze-frame callout (one click) → 3.2 tracked marker (click + correct) → 3.3 follow-crop.
-- [ ] **Phase 4 (stretch) — Auto-tag her** → [plans/phase4_autotag.md](plans/phase4_autotag.md)
-  Learn her appearance from manual clicks; suggest where she appears; confirm/reject.
+- [ ] **Phase 3 — Track & highlight players** → [plans/phase3_highlight.md](plans/phase3_highlight.md)
+  3.1 freeze-frame callout (done) → 3.2 whole-game tracking job → 3.3 live highlight during playback (click a player, correct by clicking) → 3.4 marker burned into reels → 3.5 follow-crop (later).
+- [ ] **Phase 4 — Identify players & track the ball** → [plans/phase4_identify.md](plans/phase4_identify.md)
+  4.1 ball tracking → 4.2 team split by kit colour → 4.3 name our players (re-ID + jersey OCR + confirm/reject) → 4.4 suggested clips where a chosen player is near the ball.
 
 **Milestones**
 - Phases 0–2 give a usable tool: tag a game and produce a shareable reel.
 - Phase 3.1 is the highest payoff for the effort — do it before 3.2/3.3.
-- Use the tool on a game or two before starting Phase 4; the manual clicks from Phase 3 are its training data.
+- The Phase 3.2 benchmark measures the ball too, since ball detection is the biggest unknown for 4.4.
+- 3.3 works without Phase 4 (click a player to follow them); Phase 4.3 then makes it pick-by-name. Correction clicks from 3.3 are 4.3's training data, so use 3.3 on a game or two first.
+- 4.4 (near-the-ball clips) needs 4.1 and 4.3.
 
 ---
 
@@ -131,3 +135,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-17** — Pages and static files are served with `Cache-Control: no-cache`: a browser reused an old cached `common.js` with the new tagger page, which stopped the timer, match clock and kickoff display.
 - **2026-10-17** — Reels can be rendered without the clip notes, or without notes and callouts, alongside the full version (`Render.variant`), to share a clean copy while keeping the annotated one.
 - **2026-10-18** — Full reel renders use the GPU's H.264 encoder (VA-API) when it works, falling back to x264; quality and encoder are `.env` settings. Every piece is encoded once at final quality and the join copies the video, and clips are cut into captioned/plain/freeze pieces so only the captioned bits use the CPU. A real 3.5-minute reel went from 533 s to 98 s. Previews stay on x264 because this GPU's driver hangs at 960×540.
+- **2026-10-18** — Re-scoped Phases 3–4 from "highlight her in a clip" to "track the ball and every player on our team through the whole game", to power highlighting any chosen player and finding clips where a player is near the ball. Tracking runs once per game (not per clip) and is stored per game: boxes in `tracks/boxes.npz` (too many for JSON: up to ~2M per game), labels in `tracks/tracklets.json`. Live highlights are a canvas over the video synced with `requestVideoFrameCallback`, interpolating between samples, so changing the highlighted player needs no re-render; reels burn in the same marker. "Near the ball" is image-space distance divided by the player's box height (no pitch calibration). SAM 2 fallback dropped (too slow on this CPU for whole games). Phase 4 doc renamed to `phase4_identify.md`. Hardware: Ryzen 3 3200G, 4 cores; the iGPU can't run the models.
