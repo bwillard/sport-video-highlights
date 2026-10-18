@@ -96,6 +96,14 @@ For a chosen player, find the stretches of a game where they're involved with th
 - Is training a ball model on this CPU fast enough, or is it worth labelling here and training elsewhere?
 - Acceptable full-game processing time (overnight is fine?).
 
+## Findings
+- **2026-10-18** — Stock YOLO11 `sports ball` on the 7 bench clips (Phase 3.2 benchmark; details in `bench/results/*/summary.json`):
+  - **Resolution matters most.** Share of frames with a ball detection at conf ≥ 0.25, excluding elite-shot (a spare ball sits by the camera): n640 0–2%; s640 0–23%; n1280 5–46%; s1280 2–38%; s1280 on the centre 1280×720 crop at native resolution 1–53% (best on 5 of 6 clips). The crowded corner (ebu-corner) is the worst for every 1280 variant (1–24%).
+  - **Detections are mostly real.** Checked by eye on random crops from s1280-centre: ~35/40 real at conf ≥ 0.25, ~32/42 real at 0.1–0.25. False hits: corner flags, bags, a white cleat, blonde ponytails/heads, a water bottle, a spare ball on the sideline (stationary, so a temporal filter can drop it). Weak detections are worth keeping for the temporal filter.
+  - **Recall is unknown** without ground truth: frames with no detection may have the ball out of the crop, hidden, in the air, or just missed. Labelling the ball on ~150 frames would measure it.
+  - **Cost on CPU:** s1280-centre is 2.1 fps, so ~18 h per game every frame, ~6 h every 3rd frame (too sparse for a kicked ball). Not practical on this CPU; see [hardware.md](hardware.md).
+  - Untested: full frame at native resolution (imgsz 1920; ~2× the cost of 1280), SAHI-style tiles, a fine-tuned ball model.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

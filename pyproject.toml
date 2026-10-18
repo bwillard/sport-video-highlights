@@ -14,6 +14,10 @@ dependencies = [
     "pillow",
 ]
 
+[project.optional-dependencies]
+# Tracking (Phase 3.2+); torch comes from environment.yml (CPU build).
+track = ["ultralytics", "lap", "onnxruntime"]
+
 [project.scripts]
 soccer-clips = "soccer_clips.cli:main"
 

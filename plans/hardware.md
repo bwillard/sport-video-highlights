@@ -1,6 +1,6 @@
 # Hardware for ML (tracking, ball, identity)
 
-**Status:** Undecided (2026-10-18). Options below; the Phase 3.2 benchmark runs on the CPU first either way, since the same code runs on CPU and GPU.
+**Status:** Undecided (2026-10-18). CPU benchmark done (table below): players are workable overnight on the CPU, the ball at the resolution it needs is not (~18 h/game every frame).
 **Why it matters:** Phases 3.2–4 run detection on every frame of whole games, need higher resolution for the ball, and involve a lot of trial and error (settings, re-runs, training a ball model). Turnaround time decides how fast that goes.
 
 ## The box today
@@ -41,7 +41,14 @@ If the local-only rule stays, add a GPU: it's the only option that's both privat
 ## Measurements
 | Hardware | Model / imgsz / frame step | fps | Full game (h) | Notes |
 |---|---|---|---|---|
-| Ryzen 3 3200G | | | | |
+| Ryzen 3 3200G | YOLO11n / 640 / every frame | 8.8 | 4.3 | Misses her in 2 of 5 bench clips; ball almost never found |
+| Ryzen 3 3200G | YOLO11n / 640 / every 3rd | 8.8 | 1.4 | |
+| Ryzen 3 3200G | YOLO11s / 640 / every frame | 6.3 | 6.0 | |
+| Ryzen 3 3200G | YOLO11n / 1280 / every frame | 4.8 | 7.8 | Finds her in 5/5; ball in 5–46% of frames |
+| Ryzen 3 3200G | YOLO11n / 1280 / every 2nd | 4.8 | 3.9 | Plausible overnight player tracking |
+| Ryzen 3 3200G | YOLO11s / 1280 centre crop / every frame | 2.1 | 18 | Best ball (1–53% of frames); ONNX Runtime ~15% faster |
+
+Full game = 75 min = 135k frames. Detection is ~85–97% of the time per frame; decode 2 ms, tracker 12–20 ms.
 
 ## Sources (prices, checked 2026-10-18)
 - [GPU Poet: RTX 5060 Ti price, October 2026](https://gpupoet.com/gpu/learn/price/october-2026/nvidia-geforce-rtx-5060-ti)

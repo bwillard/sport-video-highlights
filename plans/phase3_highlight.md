@@ -65,7 +65,7 @@ Detect and track every person (and the ball, see [Phase 4.1](phase4_identify.md#
 
 **Tasks**
 - [x] Benchmark clip set: 7 clips (87s) from all 5 games in `bench/clips.json`, cut with `soccer-clips bench cut` (2026-10-18)
-- [ ] Benchmark YOLO11n/s × imgsz 640/1280 × frame step on the benchmark clips, for people *and* the ball (speed, does it find her, how often does it find the ball)
+- [x] Benchmark YOLO11n/s × imgsz 640/1280 (+ centre crop) on the benchmark clips, for people *and* the ball: `soccer-clips bench run`, results in `bench/results/` (2026-10-18; see Findings)
 - [ ] Whole-game tracking job (background worker, resumable, progress in the UI)
 - [ ] Gap interpolation + smoothing
 - [ ] Track store (`run.json`, `boxes.npz`, `tracklets.json`) + API returning boxes for a time window and player/tracklet
@@ -129,11 +129,18 @@ Use the smoothed track to drive a crop window:
 ## Benchmarks / findings
 | Measure | Value |
 |---|---|
-| Her typical height in px (1080p) | ~70 px for players in one midfield frame of the SAA game (rough, one sample) |
-| YOLO11n @640, fps on CPU | |
-| YOLO11s @1280, fps on CPU | |
-| Full game, hours (model / imgsz / step) | |
+| Her typical height in px (1080p) | 58–73 px at the callout frame across 5 bench clips |
+| YOLO11n @640, fps on CPU | 8.8 (detect 91 ms + track 20 ms per frame) |
+| YOLO11s @640, fps on CPU | 6.3 |
+| YOLO11n @1280, fps on CPU | 4.8 |
+| YOLO11s @1280, fps on CPU | 2.1 (detect 464 ms); ONNX Runtime 2.6 |
+| Full 75-min game (135k frames), hours on CPU | n640: 4.3 every frame, 1.4 every 3rd; n1280: 7.8 / 2.6; s1280: 18 / 6 |
 | Avg correction clicks / clip | |
 
 ## Findings
+- **2026-10-18** — First benchmark (`bench/results/`, 7 clips, 2,605 frames, Ryzen 3 3200G). Speeds in the table above. Detection is almost all of the time; decode is 2 ms/frame and BoT-SORT 12–20 ms/frame, so on a GPU the tracker (its camera-motion step) would become the limit at ~50–80 fps unless it runs on a smaller image. ONNX Runtime is only ~15% faster than PyTorch on this CPU.
+  - **Finding her:** at the callout frame, the box under the click was found in 5/5 clips at 1280 (either model), 4/5 with s640, 3/5 with n640. Small, distant players need 1280 (or the s model).
+  - **Keeping her:** track IDs break a lot. 40–190 track IDs per clip for ~15–25 people in view, and the track at her callout covered anywhere from 1% to 100% of its clip (typically 10–50%). Joining tracklets (correction clicks in 3.3, linking in Phase 4.3) is the main work, as expected.
+  - **Not just players:** 15–30 "people" per frame at 1280, including parents, coaches and subs on the sidelines. Tracking needs a pitch filter (e.g. drop boxes above the far touchline / outside the field area) before team split.
+  - Annotated videos: `soccer-clips bench draw <variant> [clips]` writes `bench/results/<variant>/<clip>.mp4` (her track thick yellow, balls red with confidence). Drawn for s1280-centre.
 - **2026-10-15** — 3.1 tested: 27 unit tests (callout API rules, exact 45-frame freeze, A/V sync, the held frame has the ring and is dimmed outside it, jump-back before/during/after the freeze, out-of-date detection) and a headless-Chrome run of placing (click, drag to size, Esc, Shift+C) and the reel freeze + `G`.

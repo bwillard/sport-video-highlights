@@ -14,3 +14,11 @@ dependencies:
   - pip
   - pip:
       - httpx2  # starlette 1.x testclient wants httpx2, not httpx
+      # Tracking (Phase 3.2+). CPU builds of torch: this box has no CUDA GPU.
+      # Drop the +cpu pins and the extra index if one is added.
+      - --extra-index-url https://download.pytorch.org/whl/cpu
+      - torch==2.14.1+cpu
+      - torchvision==0.29.1+cpu
+      - ultralytics
+      - lap  # ultralytics' tracker matching
+      - onnxruntime
