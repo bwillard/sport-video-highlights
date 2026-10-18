@@ -27,6 +27,7 @@ class Job(BaseModel):
     fast: bool = False  # export
     reel_id: str | None = None  # render
     preset: str | None = None  # render
+    variant: str | None = None  # render
     status: JobStatus = "queued"
     progress: float = 0.0  # 0..1
     error: str | None = None

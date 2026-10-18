@@ -9,6 +9,8 @@
   #chapters li { grid-template-columns: 28px 64px 1fr auto; }
   #items li { grid-template-columns: 28px 1fr auto; cursor: default; }
   #items li:hover { background: none; }
+  #versions { flex-wrap: wrap; }
+  #versions .version { white-space: nowrap; }
   #title { width: 100%; padding: 4px 6px; font-weight: 600; }
   #cardS, #calloutS { padding: 2px 4px; }
   .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
@@ -73,6 +75,12 @@
       <div class="row" style="margin-top:0">
         <button data-render="preview_540p" title="960×540, fast — check order and cuts">Render preview</button>
         <button data-render="landscape_1080p" title="1920×1080, slower">Render full</button>
+        <label title="What to put on the clips. Each choice is its own video, so you can keep one with your notes and one to share without them. The opening card and game times are always shown.">
+          with <select id="variant">
+            <option value="all">notes and callouts</option>
+            <option value="no_notes">callouts, no notes</option>
+            <option value="plain">no notes or callouts</option>
+          </select></label>
         <label title="How each clip's game time and note are shown: a caption over the start of the clip, or a title card before it. The reel's opening card is a card either way.">
           descriptions <select id="cardStyle">
             <option value="overlay">overlay on video</option>
@@ -103,9 +111,13 @@
 <script>
 const MIN_RATE = 0.5, MAX_RATE = 8, RATE_STEP = 0.5;
 const PRESET_NAMES = { landscape_1080p: "full 1080p", preview_540p: "preview 540p" };
+const VARIANT_NAMES = { all: "", no_notes: " · no notes", plain: " · no notes or callouts" };
+// "full 1080p · no notes"; works for renders and render jobs
+const versionLabel = (x) => PRESET_NAMES[x.preset] + (VARIANT_NAMES[x.variant || "all"] ?? "");
 const v = $("v"), canvas = $("timeline");
 
-let reels = [], view = null, preset = null, games = {}, pollTimer = null, hoverX = null;
+// version: the render being watched, by name ("landscape_1080p", "preview_540p-plain", ...)
+let reels = [], view = null, version = null, games = {}, pollTimer = null, hoverX = null;
 let defaultPlayer = null;  // SOCCER_DEFAULT_PLAYER, highlighted in the lists
 
 const reelId = () => view?.reel.id;
@@ -116,7 +128,7 @@ const longDate = (iso) => {
 };
 // the games in this reel, in the order they first appear
 const reelGames = () => [...new Set(view.items.map((i) => i.game_id))].map((id) => games[id] || { id });
-const current = () => view?.renders.find((r) => r.preset === preset) || null;
+const current = () => view?.renders.find((r) => r.name === version) || null;
 const segments = () => current()?.segments || [];
 const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "reel";
 
@@ -149,7 +161,7 @@ function itemInfo(seg) {
 }
 const taggerLink = (gameId, t, clipId) =>
   `/${makeHash({ game: gameId, t: t.toFixed(2), clip: clipId, back: reelUrl() })}`;
-const reelUrl = () => `/reel${makeHash({ reel: reelId(), preset, t: v.currentTime.toFixed(2) })}`;
+const reelUrl = () => `/reel${makeHash({ reel: reelId(), preset: version, t: v.currentTime.toFixed(2) })}`;
 
 // ---------- loading ----------
 async function loadReels() {
@@ -170,8 +182,8 @@ async function openReel(id, wantPreset = null, startT = 0) {
   $("noReel").hidden = true;
   $("main").hidden = false;
   history.replaceState(null, "", `/reel${makeHash({ reel: id })}`);
-  const available = view.renders.map((r) => r.preset);
-  preset = available.includes(wantPreset) ? wantPreset
+  const available = view.renders.map((r) => r.name);
+  version = available.includes(wantPreset) ? wantPreset
          : available.includes("landscape_1080p") ? "landscape_1080p" : available[0] || null;
   loadVideo(startT);
   render();
@@ -185,7 +197,7 @@ function loadVideo(startT = 0) {
   v.hidden = !r;
   if (!r) { v.removeAttribute("src"); v.load(); return; }
   // created_at busts the browser cache after a re-render
-  v.src = `/reels/${reelId()}/${r.preset}.mp4?v=${encodeURIComponent(r.created_at)}`;
+  v.src = `/reels/${reelId()}/${r.name}.mp4?v=${encodeURIComponent(r.created_at)}`;
   v.addEventListener("loadedmetadata", () => { v.currentTime = Math.min(startT, v.duration || 0); }, { once: true });
   v.defaultPlaybackRate = v.playbackRate = 1;
 }
@@ -197,7 +209,7 @@ function showReelList() {
   history.replaceState(null, "", "/reel");
   $("reelList").innerHTML = reels.length ? reels.map((r) => `
     <li data-id="${r.reel.id}"><span><b>${esc(r.reel.title)}</b> <span class="stat">· ${r.reel.items.length} clip(s)</span></span>
-    <span class="stat">${r.renders.map((x) => `${PRESET_NAMES[x.preset]} ${fmt(x.duration_s)}`).join(" · ") || "not rendered"}</span></li>`).join("")
+    <span class="stat">${r.renders.map((x) => `${versionLabel(x)} ${fmt(x.duration_s)}`).join(" · ") || "not rendered"}</span></li>`).join("")
     : `<li class="empty">No reels yet. In the tagger, filter the clip list and press “Add shown to reel”.</li>`;
 }
 
@@ -225,8 +237,7 @@ function render() {
   }).join("");
 
   $("versions").innerHTML = view.renders.map((x) => `
-    <button data-preset="${x.preset}" class="${x.preset === preset ? "on" : ""}" title="watch this version">${PRESET_NAMES[x.preset]}</button>
-    <a href="/reels/${reelId()}/${x.preset}.mp4" download="${slugify(reel.title)}-${x.preset}.mp4" title="download">⬇</a>`).join("");
+    <span class="version"><button data-version="${x.name}" class="${x.name === version ? "on" : ""}" title="watch this version">${versionLabel(x)}</button><a href="/reels/${reelId()}/${x.name}.mp4" download="${slugify(reel.title)}-${x.name}.mp4" title="download">⬇</a></span>`).join("");
 
   const stale = r?.stale || [];
   $("stale").hidden = !stale.length && !(r?.skipped.length);
@@ -316,13 +327,13 @@ $("deleteReel").addEventListener("click", async () => {
 // ---------- render jobs ----------
 document.querySelectorAll("[data-render]").forEach((b) => b.addEventListener("click", async () => {
   b.blur();
-  const job = await api("POST", `/api/reels/${reelId()}/render`, { preset: b.dataset.render });
+  const job = await api("POST", `/api/reels/${reelId()}/render`, { preset: b.dataset.render, variant: $("variant").value });
   watchJob(job);
 }));
 
 function watchJob(job) {
   clearTimeout(pollTimer);
-  const name = PRESET_NAMES[job.preset];
+  const name = versionLabel(job);
   $("jobRow").hidden = false;
   $("jobText").textContent = job.status === "queued" ? `${name}: waiting…` : `${name}: ${Math.round(job.progress * 100)}%`;
   $("jobBar").style.width = `${job.progress * 100}%`;
@@ -336,7 +347,7 @@ function watchJob(job) {
   if (job.status === "failed") return flash(`render failed: ${job.error}`, true);
   flash(`${name} rendered`);
   const id = reelId();
-  if (job.reel_id === id) openReel(id, job.preset, 0);
+  if (job.reel_id === id) openReel(id, job.output.split("/").pop().replace(/\.mp4$/, ""), 0);
 }
 
 async function resumeJobs() {
@@ -351,11 +362,11 @@ async function resumeJobs() {
 // ---------- previewing one clip from its game ----------
 // Plays the clip straight from the full-game video (no render needed), then
 // returns to the reel at the same spot.
-let preview = null;  // {item, back: {preset, t}}
+let preview = null;  // {item, back: {version, t}}
 
 function startPreview(i) {
   const it = view.items[i];
-  if (!preview) preview = { back: { preset, t: v.currentTime } };
+  if (!preview) preview = { back: { version, t: v.currentTime } };
   preview.item = it;
   preview.n = i + 1;
   $("previewText").textContent = `Previewing clip ${i + 1}: ${clipLabel(it.game_id, it.start_s)} · ${shortGame(it.game_id)} · ` +
@@ -379,7 +390,7 @@ function endPreview() {
   preview = null;
   $("previewBar").hidden = true;
   canvas.hidden = false;
-  preset = back.preset;
+  version = back.version;
   loadVideo(back.t);
   lastChapter = lastHeader = undefined;  // refresh the header and lists
   render();
@@ -418,11 +429,15 @@ $("chapters").addEventListener("click", (e) => {
   seekToChapter(segments()[i]);
 });
 $("versions").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-preset]");
+  const b = e.target.closest("button[data-version]");
   if (!b) return;
   b.blur();
-  const t = v.currentTime;  // both versions share one timeline
-  preset = b.dataset.preset;
+  // Versions can differ in length (callout freezes), so keep the place within the playing clip.
+  const from = segments(), i = segmentAt(v.currentTime);
+  version = b.dataset.version;
+  const to = segments();
+  const t = i < 0 || !to[i] ? Math.min(v.currentTime, current().duration_s)
+          : to[i].reel_start_s + Math.min(Math.max(0, v.currentTime - from[i].reel_start_s), to[i].reel_end_s - to[i].reel_start_s);
   loadVideo(t);
   render();
 });
@@ -449,7 +464,7 @@ document.addEventListener("keydown", (e) => {
       ArrowLeft: () => seekTo(v.currentTime - 5),
       ArrowRight: () => seekTo(v.currentTime + 5),
       g: () => {
-        history.replaceState(null, "", `/reel${makeHash({ reel: reelId(), preset: preview.back.preset, t: preview.back.t.toFixed(2) })}`);
+        history.replaceState(null, "", `/reel${makeHash({ reel: reelId(), preset: preview.back.version, t: preview.back.t.toFixed(2) })}`);
         location.href = `/${makeHash({ game: preview.item.game_id, t: v.currentTime.toFixed(2), clip: preview.item.clip_id,
                                        back: location.pathname + location.hash })}`;
       },

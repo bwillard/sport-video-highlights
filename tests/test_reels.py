@@ -27,8 +27,8 @@ def add_clip(client, game, start, end):
     return client.post(f"/api/games/{game}/clips", json={"start_s": start, "end_s": end}).json()["id"]
 
 
-def render(client, reel_id):
-    job = client.post(f"/api/reels/{reel_id}/render", json={"preset": PRESET}).json()
+def render(client, reel_id, variant="all"):
+    job = client.post(f"/api/reels/{reel_id}/render", json={"preset": PRESET, "variant": variant}).json()
     client.app_state.jobs.wait()
     job = client.get(f"/api/jobs/{job['id']}").json()
     assert job["status"] == "done", job["error"]
@@ -404,3 +404,41 @@ def test_caption_overlay(client, settings, captioned_reel):
     assert "1 clip description(s) changed (note or kickoff time)" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
     client.patch(f"/api/reels/{rid}", json={"card_style": "card"})
     assert "descriptions switched between overlay and title cards" in client.get(f"/api/reels/{rid}").json()["renders"][0]["stale"]
+
+
+def test_variants_without_notes_or_callouts(client, settings, captioned_reel):
+    rid = captioned_reel["id"]
+    a2 = captioned_reel["items"][1]["clip_id"]  # game A 0.5s -> 2.0s
+    client.patch(f"/api/games/{GAME_A}", json={"kickoff_1h_s": 0.0})
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"note": "Wins it in midfield",
+                                                          "callout": {"t_s": 1.5, "x": 0.5, "y": 0.3, "r": 0.1}})
+    render(client, rid)
+    render(client, rid, "no_notes")
+    renders = {r["name"]: r for r in render(client, rid, "plain")["renders"]}
+    assert set(renders) == {PRESET, f"{PRESET}-no_notes", f"{PRESET}-plain"}
+    for name, r in renders.items():
+        assert (settings.reels_dir / rid / f"{name}.mp4").exists() and r["file"] == f"{name}.mp4"
+        assert r["start_card_lines"] and r["stale"] == []
+
+    captions = lambda name: [s["caption_lines"] for s in renders[name]["segments"]]
+    freezes = lambda name: [s["freeze_at_s"] is not None for s in renders[name]["segments"]]
+    assert captions(PRESET)[1] == ["1'", "Wins it in midfield"]
+    assert captions(f"{PRESET}-no_notes") == captions(f"{PRESET}-plain") == [["1'"], ["1'"], ["0:01"]]
+    assert freezes(PRESET) == freezes(f"{PRESET}-no_notes") == [False, True, False]
+    assert freezes(f"{PRESET}-plain") == [False, False, False]
+    assert client.get(f"/reels/{rid}/{PRESET}-plain.mp4").status_code == 200
+    assert client.get(f"/reels/{rid}/../reel.json.mp4").status_code == 404
+
+    # rendering one variant keeps the cached pieces the others use
+    cache = settings.reels_dir / rid / "cache"
+    before = {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mp4")}
+    render(client, rid)
+    assert {p.name: p.stat().st_mtime_ns for p in cache.glob("*.mp4")} == before
+
+    # a variant only goes out of date for what it shows
+    client.patch(f"/api/games/{GAME_A}/clips/{a2}", json={"note": "Goal!", "callout": {"t_s": 1.0, "x": 0.5, "y": 0.3, "r": 0.1}})
+    client.patch(f"/api/reels/{rid}", json={"callout_s": 1})
+    stale = {r["name"]: r["stale"] for r in client.get(f"/api/reels/{rid}").json()["renders"]}
+    assert stale[f"{PRESET}-plain"] == []
+    assert stale[f"{PRESET}-no_notes"] == ["callout freeze length changed", "1 callout(s) added, moved or removed"]
+    assert "1 clip description(s) changed (note or kickoff time)" in stale[PRESET]

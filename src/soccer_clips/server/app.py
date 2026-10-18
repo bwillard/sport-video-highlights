@@ -20,7 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from soccer_clips.config import get_settings
 from soccer_clips.export import export_job, run_export
 from soccer_clips.jobs import Job, JobQueue
-from soccer_clips.models import Callout, CardStyle, Clip, Game, Preset, Rating, Reel, ReelItem, Render, Tag
+from soccer_clips.models import (
+    Callout, CardStyle, Clip, Game, Preset, Rating, Reel, ReelItem, Render, Tag, Variant, render_name,
+)
 from soccer_clips.reel.render import render_job, run_render, stale_reasons
 from soccer_clips.scan import scan
 from soccer_clips.store import Store
@@ -87,6 +89,7 @@ class ReelPatch(RequestBody):
 
 class RenderRequest(RequestBody):
     preset: Preset = "landscape_1080p"
+    variant: Variant = "all"
 
 
 class ReelItemView(ReelItem):
@@ -274,9 +277,11 @@ def create_app(store: Store | None = None) -> FastAPI:
             ))
         renders = []
         for preset in get_args(Preset):
-            render = store.load_render(reel.id, preset)
-            if render and (store.reel_dir(reel.id) / render.file).exists():
-                renders.append(RenderView(**render.model_dump(), stale=stale_reasons(store, reel, render)))
+            for variant in get_args(Variant):
+                render = store.load_render(reel.id, render_name(preset, variant))
+                if render and (store.reel_dir(reel.id) / render.file).exists():
+                    renders.append(RenderView(**render.model_dump(exclude={"name"}),
+                                              stale=stale_reasons(store, reel, render)))
         return ReelView(reel=reel, items=items, renders=renders)
 
     @app.get("/api/reels")
@@ -325,19 +330,21 @@ def create_app(store: Store | None = None) -> FastAPI:
         reel = load_reel(reel_id)
         if not reel.items:
             raise HTTPException(422, "reel has no clips")
-        existing = jobs.active(reel_id=reel_id, preset=body.preset)
+        existing = jobs.active(reel_id=reel_id, preset=body.preset, variant=body.variant)
         if existing:
             return existing
-        return jobs.submit(render_job(reel_id, body.preset), lambda job: run_render(store, job))
+        return jobs.submit(render_job(reel_id, body.preset, body.variant), lambda job: run_render(store, job))
 
-    @app.get("/reels/{reel_id}/{preset}.mp4")
-    def reel_file(reel_id: str, preset: Preset) -> FileResponse:
+    render_names = {render_name(p, v) for p in get_args(Preset) for v in get_args(Variant)}
+
+    @app.get("/reels/{reel_id}/{name}.mp4")
+    def reel_file(reel_id: str, name: str) -> FileResponse:
         reel = load_reel(reel_id)
-        path = store.reel_dir(reel_id) / f"{preset}.mp4"
-        if not path.exists():
+        path = store.reel_dir(reel_id) / f"{name}.mp4"
+        if name not in render_names or not path.exists():
             raise HTTPException(404, "not rendered")
         # inline so <video> can play it; the page's download link sets the save-as name
-        return FileResponse(path, media_type="video/mp4", filename=f"{slug(reel.title)}-{preset}.mp4",
+        return FileResponse(path, media_type="video/mp4", filename=f"{slug(reel.title)}-{name}.mp4",
                             content_disposition_type="inline")
 
     @app.get("/video/{game_id}")

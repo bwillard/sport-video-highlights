@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from soccer_clips.config import Settings
-from soccer_clips.models import DEFAULT_TAGS, Game, Preset, Reel, Render, Tag
+from soccer_clips.models import DEFAULT_TAGS, Game, Reel, Render, Tag
 
 _tags_adapter = TypeAdapter(list[Tag])
 
@@ -158,12 +158,13 @@ class Store:
         reels = [Reel.model_validate_json(p.read_text()) for p in self.settings.reels_dir.glob("*/reel.json")]
         return sorted(reels, key=lambda r: r.created_at, reverse=True)
 
-    def render_path(self, reel_id: str, preset: Preset) -> Path:
-        return self.reel_dir(reel_id) / f"{preset}.render.json"
+    def render_path(self, reel_id: str, name: str) -> Path:
+        """name: render_name(preset, variant)"""
+        return self.reel_dir(reel_id) / f"{name}.render.json"
 
-    def load_render(self, reel_id: str, preset: Preset) -> Render | None:
-        path = self.render_path(reel_id, preset)
+    def load_render(self, reel_id: str, name: str) -> Render | None:
+        path = self.render_path(reel_id, name)
         return Render.model_validate_json(path.read_text()) if path.exists() else None
 
     def save_render(self, render: Render) -> None:
-        atomic_write_text(self.render_path(render.reel_id, render.preset), render.model_dump_json(indent=2) + "\n")
+        atomic_write_text(self.render_path(render.reel_id, render.name), render.model_dump_json(indent=2) + "\n")

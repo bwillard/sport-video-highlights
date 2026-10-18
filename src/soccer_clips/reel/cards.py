@@ -95,10 +95,10 @@ def start_card_lines(reel: Reel, games: list[Game]) -> list[str]:
     return lines
 
 
-def clip_card_lines(game: Game, clip: Clip) -> list[str]:
-    """[time in the game, note (if any)]."""
+def clip_card_lines(game: Game, clip: Clip, notes: bool = True) -> list[str]:
+    """[time in the game, note (if any, and notes is set)]."""
     lines = [game.time_label(clip.start_s)]
-    if clip.note and clip.note.strip():
+    if notes and clip.note and clip.note.strip():
         lines.append(clip.note.strip())
     return lines
 

@@ -2,9 +2,11 @@
 Render a reel: normalise each clip to an intermediate file (same size, frame
 rate, pixel format and audio layout; cached), make the title cards (an opening
 card, then one before each clip; also cached), measure everything, then join
-it with hard cuts into <reels_dir>/<reel_id>/<preset>.mp4.
+it with hard cuts into <reels_dir>/<reel_id>/<name>.mp4, where the name is
+the preset plus the variant (see models.Variant: a render can leave out the
+clip notes, or the notes and the callout freezes).
 
-Next to the mp4, <preset>.render.json records where each clip landed in the
+Next to the mp4, <name>.render.json records where each clip landed in the
 reel and where it came from in its game, so the reel page can jump back to the
 full game. Segment spans come from the measured intermediates, not from the
 clip ranges, so they stay right once transitions and speed changes arrive.
@@ -20,12 +22,12 @@ from pathlib import Path
 
 from soccer_clips import ffmpeg
 from soccer_clips.jobs import Job
-from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment
+from soccer_clips.models import Clip, Game, Preset, Reel, ReelItem, Render, Segment, Variant, render_name
 from soccer_clips.reel.callout import STYLE_VERSION, callout_frame, splice_callout
 from soccer_clips.reel.cards import (
     card_seconds, clip_card_lines, draw_caption, draw_card, font_path, LAYOUT_VERSION, start_card_lines,
 )
-from soccer_clips.store import Store
+from soccer_clips.store import Store, atomic_write_text
 
 # Bump to invalidate every cached intermediate (e.g. after changing the normalise filters).
 CACHE_VERSION = 1
@@ -50,12 +52,21 @@ PRESETS: dict[str, PresetSpec] = {
 }
 
 
-def render_job(reel_id: str, preset: Preset) -> Job:
-    return Job(kind="render", reel_id=reel_id, preset=preset)
+def shows_notes(variant: Variant) -> bool:
+    return variant == "all"
+
+
+def shows_callouts(variant: Variant) -> bool:
+    return variant != "plain"
+
+
+def render_job(reel_id: str, preset: Preset, variant: Variant = "all") -> Job:
+    return Job(kind="render", reel_id=reel_id, preset=preset, variant=variant)
 
 
 def run_render(store: Store, job: Job) -> None:
-    render = render_reel(store, job.reel_id, job.preset, lambda f: setattr(job, "progress", min(f, 0.99)))
+    render = render_reel(store, job.reel_id, job.preset, lambda f: setattr(job, "progress", min(f, 0.99)),
+                         variant=job.variant or "all")
     job.output = f"{job.reel_id}/{render.file}"
 
 
@@ -157,10 +168,12 @@ def _cache_name(preset: str, *key) -> str:
 
 
 def render_reel(store: Store, reel_id: str, preset: Preset,
-                on_progress: Callable[[float], None] = lambda f: None) -> Render:
+                on_progress: Callable[[float], None] = lambda f: None, variant: Variant = "all") -> Render:
     s = store.settings
     reel = store.load_reel(reel_id)
     spec = PRESETS[preset]
+    name = render_name(preset, variant)
+    notes = shows_notes(variant)
     folder = store.reel_dir(reel_id)
     cache = folder / "cache"
     cache.mkdir(parents=True, exist_ok=True)
@@ -191,9 +204,10 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
     overlay = reel.card_style == "overlay" and reel.card_s > 0
     entries = []  # (game, clip, card lines, card path or None, clip path, callout frame or None, caption)
     used = set()  # cache files to keep
-    freeze_s = float(max(1, round(reel.freeze_s * OUTPUT_FPS)) / OUTPUT_FPS) if reel.freeze_s > 0 else 0.0
+    freeze_s = float(max(1, round(reel.freeze_s * OUTPUT_FPS)) / OUTPUT_FPS) \
+        if reel.freeze_s > 0 and shows_callouts(variant) else 0.0
     for (game, clip), (seek_s, duration_s) in zip(parts, windows):
-        lines = clip_card_lines(game, clip) if reel.card_s > 0 else []
+        lines = clip_card_lines(game, clip, notes) if reel.card_s > 0 else []
         card_path = None if overlay else card(lines)
         path = cache / _cache_name(preset, game.id, game.original, round(seek_s, 6), round(duration_s, 6))
         frame_n = callout_frame(game, clip) if freeze_s else None
@@ -260,8 +274,8 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
         ))
         t += clip_len
 
-    out = folder / f"{preset}.mp4"
-    tmp = folder / f"{preset}.part.mp4"
+    out = folder / f"{name}.mp4"
+    tmp = folder / f"{name}.part.mp4"
     inputs = [arg for p in intermediates for arg in ("-i", str(p))]
     n = len(intermediates)
     graph = "".join(f"[{i}:v][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
@@ -279,17 +293,21 @@ def render_reel(store: Store, reel_id: str, preset: Preset,
     os.replace(tmp, out)
 
     render = Render(
-        reel_id=reel.id, preset=preset, file=out.name,
+        reel_id=reel.id, preset=preset, variant=variant, file=out.name,
         duration_s=length(out), segments=segments, skipped=skipped, reel=reel,
         start_card_lines=start_lines if start_card else [],
         card_style=reel.card_style,
     )
     store.save_render(render)
 
-    # Drop cached intermediates this preset no longer uses (clips edited or removed).
+    # Drop cached intermediates no render of this preset uses any more (clips
+    # edited or removed). Each variant lists what it used, since they share
+    # intermediates (the same clip, or a card without a note).
     used |= set(intermediates)
+    atomic_write_text(cache / f"{name}.used.json", json.dumps(sorted(p.name for p in used)) + "\n")
+    keep = {n for f in cache.glob(f"{preset}*.used.json") for n in json.loads(f.read_text())}
     for p in cache.glob(f"{preset}-*.mp4"):
-        if p not in used:
+        if p.name not in keep:
             p.unlink()
     return render
 
@@ -318,7 +336,8 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
         reasons.append("descriptions switched between overlay and title cards")
     if reel.card_s != render.reel.card_s:
         reasons.append("minimum card length changed")
-    if reel.freeze_s != render.reel.freeze_s:
+    notes, freezes = shows_notes(render.variant), shows_callouts(render.variant)
+    if freezes and reel.freeze_s != render.reel.freeze_s:
         reasons.append("callout freeze length changed")
     if reel.card_s > 0 and start_card_lines(reel, [g for g, _ in _resolve(store, reel)[0]]) != render.start_card_lines:
         reasons.append("title card changed")
@@ -341,9 +360,9 @@ def stale_reasons(store: Store, reel: Reel, render: Render) -> list[str]:
             changed += 1
         else:
             shown = seg.card_lines or seg.caption_lines
-            if shown and clip_card_lines(game, clip) != shown:
+            if shown and clip_card_lines(game, clip, notes) != shown:
                 cards += 1
-            if reel.freeze_s > 0 and (clip.callout if callout_frame(game, clip) is not None else None) != seg.callout:
+            if freezes and reel.freeze_s > 0 and (clip.callout if callout_frame(game, clip) is not None else None) != seg.callout:
                 callouts += 1
     if callouts:
         reasons.append(f"{callouts} callout(s) added, moved or removed")

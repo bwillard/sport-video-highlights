@@ -135,6 +135,10 @@ class Game(BaseModel):
 # ---------- reels (Phase 2) ----------
 
 Preset = Literal["landscape_1080p", "preview_540p"]
+# What a render includes on top of the clips: everything ("all"), everything
+# but the clip notes ("no_notes"), or neither notes nor callout freezes
+# ("plain"). The opening card and game times are shown in all of them.
+Variant = Literal["all", "no_notes", "plain"]
 # How each clip's time + note is shown: a caption over the start of the clip
 # ("overlay") or a separate title card before it ("card").
 CardStyle = Literal["overlay", "card"]
@@ -204,10 +208,11 @@ class Segment(BaseModel):
 
 
 class Render(BaseModel):
-    """Written next to each render as <preset>.render.json."""
+    """Written next to each render as <name>.render.json."""
 
     reel_id: str
     preset: Preset
+    variant: Variant = "all"
     file: str  # relative to the reel's folder
     duration_s: float
     segments: list[Segment]
@@ -216,3 +221,13 @@ class Render(BaseModel):
     card_style: CardStyle = "card"  # renders made before overlays existed used cards
     reel: Reel  # the definition this was rendered from, so it can be reproduced
     created_at: datetime = Field(default_factory=_now)
+
+    @computed_field
+    @property
+    def name(self) -> str:
+        return render_name(self.preset, self.variant)
+
+
+def render_name(preset: Preset, variant: Variant = "all") -> str:
+    """File name (without extension) of a render: the preset, plus the variant unless it's "all"."""
+    return preset if variant == "all" else f"{preset}-{variant}"
