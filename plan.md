@@ -9,6 +9,7 @@
 ## Status (last updated 2026-10-18)
 **Current phase:** Phase 3 in progress: 3.1 (freeze-frame callout) built. Phase 2 done. Reels: add clips from the tagger, render preview/full with hard cuts, watch on the reel page with chapters, jump to the full game (G) and back, download. 23 unit tests + headless-Chrome runs pass.
 **Next action:** Benchmark YOLO11 on a real 15s clip for players *and* the ball (Phase 3.2's first task): CPU speed, whether it finds her, how often it finds the ball. That decides the whole-game frame step and whether the ball needs its own model. Still open from Phase 1: tag a full real game and note friction. Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
+**Decision pending:** hardware for ML: keep the CPU, add a GPU, or rent (see [plans/hardware.md](plans/hardware.md)). The CPU benchmark comes first either way.
 **Blocked on:** nothing, but forbeck_env needs cleanup: `soccer_clips` + fastapi/pydantic/uvicorn/httpx2 stack were accidentally pip-installed there and idna was upgraded 3.7 → 3.20 (see 2026-10-13 log).
 
 ## Goals
@@ -18,7 +19,7 @@
 4. **Track the ball and every player on our team** through each game, and name the players, to power (a) highlighting any chosen player and (b) pulling together clips where that player is close to the ball. Identify players by appearance (build, hair, cleats, socks) as well as jersey numbers, which are often hidden.
 
 ## Constraints
-- **CPU for ML:** a 4-core Ryzen 3 3200G. Its Vega iGPU encodes/decodes video (VA-API) but can't run the models (no CUDA, no usable ROCm). ML steps must be benchmarked on the CPU; whole-game tracking runs once per game as an overnight background job, at a reduced frame rate if needed.
+- **CPU for ML:** a 4-core Ryzen 3 3200G. Its Vega iGPU encodes/decodes video (VA-API) but can't run the models (no CUDA, no usable ROCm). ML steps must be benchmarked on the CPU; whole-game tracking runs once per game as an overnight background job, at a reduced frame rate if needed. Adding a GPU or renting one is under consideration: options, costs and trade-offs in [plans/hardware.md](plans/hardware.md).
 - **Follow-cam MP4 only** — no Veo panorama. The virtual camera pans and zooms, so trackers must cope with camera motion, players are small, and she may leave the frame.
 - **Everything runs locally.** No uploading video of a minor to third-party services.
 - Reuse existing tools wherever possible; write glue code, not frameworks.
@@ -80,6 +81,7 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 | Data directories | Set in `.env` (see `.env.example`) |
 | Full-game videos | `<SOCCER_FULL_DIR>/<year>/*.mp4` — 5 games from 2026 so far |
 | Phase docs | [plans/](plans/) |
+| Hardware options for ML | [plans/hardware.md](plans/hardware.md) |
 
 ## Plan
 - [x] **Phase 0 — Setup & ingest** → [plans/phase0_ingest.md](plans/phase0_ingest.md)
@@ -136,3 +138,4 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-17** — Reels can be rendered without the clip notes, or without notes and callouts, alongside the full version (`Render.variant`), to share a clean copy while keeping the annotated one.
 - **2026-10-18** — Full reel renders use the GPU's H.264 encoder (VA-API) when it works, falling back to x264; quality and encoder are `.env` settings. Every piece is encoded once at final quality and the join copies the video, and clips are cut into captioned/plain/freeze pieces so only the captioned bits use the CPU. A real 3.5-minute reel went from 533 s to 98 s. Previews stay on x264 because this GPU's driver hangs at 960×540.
 - **2026-10-18** — Re-scoped Phases 3–4 from "highlight her in a clip" to "track the ball and every player on our team through the whole game", to power highlighting any chosen player and finding clips where a player is near the ball. Tracking runs once per game (not per clip) and is stored per game: boxes in `tracks/boxes.npz` (too many for JSON: up to ~2M per game), labels in `tracks/tracklets.json`. Live highlights are a canvas over the video synced with `requestVideoFrameCallback`, interpolating between samples, so changing the highlighted player needs no re-render; reels burn in the same marker. "Near the ball" is image-space distance divided by the player's box height (no pitch calibration). SAM 2 fallback dropped (too slow on this CPU for whole games). Phase 4 doc renamed to `phase4_identify.md`. Hardware: Ryzen 3 3200G, 4 cores; the iGPU can't run the models.
+- **2026-10-18** — Hardware for ML is undecided: (1) keep the 3200G (players every 3rd frame, ~1–1.5 h/game; weak ball tracking; ball-model training takes days), (2) add a GPU such as an RTX 5060 Ti 16GB (~20–60 min/game every frame at full resolution, fast training, NVENC; ~$590–710 mid-2026), or (3) rent (under $1/game, but breaks the local-only rule for video of a minor). Leaning towards (2) if local-only stays. Details in [plans/hardware.md](plans/hardware.md).

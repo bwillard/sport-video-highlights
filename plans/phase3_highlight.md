@@ -6,7 +6,7 @@
 ## Constraints that shape this phase
 - **Follow-cam only:** the virtual camera pans and zooms, so image-space motion is player motion plus camera motion. Players leave the frame often.
 - **Small players:** at 1080p, players may be well under 100 px tall (~70 px measured in one midfield frame). Small objects mean weaker detection and re-ID.
-- **CPU for ML:** a Ryzen 3 3200G (4 cores, no SMT). The Vega iGPU does video decode/encode (VA-API) but can't run the models (no CUDA, no usable ROCm). A 60–84 min game is 108k–151k frames, so whole-game tracking is an overnight background job, possibly on every 2nd or 3rd frame. Benchmark before choosing.
+- **CPU for ML (for now; see [hardware options](hardware.md)):** a Ryzen 3 3200G (4 cores, no SMT). The Vega iGPU does video decode/encode (VA-API) but can't run the models (no CUDA, no usable ROCm). A 60–84 min game is 108k–151k frames, so whole-game tracking is an overnight background job, possibly on every 2nd or 3rd frame. Benchmark before choosing.
 - **One track store per game:** tracking runs once per game, not per clip. Clips, reels and clip suggestions all read from the same per-game data, so a clip added later doesn't need any new tracking.
 
 ## 3.1 — Freeze-frame callout (do this first)
