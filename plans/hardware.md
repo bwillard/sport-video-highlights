@@ -1,6 +1,6 @@
 # Hardware for ML (tracking, ball, identity)
 
-**Status:** Undecided (2026-10-18). CPU benchmark done (table below): players are workable overnight on the CPU, the ball at the resolution it needs is not (~18 h/game every frame).
+**Status:** Undecided (2026-10-18). CPU and cloud-GPU (L4) benchmarks done (tables below). The CPU handles players overnight but not the ball (~18 h/game). The variants that work best (YOLO11m at full resolution for players, YOLO11m on the centre crop for the ball) would take days per game on the CPU and ~1–3 h on an L4-class GPU.
 **Why it matters:** Phases 3.2–4 run detection on every frame of whole games, need higher resolution for the ball, and involve a lot of trial and error (settings, re-runs, training a ball model). Turnaround time decides how fast that goes.
 
 ## The box today
@@ -38,6 +38,8 @@ Speeds are estimates until measured; fill in the table at the bottom.
 ## Recommendation (2026-10-18)
 If the local-only rule stays, add a GPU: it's the only option that's both private and fast enough to iterate on ball detection, the riskiest part. Renting is cheaper and fine for batch runs if the rule is relaxed, but slower to work with day to day.
 
+Updated after the L4 test: the quality gap is now measured, not guessed. The bigger model at full resolution keeps her track for most or all of a clip (vs ~10–50% for what the CPU can run), and the bigger model finds the ball more often. Both need a GPU. An L4-class card does a whole game in ~1–3 h without any optimisation.
+
 ## Measurements
 | Hardware | Model / imgsz / frame step | fps | Full game (h) | Notes |
 |---|---|---|---|---|
@@ -49,6 +51,22 @@ If the local-only rule stays, add a GPU: it's the only option that's both privat
 | Ryzen 3 3200G | YOLO11s / 1280 centre crop / every frame | 2.1 | 18 | Best ball (1–53% of frames); ONNX Runtime ~15% faster |
 
 Full game = 75 min = 135k frames. Detection is ~85–97% of the time per frame; decode 2 ms, tracker 12–20 ms.
+
+**Cloud GPU (2026-10-18):** RunPod Secure Cloud, NVIDIA L4 (24 GB; roughly 5060 Ti class), PyTorch 2.8 + CUDA, no TensorRT or batching. Same code, same results as on the CPU for the same variant (checked: identical detections), only faster. ~45 min of pod time, under $1. Footage deleted from the pod afterwards.
+
+| Variant | fps (whole pipeline) | GPU detect ms/frame | Full game (h) | Notes |
+|---|---|---|---|---|
+| n640 | 49.6 | 6.5 | 0.8 | |
+| n1280 | 47.4 | 7.9 | 0.8 | |
+| s1280 | 43.0 | 9.9 | 0.9 | |
+| s1280-centre | 63.5 | 7.3 | 0.6 | |
+| s1920 (full frame, native) | 32.4 | 18.4 | 1.2 | |
+| m1280-centre | 40.2 | 16.4 | 0.9 | Best ball variant |
+| m1920 (full frame, native) | 19.1 | 41.0 | 2.0 | Best player tracking by far |
+
+- At the small sizes the GPU is mostly idle: the per-frame CPU work (BoT-SORT 7–14 ms on the pod's server CPU, preprocessing) sets the pace. On the 3200G that CPU work is slower (12–20 ms), so expect ~30–50 fps at best for the small variants with this CPU, unless the tracker's camera-motion step runs on a smaller image.
+- Untried speed-ups: TensorRT FP16 and batching frames, typically 2–3× on detection.
+- On the 3200G, m1920 would run at an estimated ~0.3–0.4 fps (s1280 is 2.1; m is ~2.5× s, 1920 is ~2.25× 1280): days per game.
 
 ## Sources (prices, checked 2026-10-18)
 - [GPU Poet: RTX 5060 Ti price, October 2026](https://gpupoet.com/gpu/learn/price/october-2026/nvidia-geforce-rtx-5060-ti)

@@ -48,7 +48,7 @@ def cmd_bench(store: Store, args: argparse.Namespace) -> None:
 
         names = args.clips or [c.name for c in bench.load_set(store.settings).clips]
         for name in names:
-            print(benchmark.draw(store, args.variant, name, ball_conf=args.ball_conf))
+            print(benchmark.draw(store, args.variant, name, ball_conf=args.ball_conf, results=args.results))
     else:
         for c in bench.load_set(store.settings).clips:
             who = f"  callout #{c.callout_player}" if c.callout_player is not None else ("  callout" if c.callout else "")
@@ -73,11 +73,12 @@ def main() -> None:
     cut = bench_sub.add_parser("cut", help="cut the set's mp4s (only new or changed ones)")
     cut.add_argument("--force", action="store_true", help="recut everything")
     run = bench_sub.add_parser("run", help="run detection + tracking variants on the set")
-    run.add_argument("variants", nargs="*", help="default: all (n640 s640 n1280 s1280 s1280-centre)")
+    run.add_argument("variants", nargs="*", help="default: all (n640 s640 n1280 s1280 s1280-centre s1920 m1280-centre m1920)")
     draw = bench_sub.add_parser("draw", help="draw a variant's boxes onto the clips for checking by eye")
     draw.add_argument("variant")
     draw.add_argument("clips", nargs="*", help="default: all")
     draw.add_argument("--ball-conf", type=float, default=0.1, help="weakest ball detection to draw")
+    draw.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
     args = parser.parse_args()
 
     store = Store(get_settings())

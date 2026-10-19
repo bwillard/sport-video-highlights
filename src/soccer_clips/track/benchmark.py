@@ -42,6 +42,10 @@ VARIANTS = {v.name: v for v in [
     Variant("n1280", "yolo11n.pt", 1280),
     Variant("s1280", "yolo11s.pt", 1280),
     Variant("s1280-centre", "yolo11s.pt", 1280, crop=(320, 180, 1280, 720)),
+    # Full frame at native resolution, and a bigger model: too slow for this CPU.
+    Variant("s1920", "yolo11s.pt", 1920),
+    Variant("m1280-centre", "yolo11m.pt", 1280, crop=(320, 180, 1280, 720)),
+    Variant("m1920", "yolo11m.pt", 1920),
 ]}
 
 # Columns of the per-clip box array.
@@ -53,8 +57,9 @@ def models_dir(store: Store) -> Path:
     return store.settings.games_dir.parent / "models"
 
 
-def results_dir(store: Store, variant: str) -> Path:
-    return bench_dir(store.settings) / "results" / variant
+def results_dir(store: Store, variant: str, results: str = "results") -> Path:
+    """results/<variant>; `results` names another folder in bench/, e.g. one copied back from a GPU machine."""
+    return bench_dir(store.settings) / results / variant
 
 
 def _tracker():
@@ -187,11 +192,10 @@ def _colour(tid: int) -> tuple[int, int, int]:
     return tuple(int(c) for c in rng.integers(80, 256, 3))
 
 
-def draw(store: Store, variant: str, clip_name: str, ball_conf: float = 0.1) -> Path:
+def draw(store: Store, variant: str, clip_name: str, ball_conf: float = 0.1, results: str = "results") -> Path:
     """Render the variant's boxes over the clip: people by track colour, her track thick yellow,
     balls as red circles with their confidence. Writes results/<variant>/<clip>.mp4."""
-    clip = next(c for c in load_set(store.settings).clips if c.name == clip_name)
-    out_dir = results_dir(store, variant)
+    out_dir = results_dir(store, variant, results)
     arr = np.load(out_dir / f"{clip_name}.npz")["boxes"]
     summary = json.loads((out_dir / "summary.json").read_text())
     her = (summary["clips"][clip_name].get("her") or {}).get("track")

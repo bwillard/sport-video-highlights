@@ -135,6 +135,7 @@ Use the smoothed track to drive a crop window:
 | YOLO11n @1280, fps on CPU | 4.8 |
 | YOLO11s @1280, fps on CPU | 2.1 (detect 464 ms); ONNX Runtime 2.6 |
 | Full 75-min game (135k frames), hours on CPU | n640: 4.3 every frame, 1.4 every 3rd; n1280: 7.8 / 2.6; s1280: 18 / 6 |
+| YOLO11m @1920 (full frame), fps on L4 GPU | 19.1 (~2 h per game); her track coverage 17–100%, median 100% |
 | Avg correction clicks / clip | |
 
 ## Findings
@@ -142,5 +143,6 @@ Use the smoothed track to drive a crop window:
   - **Finding her:** at the callout frame, the box under the click was found in 5/5 clips at 1280 (either model), 4/5 with s640, 3/5 with n640. Small, distant players need 1280 (or the s model).
   - **Keeping her:** track IDs break a lot. 40–190 track IDs per clip for ~15–25 people in view, and the track at her callout covered anywhere from 1% to 100% of its clip (typically 10–50%). Joining tracklets (correction clicks in 3.3, linking in Phase 4.3) is the main work, as expected.
   - **Not just players:** 15–30 "people" per frame at 1280, including parents, coaches and subs on the sidelines. Tracking needs a pitch filter (e.g. drop boxes above the far touchline / outside the field area) before team split.
+  - **On an L4 GPU (cloud, 2026-10-18; `bench/results-l4/`):** the same variants give identical results (detection doesn't depend on the hardware), and three bigger ones were added. **YOLO11m at full resolution (m1920) kept her track for 100%, 100%, 100%, 17% and 89% of the 5 callout clips**, against roughly 10–50% for every variant the CPU can run. Steadier, more confident boxes mean far fewer ID breaks. It runs at 19 fps on the L4 (~2 h per game) and would take days per game on the 3200G. Speeds in [hardware.md](hardware.md).
   - Annotated videos: `soccer-clips bench draw <variant> [clips]` writes `bench/results/<variant>/<clip>.mp4` (her track thick yellow, balls red with confidence). Drawn for s1280-centre.
 - **2026-10-15** — 3.1 tested: 27 unit tests (callout API rules, exact 45-frame freeze, A/V sync, the held frame has the ring and is dimmed outside it, jump-back before/during/after the freeze, out-of-date detection) and a headless-Chrome run of placing (click, drag to size, Esc, Shift+C) and the reel freeze + `G`.

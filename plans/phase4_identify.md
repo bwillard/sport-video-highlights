@@ -102,7 +102,11 @@ For a chosen player, find the stretches of a game where they're involved with th
   - **Detections are mostly real.** Checked by eye on random crops from s1280-centre: ~35/40 real at conf ≥ 0.25, ~32/42 real at 0.1–0.25. False hits: corner flags, bags, a white cleat, blonde ponytails/heads, a water bottle, a spare ball on the sideline (stationary, so a temporal filter can drop it). Weak detections are worth keeping for the temporal filter.
   - **Recall is unknown** without ground truth: frames with no detection may have the ball out of the crop, hidden, in the air, or just missed. Labelling the ball on ~150 frames would measure it.
   - **Cost on CPU:** s1280-centre is 2.1 fps, so ~18 h per game every frame, ~6 h every 3rd frame (too sparse for a kicked ball). Not practical on this CPU; see [hardware.md](hardware.md).
-  - Untested: full frame at native resolution (imgsz 1920; ~2× the cost of 1280), SAHI-style tiles, a fine-tuned ball model.
+  - Untested at first: full frame at native resolution, bigger models. Tested on an L4 GPU the same day (below).
+- **2026-10-18, L4 GPU** (`bench/results-l4/`): added s1920, m1280-centre, m1920.
+  - **m1280-centre is the best ball variant:** frames with a ball at conf ≥ 0.25 per clip: fc1-passing 52%, fc1-far-switch 34% (vs 16% for s1280-centre), ebu-goal-kick 56%, stars-defense 39%, saa-far-hustle 13%, ebu-corner 1%. Its weak detections (0.1–0.25) were ~38/42 real by eye (misses: a head, a ponytail, a bottle).
+  - **Full frame (s1920/m1920) doesn't beat the crop for the game ball**, except in the crowded corner (9% vs 1%, so the ball was probably outside the crop there). It also finds **spare balls lying near the camera** (ebu-corner, elite-shot) with high confidence; they don't move, so the temporal filter must drop stationary balls.
+  - Still the case: recall unknown without labelled frames; the crowded corner is the weak spot for every variant. Likely setup: players on the full frame (m1920) and the ball on the centre crop (m1280-centre), plus the full frame's ball detections as a fallback near the edges.
 
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
