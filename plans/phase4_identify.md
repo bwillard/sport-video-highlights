@@ -27,7 +27,7 @@ The ball is hard to *find* (5–15 px, motion blur, hidden by legs, look-alikes:
 - [ ] Measure stock `sports ball` recall/precision on hand-checked frames (part of the Phase 3.2 benchmark)
 - [ ] Centre-crop high-res pass; compare
 - [x] Ball labelling page (2026-10-18): `/label-ball`, sets `bench` (149 frames over the bench clips, for scoring) and `train` (random game frames away from the bench clips); `soccer-clips ball sample/score`. Labels in `labels/ball.jsonl`.
-- [ ] Label the bench set and score the variants (`soccer-clips ball score --results results-l4`)
+- [x] Label the bench set and score the variants (`soccer-clips ball score --results results-l4`): done 2026-10-19, see Findings
 - [ ] Fine-tune a nano ball model (if stock isn't good enough)
 - [ ] Temporal filter + gap filling → `ball.npz`
 - [ ] Ball overlay in the tagger to check it by eye
@@ -108,6 +108,25 @@ For a chosen player, find the stretches of a game where they're involved with th
   - **m1280-centre is the best ball variant:** frames with a ball at conf ≥ 0.25 per clip: fc1-passing 52%, fc1-far-switch 34% (vs 16% for s1280-centre), ebu-goal-kick 56%, stars-defense 39%, saa-far-hustle 13%, ebu-corner 1%. Its weak detections (0.1–0.25) were ~38/42 real by eye (misses: a head, a ponytail, a bottle).
   - **Full frame (s1920/m1920) doesn't beat the crop for the game ball**, except in the crowded corner (9% vs 1%, so the ball was probably outside the crop there). It also finds **spare balls lying near the camera** (ebu-corner, elite-shot) with high confidence; they don't move, so the temporal filter must drop stationary balls.
   - Still the case: recall unknown without labelled frames; the crowded corner is the weak spot for every variant. Likely setup: players on the full frame (m1920) and the ball on the centre crop (m1280-centre), plus the full frame's ball detections as a fallback near the edges.
+
+- **2026-10-19 — Scored against hand labels** (149 bench frames: ball visible in 120, hidden in 17, no ball in 9, can't tell 3). Recall = share of visible-ball frames with a detection within 10 px (or 2 ball radii) of the label; precision = share of detections that are on a labelled ball. Labels and detections line up (median 1.5 px when matched), so these are real numbers.
+
+  | Variant | Recall @0.1 | Precision @0.1 | Recall @0.25 | Precision @0.25 |
+  |---|---|---|---|---|
+  | n640 | 0% | 0% | 0% | 0% |
+  | s640 | 6% | 17% | 2% | 8% |
+  | n1280 | 16% | 15% | 8% | 14% |
+  | s1280 | 39% | 48% | 24% | 49% |
+  | s1920 (full, native) | 45% | 50% | 28% | 52% |
+  | m1920 (full, native) | 42% | 51% | 21% | 52% |
+  | s1280-centre | 50% | 76% | 41% | 78% |
+  | **m1280-centre** | **57%** | **79%** | 38% | 75% |
+
+  - The **centre crop wins on both counts**; the full frame loses precision mainly to spare balls lying near the camera (elite-shot, fc1-passing bottom-left). Those don't move, so a temporal filter can remove them.
+  - **Best stock result: about 57% of visible balls found** (m1280-centre at conf ≥ 0.1, ~4 in 5 detections real). The s model on the crop is close (50%), and runs on the CPU at 2.1 fps.
+  - **Hidden balls are almost never found** (1 of 17), as expected; that's the temporal filter's job (possession hint, gap filling).
+  - Low thresholds pay off: going from 0.25 to 0.1 adds ~10–20 points of recall at similar precision.
+  - What this means: a stock detector misses ~4 in 10 visible balls even at its best, too many gaps for "near the ball" to be reliable from detection alone. Next: the temporal filter on the current detections (cheap, shows how far gaps can be filled), and fine-tuning YOLO on our own ball labels (the train set).
 
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
