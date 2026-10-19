@@ -28,7 +28,10 @@ The ball is hard to *find* (5–15 px, motion blur, hidden by legs, look-alikes:
 - [ ] Centre-crop high-res pass; compare
 - [x] Ball labelling page (2026-10-18): `/label-ball`, sets `bench` (149 frames over the bench clips, for scoring) and `train` (random game frames away from the bench clips); `soccer-clips ball sample/score`. Labels in `labels/ball.jsonl`.
 - [x] Label the bench set and score the variants (`soccer-clips ball score --results results-l4`): done 2026-10-19, see Findings
-- [ ] Fine-tune a nano ball model (if stock isn't good enough)
+- [x] Guess mode for labelling (2026-10-19): `soccer-clips ball guess train` stores YOLO11m-centre's best guess per frame; Enter accepts it. Never shown for bench.
+- [x] Train set: 500 frames (seed 1), ~100 per game, half from tagged clips, none within 10s of a bench clip (2026-10-19)
+- [ ] Label the train set
+- [ ] Fine-tune a ball model (YOLO11m first; also try YOLO11l/x and YOLO26 as bases) on a rented GPU, score on the bench labels
 - [ ] Temporal filter + gap filling → `ball.npz`
 - [ ] Ball overlay in the tagger to check it by eye
 

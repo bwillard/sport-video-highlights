@@ -9,6 +9,8 @@ it was trained on:
 
 <labels_dir>/ball_tasks.json  the frames to label, per set
 <labels_dir>/ball.jsonl       one line per answer, latest wins (append-only)
+<labels_dir>/ball_guesses.json  a model's best guess per frame, shown as a
+                              suggestion when labelling (never for bench)
 <labels_dir>/frames/          cached frame images
 Frames are numbered in game frames, so labels don't depend on clip files.
 """
@@ -140,7 +142,11 @@ def add_tasks(store: Store, set_name: SetName, new: list[BallTask]) -> int:
     """Append tasks to a set, skipping frames already in any set; returns how many were added."""
     tasks = load_tasks(store.settings)
     seen = {(t.game_id, t.frame) for ts in tasks.sets.values() for t in ts}
-    fresh = [t for t in new if (t.game_id, t.frame) not in seen]
+    fresh = []
+    for t in new:  # also drops repeats within `new`
+        if (t.game_id, t.frame) not in seen:
+            seen.add((t.game_id, t.frame))
+            fresh.append(t)
     tasks.sets.setdefault(set_name, []).extend(fresh)
     save_tasks(store.settings, tasks)
     return len(fresh)
@@ -238,6 +244,80 @@ def summary(store: Store) -> list[dict]:
 
 def tasks_with_labels(store: Store, set_name: str) -> list[dict]:
     labels = load_labels(store.settings)
-    return [{**t.model_dump(), "label": labels[(t.game_id, t.frame)].model_dump(mode="json")
-             if (t.game_id, t.frame) in labels else None}
+    # Bench labels score the models, so they must not be nudged by a model's guess.
+    guesses = {} if set_name == "bench" else load_guesses(store.settings).frames
+    return [{**t.model_dump(),
+             "label": labels[(t.game_id, t.frame)].model_dump(mode="json") if (t.game_id, t.frame) in labels else None,
+             "guess": g.model_dump() if (g := guesses.get(f"{t.game_id}:{t.frame}")) else None}
             for t in load_tasks(store.settings).sets.get(set_name, [])]
+
+
+# ---- model guesses, to speed up labelling ----
+
+GUESS_VARIANT = "m1280-centre"  # best stock ball variant on the bench (2026-10-19)
+GUESS_MIN_CONF = 0.1
+
+
+class Guess(BaseModel):
+    x: float  # fractions, like BallLabel
+    y: float
+    r: float
+    conf: float
+
+
+class Guesses(BaseModel):
+    model: str = ""
+    # "game_id:frame" -> best guess, or None when the model found no ball
+    frames: dict[str, Guess | None] = {}
+
+
+def _guesses_path(settings: Settings) -> Path:
+    return labels_dir(settings) / "ball_guesses.json"
+
+
+def load_guesses(settings: Settings) -> Guesses:
+    path = _guesses_path(settings)
+    return Guesses.model_validate_json(path.read_text()) if path.exists() else Guesses()
+
+
+def make_guesses(store: Store, set_name: str, log=print) -> int:
+    """
+    Run the guess model over every frame of a set that has no guess yet, saving
+    as it goes so the labelling page can use them while this runs. Returns how
+    many frames were guessed.
+    """
+    import cv2
+    from ultralytics import YOLO
+
+    from soccer_clips.track.benchmark import BALL, VARIANTS, models_dir
+
+    if set_name == "bench":
+        raise ValueError("no guesses for the bench set: its labels score the models")
+    variant = VARIANTS[GUESS_VARIANT]
+    settings = store.settings
+    guesses = load_guesses(settings)
+    if guesses.model and guesses.model != GUESS_VARIANT:
+        guesses = Guesses()  # a different model's guesses: start over
+    guesses.model = GUESS_VARIANT
+    todo = [t for t in load_tasks(settings).sets.get(set_name, []) if f"{t.game_id}:{t.frame}" not in guesses.frames]
+    if not todo:
+        return 0
+    models_dir(store).mkdir(parents=True, exist_ok=True)
+    model = YOLO(models_dir(store) / variant.model)
+    games: dict[str, Game] = {}
+    for n, t in enumerate(todo, 1):
+        game = games.setdefault(t.game_id, store.load_game(t.game_id))
+        frame = cv2.imread(str(frame_image(store, game, t.frame)))
+        ox, oy, w, h = variant.crop
+        res = model.predict(frame[oy:oy + h, ox:ox + w], imgsz=variant.imgsz, conf=GUESS_MIN_CONF,
+                            classes=[BALL], verbose=False)[0].boxes.cpu().numpy()
+        best = None
+        if len(res):
+            (x1, y1, x2, y2), conf = res.xyxy[res.conf.argmax()], float(res.conf.max())
+            best = Guess(x=float((x1 + x2) / 2 + ox) / game.width, y=float((y1 + y2) / 2 + oy) / game.height,
+                         r=float(max(x2 - x1, y2 - y1) / 2) / game.height, conf=round(conf, 3))
+        guesses.frames[f"{t.game_id}:{t.frame}"] = best
+        if n % 10 == 0 or n == len(todo):
+            atomic_write_text(_guesses_path(settings), guesses.model_dump_json() + "\n")
+            log(f"guessed {n}/{len(todo)}")
+    return len(todo)

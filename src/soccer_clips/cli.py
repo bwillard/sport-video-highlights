@@ -63,6 +63,11 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
                else ball_labels.sample_train(store, args.n or 200, seed=args.seed))
         added = ball_labels.add_tasks(store, args.set, new)
         print(f"added {added} frame(s) to the {args.set} set")
+        if args.set != "bench" and added:
+            print(f"run `soccer-clips ball guess {args.set}` to pre-fill the model's guesses")
+    elif args.ball_command == "guess":
+        n = ball_labels.make_guesses(store, args.set)
+        print(f"guessed {n} frame(s)")
     elif args.ball_command == "score":
         from soccer_clips.track.bench import bench_dir
 
@@ -103,6 +108,8 @@ def main() -> None:
     sample.add_argument("set", choices=["bench", "train"])
     sample.add_argument("-n", type=int, help="how many (default 150 bench, 200 train)")
     sample.add_argument("--seed", type=int)
+    guess = ball_sub.add_parser("guess", help="pre-compute the model's ball guesses for a set (not bench)")
+    guess.add_argument("set", choices=["train"])
     score = ball_sub.add_parser("score", help="score benchmark ball detections against the bench labels")
     score.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
     args = parser.parse_args()

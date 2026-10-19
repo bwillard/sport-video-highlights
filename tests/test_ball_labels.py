@@ -34,6 +34,8 @@ def test_sampling_keeps_sets_apart(store):
     assert len(b) == 6 and all(30 <= t.frame < 60 and t.clip == "one" for t in b)
     assert ball_labels.add_tasks(store, "bench", b) == 6
     assert ball_labels.add_tasks(store, "bench", b) == 0  # no duplicates
+    extra = [ball_labels.BallTask(game_id=GAME, frame=100)] * 2
+    assert ball_labels.add_tasks(store, "train", extra) == 1  # repeats within one batch too
     train = ball_labels.sample_train(store, 20, seed=1)
     # never within 10s of a bench clip: this short game is all "near", so nothing can be picked
     assert train == []
@@ -91,3 +93,17 @@ def test_score(store, settings):
     assert s["0.1"] == {"recall": 1.0, "precision": 0.5, "hidden_found": 1.0, "visible": 1, "hidden": 1, "dets": 4}
     assert s["0.25"]["precision"] == round(2 / 3, 3)
     assert s["0.4"] == {"recall": 1.0, "precision": 0.5, "hidden_found": 0.0, "visible": 1, "hidden": 1, "dets": 2}
+
+
+def test_guesses_shown_for_train_never_bench(store, settings, client):
+    b = ball_labels.sample_bench(store, n=2)
+    ball_labels.add_tasks(store, "bench", b)
+    ball_labels.add_tasks(store, "train", [ball_labels.BallTask(game_id=GAME, frame=150)])
+    guess = ball_labels.Guess(x=0.5, y=0.5, r=0.01, conf=0.8)
+    frames = {f"{GAME}:{t.frame}": guess for t in b} | {f"{GAME}:150": guess}
+    path = ball_labels.labels_dir(settings) / "ball_guesses.json"
+    path.write_text(ball_labels.Guesses(model="x", frames=frames).model_dump_json())
+    assert all(t["guess"] is None for t in client.get("/api/ball/sets/bench").json())
+    assert client.get("/api/ball/sets/train").json()[0]["guess"] == guess.model_dump()
+    with pytest.raises(ValueError):
+        ball_labels.make_guesses(store, "bench")

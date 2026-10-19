@@ -68,6 +68,10 @@
         <button id="skip">Can't tell <span class="hk">S</span></button>
         <button id="clear" class="danger">Clear <span class="hk">Del</span></button>
       </div>
+      <div class="row" style="margin-top: 8px" id="guessRow" hidden>
+        <button id="accept">Accept guess <span class="hk">Enter</span></button>
+        <span class="stat" id="guessConf"></span>
+      </div>
       <div class="row" style="margin-top: 8px">
         <button id="prev">← Prev</button>
         <button id="next">Next →</button>
@@ -83,6 +87,8 @@
       <kbd>Del</kbd> clear &nbsp; <kbd>←</kbd>/<kbd>→</kbd> prev/next &nbsp; <kbd>U</kbd> next unlabelled<br>
       Hold <kbd>Q</kbd> / <kbd>E</kbd>: peek 3 frames earlier / later, to see where the ball is moving<br>
       <kbd>Z</kbd> magnifier zoom 3× / 6×<br>
+      Training sets show the model's guess as a <span style="color: var(--accent)">dashed blue ring</span>:
+      <kbd>Enter</kbd> accepts it if it's on the game ball; otherwise click, <kbd>N</kbd> or <kbd>S</kbd> as usual.<br>
       A blurred streak is still <b>visible</b>: click its middle. A ball in the air counts too.
       Spare balls lying by the sideline are <b>not</b> the game ball.
     </div>
@@ -163,6 +169,8 @@ function showProgress() {
   const words = { visible: "ball visible", hidden: "ball hidden (approx.)", none: "no ball in frame", skip: "can't tell" };
   $("answer").textContent = l ? words[l.state] + (l.r ? " · sized" : "") : "not labelled";
   $("answer").className = "answer " + (l ? l.state : "");
+  $("guessRow").hidden = !t.guess || !!l;
+  $("guessConf").textContent = t.guess ? `model is ${Math.round(100 * t.guess.conf)}% sure` : "";
   $("strip").innerHTML = tasks.length <= 400
     ? tasks.map((t, k) => `<span class="${t.label?.state || ""}${k === i ? " cur" : ""}" data-k="${k}"></span>`).join("")
     : "";
@@ -188,6 +196,14 @@ function draw() {
   if (l && (l.state === "visible" || l.state === "hidden") && !peekImg) {
     const x = l.x * view.width, y = l.y * view.height, r = (l.r || 0) * view.height;
     ring(ctx, x, y, markR(r), l.state === "visible" ? "#3ddc84" : "#ffcf5c", l.state === "hidden");
+  }
+  const g = !l && !peekImg && tasks[i].guess;
+  if (g) {
+    const r = g.r * view.height + 6;
+    ring(ctx, g.x * view.width, g.y * view.height, r, "#4ea1ff", true);
+    ctx.fillStyle = "#4ea1ff";
+    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillText(`${Math.round(100 * g.conf)}%`, g.x * view.width + r + 4, g.y * view.height - r);
   }
   if (drag) ring(ctx, drag.x, drag.y, Math.max(2, drag.r), "#4ea1ff", false);
   if (mouse && !drag) {  // small crosshair: the cursor is hidden over the image
@@ -217,6 +233,11 @@ function drawLoupe() {
   if (l && (l.state === "visible" || l.state === "hidden") && !peekImg) {
     const [x, y] = toL(l.x * view.width, l.y * view.height);
     ring(lctx, x, y, Math.max(4, (l.r || 0) * view.height) * zoom + 3, l.state === "visible" ? "#3ddc84" : "#ffcf5c", l.state === "hidden");
+  }
+  const g = !l && !peekImg && tasks[i].guess;
+  if (g) {
+    const [x, y] = toL(g.x * view.width, g.y * view.height);
+    ring(lctx, x, y, g.r * view.height * zoom + 4, "#4ea1ff", true);
   }
   if (drag) {
     const [x, y] = toL(drag.x, drag.y);
@@ -287,6 +308,12 @@ view.addEventListener("pointerup", (e) => {
 
 $("strip").addEventListener("click", (e) => { if (e.target.dataset.k) go(+e.target.dataset.k); });
 $("none").onclick = () => answerAndAdvance("none");
+$("accept").onclick = () => acceptGuess();
+function acceptGuess() {
+  const t = tasks[i], g = t.guess;
+  if (!g || t.label) return;
+  answerAndAdvance("visible", g.x * view.width, g.y * view.height, g.r * view.height);
+}
 $("skip").onclick = () => answerAndAdvance("skip");
 $("clear").onclick = () => save("cleared");
 $("prev").onclick = () => go(i - 1);
@@ -324,6 +351,7 @@ document.addEventListener("keydown", (e) => {
   if (k === "q" || k === "e") { e.preventDefault(); if (!e.repeat) peek(k === "q" ? -3 : 3); return; }
   if (e.repeat) return;
   if (k === "n") answerAndAdvance("none");
+  else if (k === "enter") acceptGuess();
   else if (k === "s") answerAndAdvance("skip");
   else if (k === "delete" || k === "backspace") { e.preventDefault(); save("cleared"); }
   else if (k === "arrowleft") go(i - 1);
