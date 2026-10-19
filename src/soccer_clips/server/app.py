@@ -10,7 +10,7 @@ import shutil
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import get_args
+from typing import Literal, get_args
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -26,6 +26,7 @@ from soccer_clips.models import (
 from soccer_clips.reel.render import render_job, run_render, stale_reasons
 from soccer_clips.scan import scan
 from soccer_clips.store import Store
+from soccer_clips.track import ball_labels
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -90,6 +91,15 @@ class ReelPatch(RequestBody):
 class RenderRequest(RequestBody):
     preset: Preset = "landscape_1080p"
     variant: Variant = "all"
+
+
+class BallLabelIn(RequestBody):
+    game_id: str
+    frame: int = Field(ge=0)
+    state: ball_labels.State | Literal["cleared"]
+    x: float | None = Field(default=None, ge=0, le=1)
+    y: float | None = Field(default=None, ge=0, le=1)
+    r: float | None = Field(default=None, gt=0, le=0.1)
 
 
 class ReelItemView(ReelItem):
@@ -360,6 +370,40 @@ def create_app(store: Store | None = None) -> FastAPI:
             raise HTTPException(404, "clip not exported")
         return FileResponse(path, media_type="video/mp4", filename=f"{game_id}-{clip_id}.mp4")
 
+    # ---- ball labels (Phase 4.1) ----
+
+    @app.get("/api/ball/sets")
+    def ball_sets() -> list[dict]:
+        return ball_labels.summary(store)
+
+    @app.get("/api/ball/sets/{set_name}")
+    def ball_set(set_name: str) -> list[dict]:
+        if set_name not in ball_labels.load_tasks(store.settings).sets:
+            raise HTTPException(404, f"no ball label set {set_name}")
+        return ball_labels.tasks_with_labels(store, set_name)
+
+    @app.post("/api/ball/labels", status_code=204)
+    def ball_label(body: BallLabelIn) -> None:
+        game = load(body.game_id)
+        if body.frame >= game.frame_at(game.duration_s):
+            raise HTTPException(422, f"frame {body.frame} is past the end of the video")
+        if body.state in ("visible", "hidden") and (body.x is None or body.y is None):
+            raise HTTPException(422, f"a {body.state} ball needs x and y")
+        if body.state not in ("visible", "hidden"):
+            body.x = body.y = body.r = None
+        ball_labels.add_label(store.settings, ball_labels.BallLabel(**body.model_dump()))
+
+    @app.get("/ball/frame/{game_id}/{frame}.jpg")
+    def ball_frame(game_id: str, frame: int) -> FileResponse:
+        game = load(game_id)
+        if not 0 <= frame < game.frame_at(game.duration_s):
+            raise HTTPException(404, f"no frame {frame}")
+        return FileResponse(ball_labels.frame_image(store, game, frame), media_type="image/jpeg")
+
+    @app.get("/label-ball")
+    def label_ball_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "label-ball.html")
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
@@ -378,7 +422,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     async def revalidate_pages(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path in ("/", "/reel") or path.startswith("/static/"):
+        if path in ("/", "/reel", "/label-ball") or path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
 

@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Clips — Ball labels</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  #stage { position: relative; background: #000; line-height: 0; user-select: none; }
+  #view { width: 100%; max-height: 82vh; display: block; cursor: none; touch-action: none; }
+  #loupe { position: absolute; width: 240px; height: 240px; border: 2px solid #fff; border-radius: 4px;
+           pointer-events: none; box-shadow: 0 2px 12px #000a; background: #000; }
+  #peek { position: absolute; top: 8px; left: 8px; padding: 2px 8px; background: #000c; color: var(--warn);
+          font-size: 14px; line-height: 1.6; border-radius: 3px; pointer-events: none; }
+  #where { margin-top: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #where b { color: var(--text); font-weight: 600; }
+  .answer { font-size: 16px; font-weight: 600; }
+  .answer.visible { color: var(--in); }
+  .answer.hidden { color: var(--warn); }
+  .answer.none, .answer.skip { color: var(--muted); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .progress { height: 6px; background: #262626; border-radius: 3px; overflow: hidden; width: 120px; }
+  .progress div { height: 100%; background: var(--in); width: 0; }
+  #strip { display: flex; gap: 1px; height: 10px; margin-top: 8px; cursor: pointer; }
+  #strip span { flex: 1; background: #333; }
+  #strip span.visible { background: var(--in); }
+  #strip span.hidden { background: var(--warn); }
+  #strip span.none, #strip span.skip { background: #666; }
+  #strip span.cur { outline: 2px solid #fff; outline-offset: -1px; }
+  .placeholder { padding: 48px 16px; text-align: center; color: var(--muted); }
+  .placeholder code { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="/">← Tagger</a>
+  <select id="setPick" aria-label="label set"></select>
+  <span class="stat"><b id="done">0</b> / <b id="total">0</b> labelled</span>
+  <div class="progress"><div id="bar"></div></div>
+  <span class="stat">frame <b id="pos">–</b></span>
+  <span id="flash"></span>
+</div>
+
+<div class="layout" id="empty" hidden>
+  <section class="box placeholder">
+    No frames to label yet. Add some with<br><br>
+    <code>soccer-clips ball sample bench</code> (150 frames spread over the bench clips, for scoring)<br>
+    <code>soccer-clips ball sample train -n 200</code> (random frames from the games, for training)
+  </section>
+</div>
+
+<div class="layout" id="main" hidden>
+  <section>
+    <div id="stage">
+      <canvas id="view"></canvas>
+      <canvas id="loupe" width="240" height="240" hidden></canvas>
+      <div id="peek" hidden></div>
+    </div>
+    <div id="where"></div>
+    <div id="strip" title="click to jump"></div>
+  </section>
+  <aside>
+    <div class="box">
+      <h3>This frame</h3>
+      <div class="answer" id="answer">not labelled</div>
+      <div class="row" style="margin-top: 8px">
+        <button id="none">No ball <span class="hk">N</span></button>
+        <button id="skip">Can't tell <span class="hk">S</span></button>
+        <button id="clear" class="danger">Clear <span class="hk">Del</span></button>
+      </div>
+      <div class="row" style="margin-top: 8px">
+        <button id="prev">← Prev</button>
+        <button id="next">Next →</button>
+        <button id="unl">Next unlabelled <span class="hk">U</span></button>
+      </div>
+    </div>
+    <div class="box help">
+      <h3>How</h3>
+      <b>Click</b> the centre of the ball. Moves on to the next frame.<br>
+      <b>Shift+click</b>: the ball is <b>hidden</b> (behind a player, in a crowd); click roughly where it is.<br>
+      <b>Drag</b> from the centre to the edge to size it (optional; helps training).<br>
+      <kbd>N</kbd> no ball in the frame &nbsp; <kbd>S</kbd> can't tell<br>
+      <kbd>Del</kbd> clear &nbsp; <kbd>←</kbd>/<kbd>→</kbd> prev/next &nbsp; <kbd>U</kbd> next unlabelled<br>
+      Hold <kbd>Q</kbd> / <kbd>E</kbd>: peek 3 frames earlier / later, to see where the ball is moving<br>
+      <kbd>Z</kbd> magnifier zoom 3× / 6×<br>
+      A blurred streak is still <b>visible</b>: click its middle. A ball in the air counts too.
+      Spare balls lying by the sideline are <b>not</b> the game ball.
+    </div>
+  </aside>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+const view = $("view"), ctx = view.getContext("2d");
+const loupe = $("loupe"), lctx = loupe.getContext("2d");
+let sets = [], setName = null, tasks = [], i = 0;
+let img = null;           // current frame image
+let peekImg = null;       // shown instead while Q/E is held
+let mouse = null;         // cursor in image pixels
+let drag = null;          // {x, y, r} in image pixels while dragging
+let zoom = 3;
+const cache = new Map();  // url -> Image
+
+const frameUrl = (t, d = 0) => `/ball/frame/${encodeURIComponent(t.game_id)}/${t.frame + d}.jpg`;
+function loadImage(url) {
+  if (!cache.has(url)) {
+    const im = new Image();
+    im.src = url;
+    im.ready = new Promise((ok, bad) => { im.onload = () => ok(im); im.onerror = bad; });
+    cache.set(url, im);
+    if (cache.size > 40) cache.delete(cache.keys().next().value);
+  }
+  return cache.get(url).ready;
+}
+
+async function init() {
+  sets = await getJson("/api/ball/sets");
+  if (!sets.length) { $("empty").hidden = false; return; }
+  $("main").hidden = false;
+  const h = readHash();
+  setName = sets.some((s) => s.name === h.set) ? h.set : sets[0].name;
+  $("setPick").innerHTML = sets.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+  $("setPick").value = setName;
+  $("setPick").onchange = () => openSet($("setPick").value);
+  await openSet(setName, h.i != null ? +h.i : null);
+}
+
+async function openSet(name, at = null) {
+  setName = name;
+  tasks = await getJson(`/api/ball/sets/${encodeURIComponent(name)}`);
+  const firstOpen = tasks.findIndex((t) => !t.label);
+  await go(at ?? (firstOpen >= 0 ? firstOpen : 0));
+}
+
+async function go(n) {
+  i = Math.max(0, Math.min(tasks.length - 1, n));
+  history.replaceState(null, "", makeHash({ set: setName, i }));
+  const t = tasks[i];
+  showProgress();
+  try {
+    img = await loadImage(frameUrl(t));
+  } catch {
+    flash("couldn't load that frame", true);
+    return;
+  }
+  if (tasks[i] !== t) return;  // moved on while loading
+  if (view.width !== img.naturalWidth) { view.width = img.naturalWidth; view.height = img.naturalHeight; }
+  draw();
+  for (let k = 1; k <= 3; k++) if (tasks[i + k]) loadImage(frameUrl(tasks[i + k]));  // prefetch
+}
+
+function showProgress() {
+  const done = tasks.filter((t) => t.label).length;
+  $("done").textContent = done;
+  $("total").textContent = tasks.length;
+  $("bar").style.width = `${(100 * done) / Math.max(1, tasks.length)}%`;
+  $("pos").textContent = `${i + 1} / ${tasks.length}`;
+  const t = tasks[i];
+  const fps = 30000 / 1001, s = t.frame / fps;
+  $("where").innerHTML = `${t.clip ? `<b>${esc(t.clip)}</b> · ` : ""}${esc(shortGame(t.game_id))} · `
+    + `video ${fmt(s)} · game frame ${t.frame}`;
+  const l = t.label;
+  const words = { visible: "ball visible", hidden: "ball hidden (approx.)", none: "no ball in frame", skip: "can't tell" };
+  $("answer").textContent = l ? words[l.state] + (l.r ? " · sized" : "") : "not labelled";
+  $("answer").className = "answer " + (l ? l.state : "");
+  $("strip").innerHTML = tasks.length <= 400
+    ? tasks.map((t, k) => `<span class="${t.label?.state || ""}${k === i ? " cur" : ""}" data-k="${k}"></span>`).join("")
+    : "";
+}
+
+function ring(c, x, y, r, colour, dashed) {
+  c.save();
+  c.strokeStyle = colour;
+  c.lineWidth = 2;
+  if (dashed) c.setLineDash([4, 3]);
+  c.beginPath();
+  c.arc(x, y, r, 0, 2 * Math.PI);
+  c.stroke();
+  c.restore();
+}
+
+function draw() {
+  const shown = peekImg || img;
+  if (!shown) return;
+  ctx.drawImage(shown, 0, 0);
+  const l = tasks[i].label;
+  const markR = (r) => Math.max(10, r || 0) + 4;
+  if (l && (l.state === "visible" || l.state === "hidden") && !peekImg) {
+    const x = l.x * view.width, y = l.y * view.height, r = (l.r || 0) * view.height;
+    ring(ctx, x, y, markR(r), l.state === "visible" ? "#3ddc84" : "#ffcf5c", l.state === "hidden");
+  }
+  if (drag) ring(ctx, drag.x, drag.y, Math.max(2, drag.r), "#4ea1ff", false);
+  if (mouse && !drag) {  // small crosshair: the cursor is hidden over the image
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(mouse.x - 12, mouse.y); ctx.lineTo(mouse.x - 4, mouse.y);
+    ctx.moveTo(mouse.x + 4, mouse.y); ctx.lineTo(mouse.x + 12, mouse.y);
+    ctx.moveTo(mouse.x, mouse.y - 12); ctx.lineTo(mouse.x, mouse.y - 4);
+    ctx.moveTo(mouse.x, mouse.y + 4); ctx.lineTo(mouse.x, mouse.y + 12);
+    ctx.stroke();
+  }
+  drawLoupe();
+}
+
+function drawLoupe() {
+  const shown = peekImg || img;
+  if (!mouse || !shown) { loupe.hidden = true; return; }
+  loupe.hidden = false;
+  const span = loupe.width / zoom;  // image pixels shown
+  lctx.imageSmoothingEnabled = false;
+  lctx.fillStyle = "#000";
+  lctx.fillRect(0, 0, loupe.width, loupe.height);
+  lctx.drawImage(shown, mouse.x - span / 2, mouse.y - span / 2, span, span, 0, 0, loupe.width, loupe.height);
+  const toL = (x, y) => [(x - mouse.x) * zoom + loupe.width / 2, (y - mouse.y) * zoom + loupe.height / 2];
+  const l = tasks[i].label;
+  if (l && (l.state === "visible" || l.state === "hidden") && !peekImg) {
+    const [x, y] = toL(l.x * view.width, l.y * view.height);
+    ring(lctx, x, y, Math.max(4, (l.r || 0) * view.height) * zoom + 3, l.state === "visible" ? "#3ddc84" : "#ffcf5c", l.state === "hidden");
+  }
+  if (drag) {
+    const [x, y] = toL(drag.x, drag.y);
+    ring(lctx, x, y, Math.max(2, drag.r) * zoom, "#4ea1ff", false);
+  }
+  lctx.strokeStyle = "#fff8";
+  lctx.lineWidth = 1;
+  const c = loupe.width / 2;
+  lctx.beginPath();
+  lctx.moveTo(c - 20, c); lctx.lineTo(c - 6, c); lctx.moveTo(c + 6, c); lctx.lineTo(c + 20, c);
+  lctx.moveTo(c, c - 20); lctx.lineTo(c, c - 6); lctx.moveTo(c, c + 6); lctx.lineTo(c, c + 20);
+  lctx.stroke();
+  // Sit beside the cursor, flipping to the other side near the edges.
+  const rect = view.getBoundingClientRect(), sx = rect.width / view.width;
+  const px = mouse.x * sx, py = mouse.y * sy();
+  let left = px + 40, top = py - loupe.height - 40;
+  if (left + loupe.width > rect.width) left = px - loupe.width - 40;
+  if (top < 0) top = py + 40;
+  loupe.style.left = `${left}px`;
+  loupe.style.top = `${top}px`;
+}
+const sy = () => view.getBoundingClientRect().height / view.height;
+
+function toImage(e) {
+  const r = view.getBoundingClientRect();
+  return { x: ((e.clientX - r.left) * view.width) / r.width, y: ((e.clientY - r.top) * view.height) / r.height };
+}
+
+async function save(state, x = null, y = null, r = null) {
+  const t = tasks[i];
+  const body = { game_id: t.game_id, frame: t.frame, state };
+  if (x != null) Object.assign(body, { x: x / view.width, y: y / view.height });
+  if (r != null) body.r = Math.min(0.1, r / view.height);
+  await api("POST", "/api/ball/labels", body);
+  t.label = state === "cleared" ? null : body;
+  showProgress();
+  draw();
+}
+
+async function answerAndAdvance(...args) {
+  const at = i;
+  await save(...args);
+  if (i === at) {
+    if (i < tasks.length - 1) await go(i + 1);
+    else { const open = tasks.findIndex((t) => !t.label); flash(open < 0 ? "all done 🎉" : "end of set"); }
+  }
+}
+
+view.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || !img) return;
+  const p = toImage(e);
+  drag = { x: p.x, y: p.y, r: 0 };
+  view.setPointerCapture(e.pointerId);
+});
+view.addEventListener("pointermove", (e) => {
+  mouse = toImage(e);
+  if (drag) drag.r = Math.hypot(mouse.x - drag.x, mouse.y - drag.y);
+  draw();
+});
+view.addEventListener("pointerleave", () => { if (!drag) { mouse = null; draw(); } });
+view.addEventListener("pointerup", (e) => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  const sized = d.r * (view.getBoundingClientRect().width / view.width) > 4;  // dragged > 4 screen px
+  answerAndAdvance(e.shiftKey ? "hidden" : "visible", d.x, d.y, sized ? d.r : null);
+});
+
+$("strip").addEventListener("click", (e) => { if (e.target.dataset.k) go(+e.target.dataset.k); });
+$("none").onclick = () => answerAndAdvance("none");
+$("skip").onclick = () => answerAndAdvance("skip");
+$("clear").onclick = () => save("cleared");
+$("prev").onclick = () => go(i - 1);
+$("next").onclick = () => go(i + 1);
+$("unl").onclick = () => nextUnlabelled();
+
+function nextUnlabelled() {
+  const order = [...tasks.keys()].slice(i + 1).concat([...tasks.keys()].slice(0, i + 1));
+  const k = order.find((k) => !tasks[k].label);
+  if (k == null) flash("everything in this set is labelled");
+  else go(k);
+}
+
+let peeking = null;
+async function peek(d) {
+  if (peeking === d) return;
+  peeking = d;
+  $("peek").textContent = `${d > 0 ? "+" : "−"}${Math.abs(d)} frames`;
+  $("peek").hidden = false;
+  try {
+    const im = await loadImage(frameUrl(tasks[i], d));
+    if (peeking === d) { peekImg = im; draw(); }
+  } catch { flash("couldn't load that frame", true); }
+}
+function unpeek() {
+  peeking = null;
+  peekImg = null;
+  $("peek").hidden = true;
+  draw();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (typingInField(e) || e.ctrlKey || e.metaKey || e.altKey || !tasks.length) return;
+  const k = e.key.toLowerCase();
+  if (k === "q" || k === "e") { e.preventDefault(); if (!e.repeat) peek(k === "q" ? -3 : 3); return; }
+  if (e.repeat) return;
+  if (k === "n") answerAndAdvance("none");
+  else if (k === "s") answerAndAdvance("skip");
+  else if (k === "delete" || k === "backspace") { e.preventDefault(); save("cleared"); }
+  else if (k === "arrowleft") go(i - 1);
+  else if (k === "arrowright") go(i + 1);
+  else if (k === "u") nextUnlabelled();
+  else if (k === "z") { zoom = zoom === 3 ? 6 : 3; draw(); }
+  else return;
+  e.preventDefault();
+});
+document.addEventListener("keyup", (e) => {
+  const k = e.key.toLowerCase();
+  if ((k === "q" || k === "e") && peeking != null) unpeek();
+});
+window.addEventListener("blur", () => { if (peeking != null) unpeek(); });
+
+init();
+</script>
+</body>
+</html>

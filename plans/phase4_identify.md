@@ -26,7 +26,8 @@ The ball is hard to *find* (5–15 px, motion blur, hidden by legs, look-alikes:
 **Tasks**
 - [ ] Measure stock `sports ball` recall/precision on hand-checked frames (part of the Phase 3.2 benchmark)
 - [ ] Centre-crop high-res pass; compare
-- [ ] Ball labelling page (click the ball / "no ball visible")
+- [x] Ball labelling page (2026-10-18): `/label-ball`, sets `bench` (149 frames over the bench clips, for scoring) and `train` (random game frames away from the bench clips); `soccer-clips ball sample/score`. Labels in `labels/ball.jsonl`.
+- [ ] Label the bench set and score the variants (`soccer-clips ball score --results results-l4`)
 - [ ] Fine-tune a nano ball model (if stock isn't good enough)
 - [ ] Temporal filter + gap filling → `ball.npz`
 - [ ] Ball overlay in the tagger to check it by eye
