@@ -173,6 +173,40 @@ def frame_image(store: Store, game: Game, frame: int) -> Path:
 MIN_TOL_PX = 10  # a detection counts if its centre is within this (or 2 ball radii) of the label
 
 
+def on_ball(label: BallLabel, game: Game, cx: np.ndarray, cy: np.ndarray) -> np.ndarray:
+    """Which detection centres (pixels) lie on the labelled ball, visible or hidden."""
+    if label.state not in ("visible", "hidden"):
+        return np.zeros(len(cx), bool)
+    tol = max(MIN_TOL_PX, 2 * (label.r or 0) * game.height)
+    return np.hypot(cx - label.x * game.width, cy - label.y * game.height) <= tol
+
+
+def new_tallies(confs) -> dict:
+    return {c: {"visible": 0, "found": 0, "hidden": 0, "hidden_found": 0, "dets": 0, "true_dets": 0} for c in confs}
+
+
+def tally(tallies: dict, label: BallLabel, conf: np.ndarray, hit: np.ndarray) -> None:
+    """Add one labelled frame's detections (confidences, and whether each is on the ball)."""
+    for c, t in tallies.items():
+        keep = conf >= c
+        t["dets"] += int(keep.sum())
+        t["true_dets"] += int((keep & hit).sum())
+        if label.state == "visible":
+            t["visible"] += 1
+            t["found"] += int((keep & hit).any())
+        elif label.state == "hidden":
+            t["hidden"] += 1
+            t["hidden_found"] += int((keep & hit).any())
+
+
+def summarise(tallies: dict) -> dict:
+    return {str(c): {"recall": round(t["found"] / t["visible"], 3) if t["visible"] else None,
+                     "precision": round(t["true_dets"] / t["dets"], 3) if t["dets"] else None,
+                     "hidden_found": round(t["hidden_found"] / t["hidden"], 3) if t["hidden"] else None,
+                     "visible": t["visible"], "hidden": t["hidden"], "dets": t["dets"]}
+            for c, t in tallies.items()}
+
+
 def score(store: Store, results: Path, confs=(0.1, 0.25, 0.4)) -> dict:
     """
     Per variant folder under `results`: for bench frames labelled visible, the
@@ -187,8 +221,7 @@ def score(store: Store, results: Path, confs=(0.1, 0.25, 0.4)) -> dict:
     games: dict[str, Game] = {}
     out = {}
     for vdir in sorted(p for p in results.iterdir() if p.is_dir()):
-        tallies = {c: {"visible": 0, "found": 0, "hidden": 0, "hidden_found": 0, "dets": 0, "true_dets": 0}
-                   for c in confs}
+        tallies = new_tallies(confs)
         for (gid, frame), task in bench.items():
             label = labels.get((gid, frame))
             if label is None or label.state == "skip" or task.clip not in clips:
@@ -200,29 +233,9 @@ def score(store: Store, results: Path, confs=(0.1, 0.25, 0.4)) -> dict:
             local = frame - game.frame_at(clips[task.clip].start_s)
             arr = np.load(npz)["boxes"]
             balls = arr[(arr[:, 1] == 32) & (arr[:, 0] == local)]
-            cx, cy = (balls[:, 3] + balls[:, 5]) / 2, (balls[:, 4] + balls[:, 6]) / 2
-            if label.state in ("visible", "hidden"):
-                lx, ly = label.x * game.width, label.y * game.height
-                tol = max(MIN_TOL_PX, 2 * (label.r or 0) * game.height)
-                hit = np.hypot(cx - lx, cy - ly) <= tol
-            else:
-                hit = np.zeros(len(balls), bool)
-            for c, t in tallies.items():
-                keep = balls[:, 7] >= c
-                t["dets"] += int(keep.sum())
-                t["true_dets"] += int((keep & hit).sum())
-                if label.state == "visible":
-                    t["visible"] += 1
-                    t["found"] += int((keep & hit).any())
-                elif label.state == "hidden":
-                    t["hidden"] += 1
-                    t["hidden_found"] += int((keep & hit).any())
-        out[vdir.name] = {
-            str(c): {"recall": round(t["found"] / t["visible"], 3) if t["visible"] else None,
-                     "precision": round(t["true_dets"] / t["dets"], 3) if t["dets"] else None,
-                     "hidden_found": round(t["hidden_found"] / t["hidden"], 3) if t["hidden"] else None,
-                     "visible": t["visible"], "hidden": t["hidden"], "dets": t["dets"]}
-            for c, t in tallies.items()}
+            hit = on_ball(label, game, (balls[:, 3] + balls[:, 5]) / 2, (balls[:, 4] + balls[:, 6]) / 2)
+            tally(tallies, label, balls[:, 7], hit)
+        out[vdir.name] = summarise(tallies)
     return out
 
 

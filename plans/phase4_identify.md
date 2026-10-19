@@ -30,7 +30,8 @@ The ball is hard to *find* (5–15 px, motion blur, hidden by legs, look-alikes:
 - [x] Label the bench set and score the variants (`soccer-clips ball score --results results-l4`): done 2026-10-19, see Findings
 - [x] Guess mode for labelling (2026-10-19): `soccer-clips ball guess train` stores YOLO11m-centre's best guess per frame; Enter accepts it. Never shown for bench.
 - [x] Train set: 500 frames (seed 1), ~100 per game, half from tagged clips, none within 10s of a bench clip (2026-10-19)
-- [ ] Label the train set
+- [x] Label the train set (2026-10-19): 318 visible, 70 hidden, 71 none, 41 can't tell; of 237 model guesses, 169 accepted and 68 wrong (spare balls, heads, etc.: useful hard negatives)
+- [x] Training pipeline (2026-10-19): `soccer-clips ball export/train/eval`. Export: 1280×720 native crops (centre + one random crop around the ball), boxes from your sizes or a fitted size-vs-height line, the ball kept as COCO class 32 so the pretrained head carries over; 700 train / 39 val images from separate frames. Eval on the bench frame images reproduces the clip-based score (stock YOLO11m centre: 57% / 80%).
 - [ ] Fine-tune a ball model (YOLO11m first; also try YOLO11l/x and YOLO26 as bases) on a rented GPU, score on the bench labels
 - [ ] Temporal filter + gap filling → `ball.npz`
 - [ ] Ball overlay in the tagger to check it by eye

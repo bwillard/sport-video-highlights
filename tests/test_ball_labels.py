@@ -107,3 +107,26 @@ def test_guesses_shown_for_train_never_bench(store, settings, client):
     assert client.get("/api/ball/sets/train").json()[0]["guess"] == guess.model_dump()
     with pytest.raises(ValueError):
         ball_labels.make_guesses(store, "bench")
+
+
+def test_crop_origin_contains_ball_and_stays_in_frame():
+    import random
+
+    from soccer_clips.track.ball_train import CROP_H, CROP_W, _crop_origin
+
+    rng = random.Random(0)
+    for x, y in [(10, 10), (1910, 1070), (960, 540), (300, 900)]:
+        for _ in range(50):
+            ox, oy = _crop_origin(x, y, rng, 1920, 1080)
+            assert 0 <= ox <= 1920 - CROP_W and 0 <= oy <= 1080 - CROP_H
+            assert ox <= x < ox + CROP_W and oy <= y < oy + CROP_H
+
+
+def test_radius_model_fits_size_against_height():
+    from soccer_clips.track.ball_train import radius_model
+
+    labels = [ball_labels.BallLabel(game_id=GAME, frame=k, state="visible", x=0.5, y=y, r=0.002 + 0.02 * y)
+              for k, y in enumerate(np.linspace(0.3, 0.9, 12))]
+    b, a = radius_model(labels)
+    assert abs(b - 0.02) < 1e-6 and abs(a - 0.002) < 1e-6
+    assert list(radius_model(labels[:3])) == [0.0, 0.008]  # too few sized labels: a fixed guess

@@ -68,6 +68,27 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
     elif args.ball_command == "guess":
         n = ball_labels.make_guesses(store, args.set)
         print(f"guessed {n} frame(s)")
+    elif args.ball_command == "export":
+        from soccer_clips.track import ball_train
+
+        ball_train.export(store)
+    elif args.ball_command == "train":
+        from soccer_clips.track import ball_train
+
+        for base in args.bases:
+            ball_train.train(store, base, epochs=args.epochs, batch=args.batch)
+    elif args.ball_command == "eval":
+        from pathlib import Path
+
+        from soccer_clips.track import ball_train
+        from soccer_clips.track.benchmark import models_dir
+
+        scores = {}
+        for name in args.models:
+            weights = Path(name) if Path(name).exists() else models_dir(store) / f"{name}.pt"
+            label = name + ("" if args.full else "-centre")
+            scores[label] = ball_train.evaluate(store, weights, crop=not args.full, imgsz=args.imgsz)
+            print(ball_labels.score_table({label: scores[label]}).split("\n", 1)[1])
     elif args.ball_command == "score":
         from soccer_clips.track.bench import bench_dir
 
@@ -110,6 +131,15 @@ def main() -> None:
     sample.add_argument("--seed", type=int)
     guess = ball_sub.add_parser("guess", help="pre-compute the model's ball guesses for a set (not bench)")
     guess.add_argument("set", choices=["train"])
+    ball_sub.add_parser("export", help="turn train-set labels into a YOLO dataset (labels/dataset/)")
+    train = ball_sub.add_parser("train", help="fine-tune YOLO bases on the exported dataset (GPU)")
+    train.add_argument("bases", nargs="+", help="e.g. yolo11m yolo26l; weights go to models/ball_<base>.pt")
+    train.add_argument("--epochs", type=int, default=100)
+    train.add_argument("--batch", type=int, default=8)
+    ev = ball_sub.add_parser("eval", help="score models on the bench frame images")
+    ev.add_argument("models", nargs="+", help="names in models/ (yolo11m, ball_yolo11m, ...) or .pt paths")
+    ev.add_argument("--full", action="store_true", help="whole frame instead of the centre crop")
+    ev.add_argument("--imgsz", type=int, default=1280)
     score = ball_sub.add_parser("score", help="score benchmark ball detections against the bench labels")
     score.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
     args = parser.parse_args()
