@@ -52,7 +52,9 @@ def api(method: str, path: str, body: dict | None = None) -> dict | list | None:
         with urllib.request.urlopen(req, timeout=60) as r:
             text = r.read().decode()
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"RunPod API {method} {path}: {e.code} {e.read().decode()[:500]}") from None
+        hint = (" (the API key may be read-only: it needs read/write access to pods)"
+                if e.code in (401, 403) and method != "GET" else "")
+        raise RuntimeError(f"RunPod API {method} {path}: {e.code} {e.read().decode()[:500]}{hint}") from None
     return json.loads(text) if text.strip() else None
 
 
