@@ -118,17 +118,29 @@ class Runner:
 
     # ---- steps ----
 
-    def start_pod(self) -> None:
+    def start_pod(self, wait_s: int = 1200) -> None:
+        """Create the pod, retrying while RunPod has no machine free (up to wait_s)."""
         if not SSH_KEY.with_suffix(".pub").exists():
             raise ConfigError(f"no SSH key at {SSH_KEY}.pub")
+        # No allowedCudaVersions filter: together with an exposed TCP port it left no
+        # machines at all (2026-10-19). The job's setup checks CUDA works instead.
         body = {
             "name": POD_PREFIX + self.run_id, "cloudType": "SECURE", "computeType": "GPU",
             "gpuTypeIds": self.gpu_types, "gpuTypePriority": "custom", "gpuCount": 1,
             "imageName": IMAGE, "ports": ["22/tcp"], "containerDiskInGb": 40, "volumeInGb": 0,
-            "interruptible": False, "allowedCudaVersions": ["12.8", "12.9", "13.0"],
+            "interruptible": False,
             "env": {"SSH_PUBLIC_KEY": SSH_KEY.with_suffix(".pub").read_text().strip()},
         }
-        self.pod = api("POST", "/pods", body)
+        deadline = time.time() + wait_s
+        while True:
+            try:
+                self.pod = api("POST", "/pods", body)
+                break
+            except RuntimeError as e:
+                if "no instances currently available" not in str(e) or time.time() > deadline:
+                    raise
+                self.log("no machine free for those GPU types; retrying in 60 s")
+                time.sleep(60)
         (self.dir / "pod.json").write_text(json.dumps(self.pod, indent=2))
         self.log(f"pod {self.pod['id']} created ({self.pod.get('gpu', {}).get('displayName', '?')}, "
                  f"${self.pod.get('costPerHr', '?')}/h)")
