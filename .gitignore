@@ -4,3 +4,6 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
+
+# Claude Code personal settings (machine-specific permission rules)
+.claude/settings.local.json

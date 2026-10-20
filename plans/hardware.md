@@ -40,6 +40,9 @@ If the local-only rule stays, add a GPU: it's the only option that's both privat
 
 Updated after the L4 test: the quality gap is now measured, not guessed. The bigger model at full resolution keeps her track for most or all of a clip (vs ~10–50% for what the CPU can run), and the bigger model finds the ball more often. Both need a GPU. An L4-class card does a whole game in ~1–3 h without any optimisation.
 
+## Cloud jobs (2026-10-19)
+`soccer-clips gpu run <job>` drives RunPod's REST API from this machine: create a Secure Cloud pod (`runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404`; RTX 4090, else 5090 / L40S), upload exactly the listed files, run, download, wipe and delete the pod in a `finally`. A dead-man's switch on the pod (`kill 1` after `--max-hours`) stops GPU billing even if this machine dies. The API key stays in `.env` and never goes to the pod. A Claude Code "ask" rule (`.claude/settings.local.json`) makes every launch need your approval. Bigger cards were judged not worth it for this job size (2026-10-19): the dataloader, not the GPU, likely limits a 700-image training run.
+
 ## Measurements
 | Hardware | Model / imgsz / frame step | fps | Full game (h) | Notes |
 |---|---|---|---|---|

@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 
 from soccer_clips.config import get_settings
@@ -88,7 +89,9 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
             weights = Path(name) if Path(name).exists() else models_dir(store) / f"{name}.pt"
             label = name + ("" if args.full else "-centre")
             scores[label] = ball_train.evaluate(store, weights, crop=not args.full, imgsz=args.imgsz)
-            print(ball_labels.score_table({label: scores[label]}).split("\n", 1)[1])
+            print(ball_labels.score_table({label: scores[label]}).split("\n", 1)[1], flush=True)
+            if args.json:
+                Path(args.json).write_text(json.dumps(scores, indent=2))
     elif args.ball_command == "score":
         from soccer_clips.track.bench import bench_dir
 
@@ -97,6 +100,40 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
     else:
         for s in ball_labels.summary(store):
             print(f"{s['name']:8} {s['labelled']}/{s['total']} labelled")
+
+
+def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
+    from soccer_clips import gpu
+
+    if args.gpu_command == "run":
+        import shutil
+
+        from soccer_clips.track import ball_labels
+        from soccer_clips.track.benchmark import models_dir
+
+        job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs)
+        runner = gpu.Runner(store, job, gpu_types=args.gpu or gpu.GPU_TYPES, max_hours=args.max_hours,
+                            log=lambda m: print(m, flush=True))
+        print(f"run folder: {runner.dir}", flush=True)
+        results = runner.run()
+        for w in sorted((results / "models").glob("ball_*.pt")):
+            shutil.copy(w, models_dir(store) / w.name)
+            print(f"model: {models_dir(store) / w.name}")
+        for name in ("stock", "finetuned"):
+            f = results / "out" / f"{name}.json"
+            if f.exists():
+                print(f"\n{name}:\n" + ball_labels.score_table(json.loads(f.read_text())))
+    elif args.gpu_command == "cleanup":
+        pods = gpu.list_pods()
+        for p in pods:
+            gpu.delete_pod(p["id"])
+            print(f"deleted {p['id']} ({p.get('name')})")
+        print(f"{len(pods)} pod(s) deleted")
+    else:
+        pods = gpu.list_pods()
+        for p in pods:
+            print(f"{p['id']}  {p.get('name')}  {p.get('desiredStatus')}  ${p.get('costPerHr')}/h")
+        print(f"{len(pods)} soccer-clips pod(s) running or stopped")
 
 
 def main() -> None:
@@ -140,12 +177,23 @@ def main() -> None:
     ev.add_argument("models", nargs="+", help="names in models/ (yolo11m, ball_yolo11m, ...) or .pt paths")
     ev.add_argument("--full", action="store_true", help="whole frame instead of the centre crop")
     ev.add_argument("--imgsz", type=int, default=1280)
+    ev.add_argument("--json", help="also write the scores to this file")
     score = ball_sub.add_parser("score", help="score benchmark ball detections against the bench labels")
     score.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
+    g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")
+    g_sub = g.add_subparsers(dest="gpu_command")
+    run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")
+    run_gpu.add_argument("job", choices=["ball-train"], help="ball-train: score stock bases, fine-tune, score")
+    run_gpu.add_argument("--stock", nargs="+", default=["yolo11m", "yolo11l", "yolo11x", "yolo26m", "yolo26l", "yolo26x"])
+    run_gpu.add_argument("--train", nargs="+", default=["yolo11m"], help="always fine-tuned, plus the best other stock base")
+    run_gpu.add_argument("--epochs", type=int, default=100)
+    run_gpu.add_argument("--gpu", nargs="+", help="RunPod GPU type ids, in order of preference")
+    run_gpu.add_argument("--max-hours", type=float, default=3.0, help="hard limit; the pod also stops itself after this")
+    g_sub.add_parser("cleanup", help="delete every soccer-clips pod")
     args = parser.parse_args()
 
     store = Store(get_settings())
-    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball}[args.command](store, args)
+    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "gpu": cmd_gpu}[args.command](store, args)
 
 
 if __name__ == "__main__":
