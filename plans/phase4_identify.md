@@ -132,6 +132,24 @@ For a chosen player, find the stretches of a game where they're involved with th
   - Low thresholds pay off: going from 0.25 to 0.1 adds ~10–20 points of recall at similar precision.
   - What this means: a stock detector misses ~4 in 10 visible balls even at its best, too many gaps for "near the ball" to be reliable from detection alone. Next: the temporal filter on the current detections (cheap, shows how far gaps can be filled), and fine-tuning YOLO on our own ball labels (the train set).
 
+- **2026-10-19 — First cloud fine-tune** (RunPod RTX 4090, 35 min, ~$0.52; `gpu/20261019-214518-ball-train/`). Scored on the 149 bench frames (centre crop, 1280):
+
+  | Model | Found @0.1 | Real @0.1 | Found @0.25 | Real @0.25 | Found @0.4 | Real @0.4 |
+  |---|---|---|---|---|---|---|
+  | stock YOLO11m (previous best) | 57% | 80% | 42% | 80% | 30% | 78% |
+  | stock YOLO11l | 68% | 79% | 62% | 86% | 53% | 87% |
+  | stock YOLO11x | 66% | 78% | 56% | 80% | 42% | 80% |
+  | stock YOLO26m | 71% | 70% | 62% | 82% | 56% | 83% |
+  | stock YOLO26l | 64% | 78% | 61% | 84% | 52% | 83% |
+  | stock YOLO26x | 75% | 75% | 71% | 84% | 64% | 83% |
+  | fine-tuned YOLO11m | 62% | 95% | 51% | 100% | 41% | 100% |
+  | **fine-tuned YOLO26x** | **81%** | 66% | **78%** | 80% | **75%** | **92%** |
+
+  - **YOLO26x is the base to use**: best stock (75%) and best after fine-tuning. At conf ≥ 0.4 the fine-tuned model finds 3 in 4 visible balls with ~92% of detections real, vs 30% / 78% for stock YOLO11m at the same threshold.
+  - Fine-tuning mostly made YOLO11m *more precise* (95–100% real) and YOLO26x *find more* at the higher thresholds.
+  - **The kept checkpoints are undercooked**: ultralytics keeps the epoch with the best box-fit "fitness" (0.9 × mAP50-95) on a 39-image / 31-ball validation split, which picked epoch 2 (YOLO11m) and epoch 6 (YOLO26x), and early stopping (patience 30) ended training at epochs 32 / 36. Validation mAP50 is noisy (0.6–0.82) and peaks around epochs 10–22. Next run: a bigger validation split, no early stopping on box fit, checkpoints every few epochs, and pick the checkpoint by our own found/real score on the validation frames (never the bench).
+  - Not yet measured: YOLO26x speed on a whole game (it's the biggest model; on a GPU it should still be fine), and how much the temporal filter adds on top.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|
