@@ -150,6 +150,8 @@ For a chosen player, find the stretches of a game where they're involved with th
   - **The kept checkpoints are undercooked**: ultralytics keeps the epoch with the best box-fit "fitness" (0.9 × mAP50-95) on a 39-image / 31-ball validation split, which picked epoch 2 (YOLO11m) and epoch 6 (YOLO26x), and early stopping (patience 30) ended training at epochs 32 / 36. Validation mAP50 is noisy (0.6–0.82) and peaks around epochs 10–22. Next run: a bigger validation split, no early stopping on box fit, checkpoints every few epochs, and pick the checkpoint by our own found/real score on the validation frames (never the bench).
   - Not yet measured: YOLO26x speed on a whole game (it's the biggest model; on a GPU it should still be fine), and how much the temporal filter adds on top.
 
+- **2026-10-19 — Other real balls.** Labels marked only the game ball, so spare balls were negatives in training (teaching the model that real balls aren't balls) and mistakes in scoring. Now: `labels/ball_others.json` holds other real balls per frame (from `soccer-clips ball others find` + Y/N review at `/review-balls`, or added by hand with `O` on the labelling page). Training boxes them; scoring counts detections on them as fine and reports junk (non-ball detections) per frame separately. Checkpoint selection fixed for the next run: 20% validation split, no early stopping, a checkpoint every 5 epochs, keep the best by harmonic mean of found/real at conf 0.25 on the validation frames.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

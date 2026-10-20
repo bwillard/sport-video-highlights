@@ -20,7 +20,8 @@ def store(settings):
     bench.add_clip(store, GAME, "c1", "one")
     ball_labels.add_tasks(store, "bench", ball_labels.sample_bench(store, n=2))
     ball_labels.add_tasks(store, "train", [ball_labels.BallTask(game_id=GAME, frame=100)])
-    ball_labels.frame_image(store, store.load_game(GAME), 100)  # a cached train frame: must not be uploaded
+    ball_labels.add_tasks(store, "train", [ball_labels.BallTask(game_id=GAME, frame=110)])
+    ball_labels.frame_image(store, store.load_game(GAME), 110)  # a cached train frame: must not be uploaded
     ball_labels.add_label(settings, ball_labels.BallLabel(game_id=GAME, frame=100, state="none"))
     return store
 
@@ -31,10 +32,11 @@ def test_ball_train_uploads_only_what_it_needs(store):
     data = ball_labels.labels_dir(store.settings) / "dataset" / "data.yaml"
     data.parent.mkdir(parents=True)
     data.write_text("path: x\n")
+    (data.parent / "val_frames.json").write_text(f'[["{GAME}", 100]]')  # a train frame used for validation
     job = gpu.ball_train_job(store, stock=["yolo11m"], train_bases=["yolo11m"], epochs=1)
     frames = [u for u in job.uploads if u.startswith("labels/frames/")]
     bench_frames = {t.frame for t in ball_labels.load_tasks(store.settings).sets["bench"]}
-    assert sorted(frames) == sorted(f"labels/frames/{GAME}/{f}.jpg" for f in bench_frames)
+    assert sorted(frames) == sorted(f"labels/frames/{GAME}/{f}.jpg" for f in bench_frames | {100})
     assert f"games/2026/{GAME}/game.json" in job.uploads
     assert not any(u.startswith(("full", "clips", "bench", "models")) or u.endswith("probe.json") for u in job.uploads)
     root = gpu.data_root(store)

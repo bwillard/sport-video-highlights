@@ -6,7 +6,7 @@ from conftest import make_video
 from soccer_clips.models import Clip
 from soccer_clips.server.app import create_app
 from soccer_clips.store import Store
-from soccer_clips.track import ball_labels, bench
+from soccer_clips.track import ball_labels, ball_others, bench
 
 GAME = "gu11-test-2026-10-10"
 
@@ -80,19 +80,30 @@ def test_score(store, settings):
     def ball(f, cx, cy, conf):
         return [f, 32, -1, cx - 3, cy - 3, cx + 3, cy + 3, conf]
 
+    # A spare ball confirmed in frame 3, and an unsure candidate in frame 1.
+    def mark(o):
+        o.frames[ball_others.key(GAME, tasks[2].frame)] = [ball_others.OtherBall(x=200 / w, y=50 / h, verdict="ball")]
+        o.frames[ball_others.key(GAME, tasks[0].frame)] = [ball_others.OtherBall(x=300 / w, y=170 / h, verdict="unsure")]
+    ball_others.edit(settings, mark)
+
     rows = [
-        ball(local[0], 160 + 4, 90, 0.5),   # on the visible ball
-        ball(local[0], 20, 20, 0.15),       # false hit, weak
-        ball(local[1], 80, 90, 0.3),        # on the hidden ball
-        ball(local[2], 100, 100, 0.6),      # ball where there is none
+        ball(local[0], 160 + 4, 90, 0.5),   # on the visible game ball
+        ball(local[0], 20, 20, 0.15),       # junk, weak
+        ball(local[0], 300, 170, 0.9),      # on the unsure candidate: left out
+        ball(local[1], 80, 90, 0.3),        # on the hidden game ball
+        ball(local[2], 100, 100, 0.6),      # junk: no ball there
+        ball(local[2], 202, 50, 0.45),      # on the spare ball: a real ball, so fine
     ]
     vdir = bench.bench_dir(settings) / "results" / "v"
     vdir.mkdir(parents=True)
     np.savez_compressed(vdir / "one.npz", boxes=np.array(rows, np.float32))
     s = ball_labels.score(store, vdir.parent)["v"]
-    assert s["0.1"] == {"recall": 1.0, "precision": 0.5, "hidden_found": 1.0, "visible": 1, "hidden": 1, "dets": 4}
-    assert s["0.25"]["precision"] == round(2 / 3, 3)
-    assert s["0.4"] == {"recall": 1.0, "precision": 0.5, "hidden_found": 0.0, "visible": 1, "hidden": 1, "dets": 2}
+    assert s["0.1"] == {"recall": 1.0, "precision": 0.6, "junk_per_frame": round(2 / 3, 3), "hidden_found": 1.0,
+                        "visible": 1, "hidden": 1, "dets": 5, "other": 1}
+    assert s["0.25"]["precision"] == 0.75 and s["0.25"]["junk_per_frame"] == round(1 / 3, 3)
+    assert s["0.4"] == {"recall": 1.0, "precision": round(2 / 3, 3), "junk_per_frame": round(1 / 3, 3),
+                        "hidden_found": 0.0, "visible": 1, "hidden": 1, "dets": 3, "other": 1}
+    assert "junk/frame" in ball_labels.score_table({"v": s})
 
 
 def test_guesses_shown_for_train_never_bench(store, settings, client):
@@ -130,3 +141,45 @@ def test_radius_model_fits_size_against_height():
     b, a = radius_model(labels)
     assert abs(b - 0.02) < 1e-6 and abs(a - 0.002) < 1e-6
     assert list(radius_model(labels[:3])) == [0.0, 0.008]  # too few sized labels: a fixed guess
+
+
+def test_other_balls_api(store, settings, client):
+    ball_labels.add_tasks(store, "train", [ball_labels.BallTask(game_id=GAME, frame=100)])
+    k = ball_others.key(GAME, 100)
+    ball_others.edit(settings, lambda o: o.frames.setdefault(k, []).append(
+        ball_others.OtherBall(x=0.2, y=0.3, r=0.01, conf=0.7, source="ball_yolo26x")))
+    review = client.get("/api/ball/others/review").json()
+    assert [(c["index"], c["verdict"], c["set"]) for c in review] == [(0, None, "train")]
+    assert client.put(f"/api/ball/others/{GAME}/100/0", json={"verdict": "ball"}).status_code == 204
+    assert client.put(f"/api/ball/others/{GAME}/100/5", json={"verdict": "ball"}).status_code == 404
+    assert client.put(f"/api/ball/others/{GAME}/100/0", json={"verdict": "maybe"}).status_code == 422
+    # a hand-added one is confirmed straight away and gets the next index
+    assert client.post(f"/api/ball/others/{GAME}/100", json={"x": 0.6, "y": 0.6}).json() == {"index": 1}
+    task = client.get("/api/ball/sets/train").json()[0]
+    assert [(o["index"], o["x"]) for o in task["others"]] == [(0, 0.2), (1, 0.6)]
+    # removing marks it "not": indexes stay put, and it drops out of the confirmed list
+    client.put(f"/api/ball/others/{GAME}/100/0", json={"verdict": "not"})
+    assert [o["index"] for o in client.get("/api/ball/sets/train").json()[0]["others"]] == [1]
+    assert [c["index"] for c in client.get("/api/ball/others/review").json()] == [0]  # manual ones aren't reviewed
+    assert client.get("/review-balls").status_code == 200
+
+
+def test_export_boxes_other_balls(store, settings, monkeypatch):
+    from soccer_clips.track import ball_train
+
+    monkeypatch.setattr(ball_train, "CROP_W", 160)
+    monkeypatch.setattr(ball_train, "CROP_H", 90)
+    monkeypatch.setattr(ball_train, "CENTRE", (80, 45))
+    tasks = [ball_labels.BallTask(game_id=GAME, frame=f) for f in (40, 50)]
+    ball_labels.add_tasks(store, "train", tasks)
+    ball_labels.add_label(settings, ball_labels.BallLabel(game_id=GAME, frame=40, state="visible", x=0.5, y=0.5, r=0.02))
+    ball_labels.add_label(settings, ball_labels.BallLabel(game_id=GAME, frame=50, state="none"))
+    ball_others.edit(settings, lambda o: o.frames.update({
+        ball_others.key(GAME, 40): [ball_others.OtherBall(x=0.55, y=0.55, r=0.02, verdict="ball"),
+                                     ball_others.OtherBall(x=0.45, y=0.45, verdict="not")],
+        ball_others.key(GAME, 50): [ball_others.OtherBall(x=0.5, y=0.5, r=0.02, verdict="ball")]}))
+    out = ball_train.export(store, val_frac=0.0)
+    lines = {p.stem: p.read_text().split("\n")[:-1] for p in (out / "labels" / "train").glob("*.txt")}
+    assert len(lines[f"{GAME}_40_0"]) == 2  # game ball + the confirmed spare (not the rejected one)
+    assert len(lines[f"{GAME}_50_0"]) == 1  # no game ball, but a real ball all the same
+    assert (out / "val_frames.json").exists()

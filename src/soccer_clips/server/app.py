@@ -26,7 +26,7 @@ from soccer_clips.models import (
 from soccer_clips.reel.render import render_job, run_render, stale_reasons
 from soccer_clips.scan import scan
 from soccer_clips.store import Store
-from soccer_clips.track import ball_labels
+from soccer_clips.track import ball_labels, ball_others
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -100,6 +100,16 @@ class BallLabelIn(RequestBody):
     x: float | None = Field(default=None, ge=0, le=1)
     y: float | None = Field(default=None, ge=0, le=1)
     r: float | None = Field(default=None, gt=0, le=0.1)
+
+
+class OtherBallIn(RequestBody):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    r: float | None = Field(default=None, gt=0, le=0.1)
+
+
+class VerdictIn(RequestBody):
+    verdict: ball_others.Verdict
 
 
 class ReelItemView(ReelItem):
@@ -393,6 +403,37 @@ def create_app(store: Store | None = None) -> FastAPI:
             body.x = body.y = body.r = None
         ball_labels.add_label(store.settings, ball_labels.BallLabel(**body.model_dump()))
 
+    # Other real balls in a frame. Entries are only ever appended (removing one marks it
+    # "not"), so an entry's index is a stable id even while a scan adds more.
+
+    @app.get("/api/ball/others/review")
+    def ball_others_review() -> list[dict]:
+        return ball_others.review_list(store)
+
+    @app.post("/api/ball/others/{game_id}/{frame}", status_code=201)
+    def ball_other_add(game_id: str, frame: int, body: OtherBallIn) -> dict:
+        load(game_id)
+        k = ball_others.key(game_id, frame)
+        others = ball_others.edit(store.settings, lambda o: o.frames.setdefault(k, []).append(
+            ball_others.OtherBall(**body.model_dump(), verdict="ball")))
+        return {"index": len(others.frames[k]) - 1}
+
+    @app.put("/api/ball/others/{game_id}/{frame}/{index}", status_code=204)
+    def ball_other_verdict(game_id: str, frame: int, index: int, body: VerdictIn) -> None:
+        k = ball_others.key(game_id, frame)
+
+        def set_verdict(o: ball_others.Others) -> None:
+            entries = o.frames.get(k, [])
+            if not 0 <= index < len(entries):
+                raise HTTPException(404, f"no other ball {index} in {k}")
+            entries[index].verdict = body.verdict
+
+        ball_others.edit(store.settings, set_verdict)
+
+    @app.get("/review-balls")
+    def review_balls_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "review-balls.html")
+
     @app.get("/ball/frame/{game_id}/{frame}.jpg")
     def ball_frame(game_id: str, frame: int) -> FileResponse:
         game = load(game_id)
@@ -422,7 +463,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     async def revalidate_pages(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path in ("/", "/reel", "/label-ball") or path.startswith("/static/"):
+        if path in ("/", "/reel", "/label-ball", "/review-balls") or path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
 

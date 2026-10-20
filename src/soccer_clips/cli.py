@@ -69,6 +69,18 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
     elif args.ball_command == "guess":
         n = ball_labels.make_guesses(store, args.set)
         print(f"guessed {n} frame(s)")
+    elif args.ball_command == "others":
+        from collections import Counter
+
+        from soccer_clips.track import ball_others
+
+        if args.others_command == "find":
+            n = ball_others.find(store, model_name=args.model, imgsz=args.imgsz, log=lambda m: print(m, flush=True))
+            print(f"{n} new candidate(s) to review at /review-balls")
+        else:
+            entries = [b for bs in ball_others.load(store.settings).frames.values() for b in bs]
+            c = Counter("manual" if b.source == "manual" else (b.verdict or "to review") for b in entries)
+            print(", ".join(f"{v} {k}" for k, v in c.items()) or "no other balls yet")
     elif args.ball_command == "export":
         from soccer_clips.track import ball_train
 
@@ -168,10 +180,15 @@ def main() -> None:
     sample.add_argument("--seed", type=int)
     guess = ball_sub.add_parser("guess", help="pre-compute the model's ball guesses for a set (not bench)")
     guess.add_argument("set", choices=["train"])
+    others = ball_sub.add_parser("others", help="other real balls (spares etc.): counts with no subcommand")
+    others_sub = others.add_subparsers(dest="others_command")
+    find = others_sub.add_parser("find", help="find candidate other balls in labelled frames with a model")
+    find.add_argument("--model", default="ball_yolo26x", help="name in models/ (default ball_yolo26x)")
+    find.add_argument("--imgsz", type=int, default=1920, help="1920 = whole frame at native resolution")
     ball_sub.add_parser("export", help="turn train-set labels into a YOLO dataset (labels/dataset/)")
     train = ball_sub.add_parser("train", help="fine-tune YOLO bases on the exported dataset (GPU)")
     train.add_argument("bases", nargs="+", help="e.g. yolo11m yolo26l; weights go to models/ball_<base>.pt")
-    train.add_argument("--epochs", type=int, default=100)
+    train.add_argument("--epochs", type=int, default=60)
     train.add_argument("--batch", type=int, default=8)
     ev = ball_sub.add_parser("eval", help="score models on the bench frame images")
     ev.add_argument("models", nargs="+", help="names in models/ (yolo11m, ball_yolo11m, ...) or .pt paths")
@@ -184,9 +201,9 @@ def main() -> None:
     g_sub = g.add_subparsers(dest="gpu_command")
     run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")
     run_gpu.add_argument("job", choices=["ball-train"], help="ball-train: score stock bases, fine-tune, score")
-    run_gpu.add_argument("--stock", nargs="+", default=["yolo11m", "yolo11l", "yolo11x", "yolo26m", "yolo26l", "yolo26x"])
-    run_gpu.add_argument("--train", nargs="+", default=["yolo11m"], help="always fine-tuned, plus the best other stock base")
-    run_gpu.add_argument("--epochs", type=int, default=100)
+    run_gpu.add_argument("--stock", nargs="*", default=[], help="stock bases to score first (the best other one is also fine-tuned)")
+    run_gpu.add_argument("--train", nargs="+", default=["yolo26x"], help="bases to fine-tune")
+    run_gpu.add_argument("--epochs", type=int, default=60)
     run_gpu.add_argument("--gpu", nargs="+", help="RunPod GPU type ids, in order of preference")
     run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also stops itself after this")
     g_sub.add_parser("cleanup", help="delete every soccer-clips pod")

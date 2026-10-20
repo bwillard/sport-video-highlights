@@ -12,6 +12,8 @@
            pointer-events: none; box-shadow: 0 2px 12px #000a; background: #000; }
   #peek { position: absolute; top: 8px; left: 8px; padding: 2px 8px; background: #000c; color: var(--warn);
           font-size: 14px; line-height: 1.6; border-radius: 3px; pointer-events: none; }
+  #mode { position: absolute; bottom: 8px; left: 8px; padding: 2px 8px; background: #000c; color: #fff;
+          font-size: 14px; line-height: 1.6; border-radius: 3px; pointer-events: none; }
   #where { margin-top: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #where b { color: var(--text); font-weight: 600; }
   .answer { font-size: 16px; font-weight: 600; }
@@ -38,6 +40,7 @@
   <span class="stat"><b id="done">0</b> / <b id="total">0</b> labelled</span>
   <div class="progress"><div id="bar"></div></div>
   <span class="stat">frame <b id="pos">–</b></span>
+  <a href="/review-balls">Review other balls →</a>
   <span id="flash"></span>
 </div>
 
@@ -55,6 +58,7 @@
       <canvas id="view"></canvas>
       <canvas id="loupe" width="240" height="240" hidden></canvas>
       <div id="peek" hidden></div>
+      <div id="mode" hidden>adding <b>other</b> balls: click to add, click one to remove · <kbd>O</kbd> / <kbd>Esc</kbd> to stop</div>
     </div>
     <div id="where"></div>
     <div id="strip" title="click to jump"></div>
@@ -87,10 +91,12 @@
       <kbd>Del</kbd> clear &nbsp; <kbd>←</kbd>/<kbd>→</kbd> prev/next &nbsp; <kbd>U</kbd> next unlabelled<br>
       Hold <kbd>Q</kbd> / <kbd>E</kbd>: peek 3 frames earlier / later, to see where the ball is moving<br>
       <kbd>Z</kbd> magnifier zoom 3× / 6×<br>
+      <kbd>O</kbd> other-ball mode: click any <b>other real balls</b> (spares, the next field) to add them as
+      white dashed rings; click one again to remove it. They aren't the game ball, but the detector should find them.<br>
       Training sets show the model's guess as a <span style="color: var(--accent)">dashed blue ring</span>:
       <kbd>Enter</kbd> accepts it if it's on the game ball; otherwise click, <kbd>N</kbd> or <kbd>S</kbd> as usual.<br>
       A blurred streak is still <b>visible</b>: click its middle. A ball in the air counts too.
-      Spare balls lying by the sideline are <b>not</b> the game ball.
+      Spare balls lying by the sideline are <b>not</b> the game ball: add them with <kbd>O</kbd> instead.
     </div>
   </aside>
 </div>
@@ -105,6 +111,7 @@ let peekImg = null;       // shown instead while Q/E is held
 let mouse = null;         // cursor in image pixels
 let drag = null;          // {x, y, r} in image pixels while dragging
 let zoom = 3;
+let otherMode = false;    // clicks add/remove other balls instead of labelling the game ball
 const cache = new Map();  // url -> Image
 
 const frameUrl = (t, d = 0) => `/ball/frame/${encodeURIComponent(t.game_id)}/${t.frame + d}.jpg`;
@@ -140,6 +147,7 @@ async function openSet(name, at = null) {
 
 async function go(n) {
   i = Math.max(0, Math.min(tasks.length - 1, n));
+  if (otherMode) setOtherMode(false);  // a click on the next frame should label the game ball
   history.replaceState(null, "", makeHash({ set: setName, i }));
   const t = tasks[i];
   showProgress();
@@ -197,6 +205,8 @@ function draw() {
     const x = l.x * view.width, y = l.y * view.height, r = (l.r || 0) * view.height;
     ring(ctx, x, y, markR(r), l.state === "visible" ? "#3ddc84" : "#ffcf5c", l.state === "hidden");
   }
+  if (!peekImg) for (const o of tasks[i].others || [])
+    ring(ctx, o.x * view.width, o.y * view.height, Math.max(10, (o.r || 0) * view.height) + 4, "#ffffff", true);
   const g = !l && !peekImg && tasks[i].guess;
   if (g) {
     const r = g.r * view.height + 6;
@@ -233,6 +243,10 @@ function drawLoupe() {
   if (l && (l.state === "visible" || l.state === "hidden") && !peekImg) {
     const [x, y] = toL(l.x * view.width, l.y * view.height);
     ring(lctx, x, y, Math.max(4, (l.r || 0) * view.height) * zoom + 3, l.state === "visible" ? "#3ddc84" : "#ffcf5c", l.state === "hidden");
+  }
+  if (!peekImg) for (const o of tasks[i].others || []) {
+    const [x, y] = toL(o.x * view.width, o.y * view.height);
+    ring(lctx, x, y, Math.max(4, (o.r || 0) * view.height) * zoom + 4, "#ffffff", true);
   }
   const g = !l && !peekImg && tasks[i].guess;
   if (g) {
@@ -303,7 +317,8 @@ view.addEventListener("pointerup", (e) => {
   const d = drag;
   drag = null;
   const sized = d.r * (view.getBoundingClientRect().width / view.width) > 4;  // dragged > 4 screen px
-  answerAndAdvance(e.shiftKey ? "hidden" : "visible", d.x, d.y, sized ? d.r : null);
+  if (otherMode) otherClick(d.x, d.y, sized ? d.r : null);
+  else answerAndAdvance(e.shiftKey ? "hidden" : "visible", d.x, d.y, sized ? d.r : null);
 });
 
 $("strip").addEventListener("click", (e) => { if (e.target.dataset.k) go(+e.target.dataset.k); });
@@ -319,6 +334,26 @@ $("clear").onclick = () => save("cleared");
 $("prev").onclick = () => go(i - 1);
 $("next").onclick = () => go(i + 1);
 $("unl").onclick = () => nextUnlabelled();
+
+async function otherClick(x, y, r) {
+  const t = tasks[i], url = `/api/ball/others/${encodeURIComponent(t.game_id)}/${t.frame}`;
+  const near = (t.others || []).find((o) => Math.hypot(o.x * view.width - x, o.y * view.height - y) < 14);
+  if (near) {  // remove: entries are never deleted, just marked "not a ball"
+    await api("PUT", `${url}/${near.index}`, { verdict: "not" });
+    t.others = t.others.filter((o) => o !== near);
+  } else {
+    const body = { x: x / view.width, y: y / view.height };
+    if (r != null) body.r = Math.min(0.1, r / view.height);
+    const { index } = await api("POST", url, body);
+    (t.others ||= []).push({ index, ...body });
+  }
+  draw();
+}
+
+function setOtherMode(on) {
+  otherMode = on;
+  $("mode").hidden = !on;
+}
 
 function nextUnlabelled() {
   const order = [...tasks.keys()].slice(i + 1).concat([...tasks.keys()].slice(0, i + 1));
@@ -350,6 +385,8 @@ document.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (k === "q" || k === "e") { e.preventDefault(); if (!e.repeat) peek(k === "q" ? -3 : 3); return; }
   if (e.repeat) return;
+  if (k === "o") { setOtherMode(!otherMode); return; }
+  if (k === "escape" && otherMode) { setOtherMode(false); return; }
   if (k === "n") answerAndAdvance("none");
   else if (k === "enter") acceptGuess();
   else if (k === "s") answerAndAdvance("skip");

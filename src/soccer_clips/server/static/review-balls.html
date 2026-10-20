@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Clips — Other balls</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  .review { display: grid; grid-template-columns: 384px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1000px) { .review { grid-template-columns: 1fr; } }
+  #zoom { width: 384px; height: 384px; background: #000; display: block; image-rendering: pixelated; }
+  #context { width: 100%; background: #000; display: block; }
+  .verdict { font-size: 18px; font-weight: 600; margin: 8px 0; }
+  .verdict.ball { color: var(--in); }
+  .verdict.not { color: var(--bad); }
+  .verdict.unsure { color: var(--warn); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+  .meta { color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.7; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .progress { height: 6px; background: #262626; border-radius: 3px; overflow: hidden; width: 120px; }
+  .progress div { height: 100%; background: var(--in); width: 0; }
+  .placeholder { padding: 48px 16px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="/label-ball">← Ball labels</a>
+  <span class="stat"><b id="done">0</b> / <b id="total">0</b> reviewed</span>
+  <div class="progress"><div id="bar"></div></div>
+  <span class="stat">candidate <b id="pos">–</b></span>
+  <span id="flash"></span>
+</div>
+
+<div class="layout" id="empty" hidden>
+  <section class="box placeholder" id="emptyText"></section>
+</div>
+
+<div class="layout" id="main" hidden>
+  <section>
+    <div class="review">
+      <div>
+        <canvas id="zoom" width="384" height="384"></canvas>
+        <div class="verdict" id="verdict"></div>
+        <div class="row">
+          <button id="yes">Ball <span class="hk">Y</span></button>
+          <button id="no">Not a ball <span class="hk">N</span></button>
+          <button id="unsure">Can't tell <span class="hk">S</span></button>
+        </div>
+        <div class="row">
+          <button id="prev">← Prev</button>
+          <button id="next">Next →</button>
+          <button id="todo">Next to review <span class="hk">Space</span></button>
+        </div>
+        <div class="meta" id="meta"></div>
+      </div>
+      <canvas id="context"></canvas>
+    </div>
+  </section>
+  <aside>
+    <div class="box help">
+      <h3>Is this a real ball?</h3>
+      The model found something that isn't the game ball you labelled. If it's a <b>real ball</b>
+      (a spare by the sideline, a ball on the next field, one in a net or a bag) press <kbd>Y</kbd>:
+      the detector should find those, and the tracking filter will tell them apart from the game ball later.
+      If it's <b>not a ball</b> (a head, cleat, cone, bottle, line…) press <kbd>N</kbd>.
+      <kbd>S</kbd> if you can't tell.<br><br>
+      The close-up is 3× the video pixels; the whole frame shows where it is
+      (<span style="color: #ffcf5c">yellow box</span>) and the game ball you labelled
+      (<span style="color: #3ddc84">green ring</span>).<br><br>
+      <kbd>←</kbd>/<kbd>→</kbd> step through all candidates, <kbd>Space</kbd> jumps to the next unreviewed one.
+      New candidates keep arriving while the scan runs; the page picks them up.
+    </div>
+  </aside>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+const zoom = $("zoom"), zctx = zoom.getContext("2d");
+const ctxCanvas = $("context"), cctx = ctxCanvas.getContext("2d");
+const ZOOM = 3, SPAN = 384 / ZOOM;  // image pixels shown in the close-up
+let items = [], i = 0, img = null;
+const cache = new Map();
+
+const frameUrl = (c) => `/ball/frame/${encodeURIComponent(c.game_id)}/${c.frame}.jpg`;
+function loadImage(url) {
+  if (!cache.has(url)) {
+    const im = new Image();
+    im.src = url;
+    im.ready = new Promise((ok, bad) => { im.onload = () => ok(im); im.onerror = bad; });
+    cache.set(url, im);
+    if (cache.size > 30) cache.delete(cache.keys().next().value);
+  }
+  return cache.get(url).ready;
+}
+
+async function refresh(keepPlace = true) {
+  const cur = items[i];
+  items = await getJson("/api/ball/others/review");
+  if (keepPlace && cur) {
+    const k = items.findIndex((c) => c.game_id === cur.game_id && c.frame === cur.frame && c.index === cur.index);
+    if (k >= 0) i = k;
+  }
+}
+
+async function init() {
+  await refresh(false);
+  const first = items.findIndex((c) => !c.verdict);
+  if (!items.length) return showEmpty();
+  $("main").hidden = false;
+  await go(first >= 0 ? first : 0);
+}
+
+function showEmpty() {
+  $("empty").hidden = false;
+  $("emptyText").innerHTML = "No candidates yet. They appear here while <code>soccer-clips ball others find</code> runs."
+    + " This page checks again every 30 seconds.";
+  setTimeout(async () => { await refresh(false); if (items.length) { $("empty").hidden = true; init(); } else showEmpty(); }, 30000);
+}
+
+async function go(n) {
+  i = Math.max(0, Math.min(items.length - 1, n));
+  const c = items[i];
+  showInfo();
+  try { img = await loadImage(frameUrl(c)); } catch { flash("couldn't load that frame", true); return; }
+  if (items[i] !== c) return;
+  draw();
+  for (let k = 1; k <= 3; k++) if (items[i + k]) loadImage(frameUrl(items[i + k]));
+}
+
+function showInfo() {
+  const done = items.filter((c) => c.verdict).length;
+  $("done").textContent = done;
+  $("total").textContent = items.length;
+  $("bar").style.width = `${(100 * done) / Math.max(1, items.length)}%`;
+  $("pos").textContent = `${i + 1} / ${items.length}`;
+  const c = items[i];
+  const words = { ball: "real ball", not: "not a ball", unsure: "can't tell" };
+  $("verdict").textContent = c.verdict ? words[c.verdict] : "not reviewed";
+  $("verdict").className = "verdict " + (c.verdict || "");
+  const l = c.label;
+  const game = l ? { visible: "game ball labelled", hidden: "game ball hidden", none: "no game ball", skip: "can't tell" }[l.state] : "no label";
+  $("meta").innerHTML = `<b>${esc(c.set)}</b> · ${esc(shortGame(c.game_id))} · frame ${c.frame}<br>`
+    + `model ${esc(c.source)} is <b>${Math.round(100 * (c.conf || 0))}%</b> sure · ${game}`;
+}
+
+function ring(g, x, y, r, colour, dashed = false, width = 2) {
+  g.save();
+  g.strokeStyle = colour;
+  g.lineWidth = width;
+  if (dashed) g.setLineDash([5, 4]);
+  g.beginPath();
+  g.arc(x, y, r, 0, 2 * Math.PI);
+  g.stroke();
+  g.restore();
+}
+
+function draw() {
+  const c = items[i], W = img.naturalWidth, H = img.naturalHeight;
+  const cx = c.x * W, cy = c.y * H, r = (c.r || 0.006) * H;
+  // close-up: the candidate in the middle, a dashed ring around (not over) it
+  zctx.imageSmoothingEnabled = false;
+  zctx.fillStyle = "#000";
+  zctx.fillRect(0, 0, 384, 384);
+  zctx.drawImage(img, cx - SPAN / 2, cy - SPAN / 2, SPAN, SPAN, 0, 0, 384, 384);
+  ring(zctx, 192, 192, r * ZOOM + 14, "#ffcf5c", true);
+  const l = c.label;
+  if (l && (l.state === "visible" || l.state === "hidden")) {
+    const gx = (l.x * W - cx) * ZOOM + 192, gy = (l.y * H - cy) * ZOOM + 192;
+    if (gx > -40 && gx < 424 && gy > -40 && gy < 424) ring(zctx, gx, gy, (l.r || 0.006) * H * ZOOM + 10, "#3ddc84");
+  }
+  // whole frame for context
+  if (ctxCanvas.width !== W) { ctxCanvas.width = W; ctxCanvas.height = H; }
+  cctx.drawImage(img, 0, 0);
+  cctx.strokeStyle = "#ffcf5c";
+  cctx.lineWidth = 3;
+  cctx.strokeRect(cx - 40, cy - 40, 80, 80);
+  if (l && (l.state === "visible" || l.state === "hidden")) ring(cctx, l.x * W, l.y * H, (l.r || 0.006) * H + 18, "#3ddc84", false, 3);
+}
+
+async function answer(verdict) {
+  const c = items[i];
+  await api("PUT", `/api/ball/others/${encodeURIComponent(c.game_id)}/${c.frame}/${c.index}`, { verdict });
+  c.verdict = verdict;
+  showInfo();
+  await nextTodo(true);
+}
+
+async function nextTodo(afterAnswer = false) {
+  let k = items.findIndex((c, n) => n > i && !c.verdict);
+  if (k < 0) {
+    await refresh();  // the scan may have added more
+    k = items.findIndex((c) => !c.verdict);
+  }
+  if (k < 0) { if (afterAnswer) flash("all reviewed so far; more may come while the scan runs"); return; }
+  await go(k);
+}
+
+$("yes").onclick = () => answer("ball");
+$("no").onclick = () => answer("not");
+$("unsure").onclick = () => answer("unsure");
+$("prev").onclick = () => go(i - 1);
+$("next").onclick = () => go(i + 1);
+$("todo").onclick = () => nextTodo();
+
+document.addEventListener("keydown", (e) => {
+  if (typingInField(e) || e.ctrlKey || e.metaKey || e.altKey || e.repeat || !items.length) return;
+  const k = e.key.toLowerCase();
+  if (k === "y") answer("ball");
+  else if (k === "n") answer("not");
+  else if (k === "s") answer("unsure");
+  else if (k === "arrowleft") go(i - 1);
+  else if (k === "arrowright") go(i + 1);
+  else if (k === " ") nextTodo();
+  else return;
+  e.preventDefault();
+});
+
+init();
+</script>
+</body>
+</html>

@@ -182,40 +182,58 @@ def on_ball(label: BallLabel, game: Game, cx: np.ndarray, cy: np.ndarray) -> np.
 
 
 def new_tallies(confs) -> dict:
-    return {c: {"visible": 0, "found": 0, "hidden": 0, "hidden_found": 0, "dets": 0, "true_dets": 0} for c in confs}
+    keys = ("frames", "visible", "found", "hidden", "hidden_found", "dets", "on_game", "on_other", "junk")
+    return {c: dict.fromkeys(keys, 0) for c in confs}
 
 
-def tally(tallies: dict, label: BallLabel, conf: np.ndarray, hit: np.ndarray) -> None:
-    """Add one labelled frame's detections (confidences, and whether each is on the ball)."""
+def tally(tallies: dict, label: BallLabel, conf: np.ndarray, on_game: np.ndarray,
+          on_other: np.ndarray | None = None, on_unsure: np.ndarray | None = None) -> None:
+    """
+    Add one labelled frame's detections: their confidences, and which lie on the game ball,
+    on another real ball (fine: the temporal filter drops those) or on a candidate marked
+    unsure (left out). Everything else is junk.
+    """
+    none = np.zeros(len(conf), bool)
+    on_other = none if on_other is None else on_other
+    on_unsure = none if on_unsure is None else on_unsure
     for c, t in tallies.items():
-        keep = conf >= c
+        keep = (conf >= c) & ~on_unsure
+        t["frames"] += 1
         t["dets"] += int(keep.sum())
-        t["true_dets"] += int((keep & hit).sum())
+        t["on_game"] += int((keep & on_game).sum())
+        t["on_other"] += int((keep & on_other).sum())
+        t["junk"] += int((keep & ~on_game & ~on_other).sum())
         if label.state == "visible":
             t["visible"] += 1
-            t["found"] += int((keep & hit).any())
+            t["found"] += int((keep & on_game).any())
         elif label.state == "hidden":
             t["hidden"] += 1
-            t["hidden_found"] += int((keep & hit).any())
+            t["hidden_found"] += int((keep & on_game).any())
 
 
 def summarise(tallies: dict) -> dict:
-    return {str(c): {"recall": round(t["found"] / t["visible"], 3) if t["visible"] else None,
-                     "precision": round(t["true_dets"] / t["dets"], 3) if t["dets"] else None,
-                     "hidden_found": round(t["hidden_found"] / t["hidden"], 3) if t["hidden"] else None,
-                     "visible": t["visible"], "hidden": t["hidden"], "dets": t["dets"]}
+    """recall: share of visible game balls found. precision: share of detections that are real balls
+    (game or other). junk_per_frame: detections that aren't balls, per labelled frame."""
+    ratio = lambda a, b: round(a / b, 3) if b else None
+    return {str(c): {"recall": ratio(t["found"], t["visible"]),
+                     "precision": ratio(t["on_game"] + t["on_other"], t["dets"]),
+                     "junk_per_frame": ratio(t["junk"], t["frames"]),
+                     "hidden_found": ratio(t["hidden_found"], t["hidden"]),
+                     "visible": t["visible"], "hidden": t["hidden"], "dets": t["dets"], "other": t["on_other"]}
             for c, t in tallies.items()}
 
 
 def score(store: Store, results: Path, confs=(0.1, 0.25, 0.4)) -> dict:
     """
-    Per variant folder under `results`: for bench frames labelled visible, the
-    share where a ball detection at >= conf lies on the ball (recall); of the
-    detections at >= conf on labelled frames, the share that lie on a labelled
-    ball, visible or hidden (precision). Hidden balls are counted separately.
+    Per variant folder under `results`, against the bench labels: the share of visible
+    game balls with a detection at >= conf on them (recall), the share of detections on a
+    real ball, game or other (precision), and non-ball detections per frame (junk).
     """
+    from soccer_clips.track import ball_others
+
     settings = store.settings
     labels = load_labels(settings)
+    others = ball_others.load(settings)
     bench = {(t.game_id, t.frame): t for t in load_tasks(settings).sets.get("bench", [])}
     clips = {c.name: c for c in load_set(settings).clips}
     games: dict[str, Game] = {}
@@ -233,19 +251,21 @@ def score(store: Store, results: Path, confs=(0.1, 0.25, 0.4)) -> dict:
             local = frame - game.frame_at(clips[task.clip].start_s)
             arr = np.load(npz)["boxes"]
             balls = arr[(arr[:, 1] == 32) & (arr[:, 0] == local)]
-            hit = on_ball(label, game, (balls[:, 3] + balls[:, 5]) / 2, (balls[:, 4] + balls[:, 6]) / 2)
-            tally(tallies, label, balls[:, 7], hit)
+            masks = ball_others.classify(others, label, game, (balls[:, 3] + balls[:, 5]) / 2,
+                                         (balls[:, 4] + balls[:, 6]) / 2)
+            tally(tallies, label, balls[:, 7], *masks)
         out[vdir.name] = summarise(tallies)
     return out
 
 
 def score_table(scores: dict) -> str:
-    rows = ["variant          conf  recall  precision  hidden found  (visible/hidden/dets)"]
+    rows = ["variant              conf  found  real  junk/frame  hidden  (visible/hidden/dets/other balls)"]
+    f = lambda v: "   –" if v is None else f"{v:4.0%}"
     for variant, by_conf in scores.items():
         for c, s in by_conf.items():
-            f = lambda v: "   –  " if v is None else f"{v:6.0%}"
-            rows.append(f"{variant:16} {c:>4}  {f(s['recall'])}  {f(s['precision'])}     {f(s['hidden_found'])}"
-                        f"       ({s['visible']}/{s['hidden']}/{s['dets']})")
+            junk = "   –" if s.get("junk_per_frame") is None else f"{s['junk_per_frame']:4.2f}"
+            rows.append(f"{variant:20} {c:>4}  {f(s['recall'])}  {f(s['precision'])}        {junk}    {f(s['hidden_found'])}"
+                        f"  ({s['visible']}/{s['hidden']}/{s['dets']}/{s.get('other', 0)})")
     return "\n".join(rows)
 
 
@@ -257,11 +277,17 @@ def summary(store: Store) -> list[dict]:
 
 def tasks_with_labels(store: Store, set_name: str) -> list[dict]:
     labels = load_labels(store.settings)
+    from soccer_clips.track import ball_others
+
     # Bench labels score the models, so they must not be nudged by a model's guess.
     guesses = {} if set_name == "bench" else load_guesses(store.settings).frames
+    others = ball_others.load(store.settings).frames
     return [{**t.model_dump(),
              "label": labels[(t.game_id, t.frame)].model_dump(mode="json") if (t.game_id, t.frame) in labels else None,
-             "guess": g.model_dump() if (g := guesses.get(f"{t.game_id}:{t.frame}")) else None}
+             "guess": g.model_dump() if (g := guesses.get(f"{t.game_id}:{t.frame}")) else None,
+             # confirmed other balls, with their index for removing one
+             "others": [{"index": i, **b.model_dump()} for i, b in enumerate(others.get(f"{t.game_id}:{t.frame}", []))
+                        if b.verdict == "ball"]}
             for t in load_tasks(store.settings).sets.get(set_name, [])]
 
 

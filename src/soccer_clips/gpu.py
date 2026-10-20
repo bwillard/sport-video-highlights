@@ -251,23 +251,28 @@ class Runner:
 # ---- jobs ----
 
 def ball_train_job(store: Store, stock: list[str], train_bases: list[str], epochs: int) -> Job:
-    """Score stock bases on the bench frames, fine-tune `train_bases` and the best other stock base, score those."""
+    """
+    Optionally score `stock` bases on the bench frames, fine-tune `train_bases` (plus the best
+    other stock base, when stock bases are given), and score the fine-tuned models on the bench.
+    """
     from soccer_clips.track import ball_labels
 
     root = data_root(store)
-    frames = []
-    for t in ball_labels.load_tasks(store.settings).sets.get("bench", []):
-        path = ball_labels.frame_image(store, store.load_game(t.game_id), t.frame)  # cached; made if missing
-        frames.append(str(path.relative_to(root)))
-    games = [str(p.relative_to(root)) for p in sorted((root / "games").glob("*/*/game.json"))]
-    for need, how in [("labels/dataset/data.yaml", "soccer-clips ball export"), ("labels/ball.jsonl", "label some frames")]:
+    for need, how in [("labels/dataset/data.yaml", "soccer-clips ball export"), ("labels/ball.jsonl", "label some frames"),
+                      ("labels/dataset/val_frames.json", "soccer-clips ball export")]:
         if not (root / need).exists():
             raise ConfigError(f"{root / need} is missing; run `{how}` first")
+    # Full frame images: the bench frames (scoring) and the validation frames (choosing checkpoints).
+    wanted = [(t.game_id, t.frame) for t in ball_labels.load_tasks(store.settings).sets.get("bench", [])]
+    wanted += [tuple(v) for v in json.loads((root / "labels/dataset/val_frames.json").read_text())]
+    frames = sorted({str(ball_labels.frame_image(store, store.load_game(g), f).relative_to(root)) for g, f in wanted})
+    games = [str(p.relative_to(root)) for p in sorted((root / "games").glob("*/*/game.json"))]
     quiet = '2>&1 | (grep -vE "━|^\\s*$" || true)'  # progress bars out; never fails the job on its own
-    stock_s, fixed = " ".join(stock), " ".join(train_bases)
-    script = f"""
-mkdir -p $W/out
-soccer-clips ball eval {stock_s} --json $W/out/stock.json {quiet}
+    fixed = " ".join(train_bases)
+    script = "mkdir -p $W/out\nBEST=\n"
+    if stock:
+        script += f"""
+soccer-clips ball eval {" ".join(stock)} --json $W/out/stock.json {quiet}
 BEST=$(python - <<'PY'
 import json
 s = json.load(open("/workspace/data/out/stock.json"))
@@ -278,13 +283,19 @@ print(max(others, key=key).removesuffix("-centre") if others else "")
 PY
 )
 echo "best other stock base: $BEST"
+"""
+    script += f"""
 soccer-clips ball train {fixed} $BEST --epochs {epochs} {quiet}
 soccer-clips ball eval $(for b in {fixed} $BEST; do echo ball_$b; done) --json $W/out/finetuned.json {quiet}
 """
+    uploads = games + ["labels/ball_tasks.json", "labels/ball.jsonl", "labels/dataset"] + frames
+    if (root / "labels/ball_others.json").exists():
+        uploads.append("labels/ball_others.json")
     return Job(
         name="ball-train",
-        uploads=games + ["labels/ball_tasks.json", "labels/ball.jsonl", "labels/dataset"] + frames,
+        uploads=uploads,
         exclude=["*.part.jpg"],
         script=script,
-        downloads=["out", "models/ball_*.pt", "labels/runs/*/results.csv", "labels/runs/*/args.yaml"],
+        downloads=["out", "models/ball_*.pt", "labels/runs/*/results.csv", "labels/runs/*/args.yaml",
+                   "labels/runs/*/selection.json"],
     )
