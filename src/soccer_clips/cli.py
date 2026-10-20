@@ -188,7 +188,7 @@ def main() -> None:
     run_gpu.add_argument("--train", nargs="+", default=["yolo11m"], help="always fine-tuned, plus the best other stock base")
     run_gpu.add_argument("--epochs", type=int, default=100)
     run_gpu.add_argument("--gpu", nargs="+", help="RunPod GPU type ids, in order of preference")
-    run_gpu.add_argument("--max-hours", type=float, default=3.0, help="hard limit; the pod also stops itself after this")
+    run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also stops itself after this")
     g_sub.add_parser("cleanup", help="delete every soccer-clips pod")
     args = parser.parse_args()
 
