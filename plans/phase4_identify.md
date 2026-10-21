@@ -164,6 +164,22 @@ For a chosen player, find the stretches of a game where they're involved with th
   - Most "false" detections before were real balls: full-frame YOLO11m goes from 51% to 85% real.
   - Run 1's fine-tuning taught the models to ignore spare balls (other balls found dropped from 11 → 0 and 15 → 5), and YOLO26x traded junk for found balls. Run 2 trains with spare balls boxed and picks its checkpoint on found/real.
 
+- **2026-10-21 — Run 2: YOLO26x fine-tuned with other balls boxed** (RunPod RTX 4090, 39 min, ~$0.58; `gpu/20261021-143240-ball-train/`; two earlier attempts died in ~2 min each, ~$0.07 total: YOLO26x at 1280 runs out of memory at batch 8 on 24 GB and ultralytics' in-process retry at a smaller batch left CUDA broken; now batch 4). Checkpoint chosen on the 78 validation frames: epoch 45 (validation found 85%, real 96%); validation scores plateau from epoch 15 to 50 (0.86–0.905), and ultralytics' own "best" was an early epoch again. Bench, at each confidence:
+
+  | Model | conf | Found | Real | Junk / frame | Other balls found |
+  |---|---|---|---|---|---|
+  | stock YOLO26x | 0.25 | 71% | 98% | 0.01 | 15 |
+  | run 1 | 0.25 | 77% | 83% | 0.14 | 5 |
+  | **run 2** | 0.25 | 77% | 88% | 0.10 | 19 |
+  | stock YOLO26x | 0.4 | 64% | 98% | 0.01 | 14 |
+  | run 1 | 0.4 | 74% | 93% | 0.05 | 2 |
+  | **run 2** | **0.4** | **76%** | **92%** | 0.06 | 18 |
+
+  - Run 2 finds spare balls again (18–19, more than stock) instead of ignoring them, with the same or better game-ball rate than run 1 and less junk.
+  - Against stock YOLO26x, fine-tuning buys +6 (conf 0.25) to +12 (conf 0.4) points of game balls found, for ~0.05–0.1 junk detections per frame, which the temporal filter should absorb.
+  - Validation (85–88% found) beats the bench (76–78%): the bench clips include the hardest cases (crowded corner, far side by a dark tree line).
+  - `models/ball_yolo26x.pt` is now run 2; run 1's model is kept in its run folder.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|
