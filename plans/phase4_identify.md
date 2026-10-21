@@ -152,6 +152,18 @@ For a chosen player, find the stretches of a game where they're involved with th
 
 - **2026-10-19 — Other real balls.** Labels marked only the game ball, so spare balls were negatives in training (teaching the model that real balls aren't balls) and mistakes in scoring. Now: `labels/ball_others.json` holds other real balls per frame (from `soccer-clips ball others find` + Y/N review at `/review-balls`, or added by hand with `O` on the labelling page). Training boxes them; scoring counts detections on them as fine and reports junk (non-ball detections) per frame separately. Checkpoint selection fixed for the next run: 20% validation split, no early stopping, a checkpoint every 5 epochs, keep the best by harmonic mean of found/real at conf 0.25 on the validation frames.
 
+- **2026-10-20 — Re-scored with other balls counted as real** (bench: 80 other balls confirmed, 72 of them added by hand; train: 270; only 30 of the model's 141 candidates were real balls). At conf 0.25 on the bench frames:
+
+  | Model | Game ball found | Real (any ball) | Junk / frame | Other balls found |
+  |---|---|---|---|---|
+  | stock YOLO11m | 42% | 96% | 0.02 | 11 |
+  | fine-tuned YOLO11m (run 1) | 50% | 98% | 0.01 | 0 |
+  | stock YOLO26x | 71% | 98% | 0.01 | 15 |
+  | fine-tuned YOLO26x (run 1) | 77% | 83% | 0.14 | 5 |
+
+  - Most "false" detections before were real balls: full-frame YOLO11m goes from 51% to 85% real.
+  - Run 1's fine-tuning taught the models to ignore spare balls (other balls found dropped from 11 → 0 and 15 → 5), and YOLO26x traded junk for found balls. Run 2 trains with spare balls boxed and picks its checkpoint on found/real.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|
