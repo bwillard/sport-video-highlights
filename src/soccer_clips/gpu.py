@@ -91,6 +91,8 @@ pip install -q -e . ultralytics lap 2>&1 | grep -v "^\s*$" | tail -2 || true
 yolo settings sync=False > /dev/null
 mkdir -p $W/full $W/proxy $W/clips $W/reels $W/gallery
 printf "SOCCER_FULL_DIR=$W/full\nSOCCER_PROXY_DIR=$W/proxy\nSOCCER_CLIPS_DIR=$W/clips\nSOCCER_GAMES_DIR=$W/games\nSOCCER_REELS_DIR=$W/reels\nSOCCER_GALLERY_DIR=$W/gallery\n" > .env
+# Less fragmentation, so big models at 1280 fit in 24 GB
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 python -c "import torch; assert torch.cuda.is_available(), 'no CUDA'; print('torch', torch.__version__)"
 # A faulty GPU/driver on the host shows up as "CUDA error: unknown error" mid-training (seen 2026-10-21);
@@ -259,7 +261,7 @@ class Runner:
 
 # ---- jobs ----
 
-def ball_train_job(store: Store, stock: list[str], train_bases: list[str], epochs: int) -> Job:
+def ball_train_job(store: Store, stock: list[str], train_bases: list[str], epochs: int, batch: int = 4) -> Job:
     """
     Optionally score `stock` bases on the bench frames, fine-tune `train_bases` (plus the best
     other stock base, when stock bases are given), and score the fine-tuned models on the bench.
@@ -294,7 +296,7 @@ PY
 echo "best other stock base: $BEST"
 """
     script += f"""
-soccer-clips ball train {fixed} $BEST --epochs {epochs} {quiet}
+soccer-clips ball train {fixed} $BEST --epochs {epochs} --batch {batch} {quiet}
 soccer-clips ball eval $(for b in {fixed} $BEST; do echo ball_$b; done) --json $W/out/finetuned.json {quiet}
 """
     uploads = games + ["labels/ball_tasks.json", "labels/ball.jsonl", "labels/dataset"] + frames

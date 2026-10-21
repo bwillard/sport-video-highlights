@@ -123,7 +123,7 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         from soccer_clips.track import ball_labels
         from soccer_clips.track.benchmark import models_dir
 
-        job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs)
+        job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs, batch=args.batch)
         runner = gpu.Runner(store, job, gpu_types=args.gpu or gpu.GPU_TYPES, max_hours=args.max_hours,
                             log=lambda m: print(m, flush=True))
         print(f"run folder: {runner.dir}", flush=True)
@@ -204,6 +204,8 @@ def main() -> None:
     run_gpu.add_argument("--stock", nargs="*", default=[], help="stock bases to score first (the best other one is also fine-tuned)")
     run_gpu.add_argument("--train", nargs="+", default=["yolo26x"], help="bases to fine-tune")
     run_gpu.add_argument("--epochs", type=int, default=60)
+    run_gpu.add_argument("--batch", type=int, default=4,
+                         help="images per step; YOLO26x at 1280 runs out of memory at 8 on a 24 GB card")
     run_gpu.add_argument("--gpu", nargs="+", help="RunPod GPU type ids, in order of preference")
     run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also stops itself after this")
     g_sub.add_parser("cleanup", help="delete every soccer-clips pod")
