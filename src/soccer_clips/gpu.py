@@ -93,6 +93,15 @@ mkdir -p $W/full $W/proxy $W/clips $W/reels $W/gallery
 printf "SOCCER_FULL_DIR=$W/full\nSOCCER_PROXY_DIR=$W/proxy\nSOCCER_CLIPS_DIR=$W/clips\nSOCCER_GAMES_DIR=$W/games\nSOCCER_REELS_DIR=$W/reels\nSOCCER_GALLERY_DIR=$W/gallery\n" > .env
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 python -c "import torch; assert torch.cuda.is_available(), 'no CUDA'; print('torch', torch.__version__)"
+# A faulty GPU/driver on the host shows up as "CUDA error: unknown error" mid-training (seen 2026-10-21);
+# a short mixed-precision forward/backward here fails fast instead.
+python -c "
+import torch
+m = torch.nn.Conv2d(3, 64, 3).cuda(); x = torch.randn(8, 3, 640, 640, device='cuda')
+with torch.autocast('cuda', dtype=torch.float16):
+    y = m(x).float().pow(2).mean()
+y.backward(); torch.cuda.synchronize(); print('gpu self-test ok')
+"
 """
 
 
