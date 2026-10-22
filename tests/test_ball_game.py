@@ -66,3 +66,10 @@ def test_segments_match_the_original(settings):
     from_segment = list(ball_game.read_frames(store, game, s, e))
     assert len(from_segment) == len(original) == e - s
     assert max(np.abs(a.astype(int) - b.astype(int)).mean() for a, b in zip(original, from_segment)) < 2
+
+
+def test_chunks():
+    assert ball_game.chunks([(0, 100)], 4) == [(0, 100)]  # too short to split
+    parts = ball_game.chunks([(0, 20000), (50000, 51000)], 4)
+    assert parts[:4] == [(0, 5000), (5000, 10000), (10000, 15000), (15000, 20000)] and parts[4] == (50000, 51000)
+    assert ball_game.chunks([(0, 9000)], 6) == [(0, 4500), (4500, 9000)]  # 2 min minimum per chunk

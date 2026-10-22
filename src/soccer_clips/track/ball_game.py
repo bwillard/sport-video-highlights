@@ -180,28 +180,70 @@ def save_npz(path: Path, **arrays) -> None:
     tmp.replace(path)
 
 
-def track_game(store: Store, game_id: str, mode: str = "clips", model_name: str = "ball_yolo26x",
-               log=print) -> int:
-    """Detect what isn't done yet for this game's ranges, then redo the path. Returns frames detected."""
+MIN_CHUNK = 3600  # frames (2 min): smallest piece worth its own worker
+
+
+def chunks(ranges: list[tuple[int, int]], workers: int) -> list[tuple[int, int]]:
+    """Split ranges into about `workers` pieces each (none shorter than MIN_CHUNK), in order."""
+    out = []
+    for s, e in ranges:
+        n = max(1, min(workers, (e - s) // MIN_CHUNK))
+        edges = np.linspace(s, e, n + 1).round().astype(int)
+        out += [(int(a), int(b)) for a, b in zip(edges, edges[1:]) if b > a]
+    return out
+
+
+def _detect_chunk(args):
+    """Worker: detect one chunk (runs in its own process, with its own copy of the model)."""
+    settings, game_id, model_name, s, e = args
     from ultralytics import YOLO
+
+    store = Store(settings)
+    game = store.load_game(game_id)
+    model = YOLO(models_dir(store) / f"{model_name}.pt")
+    return s, e, *detect_range(store, game, model, s, e, log=lambda m: print(m, flush=True))
+
+
+def track_game(store: Store, game_id: str, mode: str = "clips", model_name: str = "ball_yolo26x",
+               workers: int = 1, log=print) -> int:
+    """
+    Detect what isn't done yet for this game's ranges, then redo the path. Returns frames
+    detected. With workers > 1, long ranges are split into chunks detected in parallel
+    processes (one CPU core each does decoding and camera motion; they share the GPU). The
+    first frame of each chunk has no camera step from the frame before, which the path
+    filter doesn't notice.
+    """
+    import multiprocessing as mp
 
     game = store.load_game(game_id)
     raw = load_raw(store, game)
     have = merge([tuple(r) for r in raw["ranges"].tolist()])
-    todo = subtract(ranges_for(game, mode), have)
+    todo = chunks(subtract(ranges_for(game, mode), have), workers)
     detected = 0
-    if todo:
+
+    def add(s, e, dets, mframes, steps):
+        nonlocal have, detected
+        raw["dets"] = np.vstack([raw["dets"], dets])
+        raw["motion_frames"] = np.concatenate([raw["motion_frames"], mframes])
+        raw["motion"] = np.concatenate([raw["motion"], steps])
+        have = merge(have + [(s, s + len(mframes))])
+        raw["ranges"] = np.array(have, int).reshape(-1, 2)
+        save_npz(tracks_dir(store, game) / "ball_raw.npz", **raw)  # after each piece: resumable
+        detected += len(mframes)
+        log(f"{game.id}: detected frames {s}-{e}")
+
+    if todo and workers > 1:
+        # spawn, not fork: each worker starts its own CUDA context
+        with mp.get_context("spawn").Pool(min(workers, len(todo))) as pool:
+            for result in pool.imap_unordered(_detect_chunk, [(store.settings, game.id, model_name, s, e)
+                                                              for s, e in todo]):
+                add(*result)
+    elif todo:
+        from ultralytics import YOLO
+
         model = YOLO(models_dir(store) / f"{model_name}.pt")
         for s, e in todo:
-            dets, mframes, steps = detect_range(store, game, model, s, e, log)
-            raw["dets"] = np.vstack([raw["dets"], dets])
-            raw["motion_frames"] = np.concatenate([raw["motion_frames"], mframes])
-            raw["motion"] = np.concatenate([raw["motion"], steps])
-            have = merge(have + [(s, s + len(mframes))])
-            raw["ranges"] = np.array(have, int).reshape(-1, 2)
-            save_npz(tracks_dir(store, game) / "ball_raw.npz", **raw)  # after each range: resumable
-            detected += len(mframes)
-            log(f"{game.id}: detected frames {s}-{e}")
+            add(s, e, *detect_range(store, game, model, s, e, log))
     retrack(store, game)
     return detected
 

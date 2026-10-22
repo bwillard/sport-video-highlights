@@ -106,7 +106,7 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
             if args.retrack:
                 n = ball_game.retrack(store, store.load_game(gid))
             else:
-                ball_game.track_game(store, gid, mode=args.mode, model_name=args.model,
+                ball_game.track_game(store, gid, mode=args.mode, model_name=args.model, workers=args.workers,
                                      log=lambda m: print(m, flush=True))
                 n = len((ball_game.load_path(store, store.load_game(gid)) or {"frame": []})["frame"])
             print(f"{gid}: ball in {n} frames", flush=True)
@@ -230,6 +230,7 @@ def main() -> None:
     tg.add_argument("--mode", choices=["clips", "all"], default="clips", help="tagged clips (+2s) or the whole game")
     tg.add_argument("--model", default="ball_yolo26x", help="ball model in models/")
     tg.add_argument("--retrack", action="store_true", help="redo the path from saved detections (no detecting)")
+    tg.add_argument("--workers", type=int, default=1, help="detect chunks of long ranges in parallel processes")
     ball_sub.add_parser("export", help="turn train-set labels into a YOLO dataset (labels/dataset/)")
     train = ball_sub.add_parser("train", help="fine-tune YOLO bases on the exported dataset (GPU)")
     train.add_argument("bases", nargs="+", help="e.g. yolo11m yolo26l; weights go to models/ball_<base>.pt")

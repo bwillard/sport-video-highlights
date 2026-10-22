@@ -318,12 +318,14 @@ soccer-clips ball eval $(for b in {fixed} $BEST; do echo ball_$b; done) --json $
     )
 
 
-def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 3,
+def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 6,
                    log=print) -> Job:
     """
     Game-ball paths for games: 'clips' uploads just the tagged-clip stretches still to do
-    (cut here into segments), 'all' uploads the original videos. Games run `workers` at a time
-    on the pod (they share the GPU). Brings back each game's tracks/ folder.
+    (cut here into segments), 'all' uploads the original videos. Games go one after another,
+    each split into chunks detected by `workers` processes at once (one CPU core each for
+    decoding and camera motion was the limit: the GPU sat idle with one). Brings back each
+    game's tracks/ folder.
     """
     from soccer_clips.track import ball_game
     from soccer_clips.track.benchmark import models_dir
@@ -342,9 +344,9 @@ def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 
         else:
             uploads.append(str(store.original_path(game).relative_to(root)))
     ids = " ".join(game_ids)
-    quiet = '2>&1 | (grep -vE "━|^\\s*$" || true)'
+    quiet = '2>&1 | (grep --line-buffered -vE "━|^\\s*$" || true)'
     script = f"""
-printf '%s\\n' {ids} | xargs -P {workers} -I{{}} sh -c 'soccer-clips ball track-game {{}} --mode {mode} {quiet}'
+for g in {ids}; do soccer-clips ball track-game $g --mode {mode} --workers {workers} {quiet}; done
 """
     return Job(name=f"ball-games-{mode}", uploads=uploads, script=script, downloads=["games"],
                exclude=["*.part.*"])
