@@ -16,7 +16,7 @@ Per game, in games/<year>/<game_id>/tracks/:
 Frames inside a range with no entry had no ball.
 
 To run somewhere the full game videos aren't (a GPU pod), `prepare_segments` cuts just
-the ranges still to do into <data root>/ballsrc/<game_id>/<start>-<end>.mp4 (near-lossless
+the ranges still to do into <data root>/ballsrc/<game_id>/<start>-<end>.mp4 (re-encoded at crf 18, the quality the bench clips have;
 re-encode, exact frames); `read_frames` uses such a segment when one matches the range.
 """
 
@@ -95,7 +95,7 @@ def prepare_segments(store: Store, game: Game, mode: str, log=print) -> list[Pat
             tmp = path.with_name(path.stem + ".part.mp4")
             subprocess.run([store.settings.ffmpeg, "-v", "error", "-y", "-ss", f"{seek_s:.6f}",
                             "-i", str(store.original_path(game)), "-frames:v", str(e - s), "-map", "0:v:0",
-                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", "-an",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-an",
                             str(tmp)], check=True)
             tmp.replace(path)
         out.append(path)
