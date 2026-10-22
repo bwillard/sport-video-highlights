@@ -110,6 +110,15 @@ class OtherBallIn(RequestBody):
     r: float | None = Field(default=None, gt=0, le=0.1)
 
 
+class BallFixIn(RequestBody):
+    frame: int = Field(ge=0)
+    action: Literal["ball", "none"]
+    x: float | None = Field(default=None, ge=0, le=1)
+    y: float | None = Field(default=None, ge=0, le=1)
+    r: float | None = Field(default=None, gt=0, le=0.1)
+    label_set: Literal["auto", "train", "bench"] | None = None  # also add the frame as a labelled ball frame
+
+
 class VerdictIn(RequestBody):
     verdict: ball_others.Verdict
 
@@ -432,17 +441,34 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         ball_others.edit(store.settings, set_verdict)
 
-    @app.get("/api/games/{game_id}/ball")
-    def game_ball(game_id: str) -> dict:
-        """The game-ball path: parallel arrays, positions as fractions of the frame (empty if not tracked)."""
+    def ball_json(game: Game) -> dict:
         from soccer_clips.track import ball_game
 
-        z = ball_game.load_path(store, load(game_id))
+        z = ball_game.load_path(store, game)
         if z is None:
             return {"ranges": [], "frame": [], "x": [], "y": [], "r": [], "kind": []}
         return {"ranges": z["ranges"].tolist(), "frame": z["frame"].tolist(),
                 "x": np.round(z["x"], 4).tolist(), "y": np.round(z["y"], 4).tolist(),
                 "r": np.round(z["r"], 4).tolist(), "kind": z["kind"].tolist()}
+
+    @app.get("/api/games/{game_id}/ball")
+    def game_ball(game_id: str) -> dict:
+        """The game-ball path: parallel arrays, positions as fractions of the frame (empty if not tracked)."""
+        return ball_json(load(game_id))
+
+    @app.post("/api/games/{game_id}/ball/fix")
+    def game_ball_fix(game_id: str, body: BallFixIn) -> dict:
+        """Correct the ball path while watching; returns the updated path."""
+        from soccer_clips.track import ball_game
+
+        game = load(game_id)
+        if body.action == "ball" and (body.x is None or body.y is None):
+            raise HTTPException(422, "a ball fix needs x and y")
+        try:
+            used = ball_game.fix(store, game, body.frame, body.action, body.x, body.y, body.r, body.label_set)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {**ball_json(game), "labelled_as": used}
 
     @app.get("/review-balls")
     def review_balls_page() -> FileResponse:

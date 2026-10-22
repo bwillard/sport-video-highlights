@@ -25,6 +25,10 @@
   <button id="sound" title="M">🔇 sound off</button>
   <button id="ballBtn" title="B: show the game ball">⚽ ball</button>
   <span class="stat" id="ballStat" hidden></span>
+  <select id="fixTo" hidden title="Ball fixes (K) also become labelled frames: most go to training, one moment in five to the benchmark">
+    <option value="auto">fixes → label too</option>
+    <option value="">fixes → don't label</option>
+  </select>
   <span class="stat">in <b id="markin">–</b></span>
   <span class="stat">kickoff <b id="kickoffs">–</b></span>
   <span id="flash"></span>
@@ -48,7 +52,10 @@
       <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
       <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff (H late in the game asks which)<br>
       <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
-      <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)
+      <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)<br>
+      Fixing the ball (ring on): <kbd>K</kbd> then click the ball = it's here · <kbd>Shift</kbd>+<kbd>K</kbd> = that ring is wrong, no ball to see ·
+      the path is redone around the fix, and (unless switched off next to the ⚽ button) the frame becomes a labelled
+      frame: most go to training, one 30-second moment in five to the benchmark
     </p>
   </section>
   <aside>
@@ -469,6 +476,12 @@ function pointerToFrame(e) {
   };
 }
 overlay.addEventListener("pointerdown", (e) => {
+  if (fixingBall) {
+    const p = pointerToFrame(e);
+    stopBallFix();
+    fixBall("ball", p.x, p.y);
+    return;
+  }
   if (!placing) return;
   overlay.setPointerCapture(e.pointerId);
   Object.assign(placing, pointerToFrame(e), { dragging: true, downX: e.clientX, downY: e.clientY });
@@ -507,6 +520,39 @@ function toggleBall() {
 function showBallButton() {
   $("ballBtn").classList.toggle("on", showBall);
   $("ballStat").hidden = !showBall;
+  $("fixTo").hidden = !showBall;
+}
+try { $("fixTo").value = localStorage.getItem("fixTo") === "" ? "" : "auto"; } catch {}
+$("fixTo").addEventListener("change", (e) => {
+  try { localStorage.setItem("fixTo", e.target.value); } catch {}
+  e.target.blur();
+});
+
+// Fixing the ball while watching: K then click puts it there; Shift+K says the ring is wrong
+// and there's no ball to see. The server redoes the path around the fix and, if chosen,
+// adds the frame to a label set.
+let fixingBall = false;
+function startBallFix() {
+  if (!showBall) return flash("press B to show the ball first", true);
+  v.pause();
+  fixingBall = true;
+  stage.classList.add("placing");
+  flash("click on the ball (Esc cancels)");
+}
+function stopBallFix() {
+  fixingBall = false;
+  stage.classList.remove("placing");
+}
+async function fixBall(action, x = null, y = null) {
+  if (!showBall || !ball) return flash("press B to show the ball first", true);
+  v.pause();
+  const frame = Math.round(v.currentTime * fps);
+  const body = { frame, action, label_set: $("fixTo").value || null };
+  if (action === "ball") Object.assign(body, { x, y });
+  const b = await api("POST", `/api/games/${encodeURIComponent(game.id)}/ball/fix`, body);
+  ball = { gameId: game.id, ...b };
+  const where = { train: " · added to the training set", bench: " · added to the benchmark set" }[b.labelled_as] || "";
+  flash((action === "ball" ? "ball placed" : "ring removed") + `, path redone${where}`);
 }
 function ballAt(f) {
   // index of frame f in ball.frame (sorted), or -1
@@ -616,6 +662,7 @@ document.addEventListener("keydown", (e) => {
   if (typingInField(e)) return;
   if (!game || e.ctrlKey || e.metaKey || e.altKey) return;
   if (placing && e.key === "Escape") { e.preventDefault(); cancelCallout(); return; }
+  if (fixingBall && e.key === "Escape") { e.preventDefault(); stopBallFix(); return; }
 
   // Digits by physical key, since Shift+1 types "!" on most layouts.
   if (e.code.startsWith("Digit")) {
@@ -631,6 +678,7 @@ document.addEventListener("keydown", (e) => {
     " ": () => (v.paused ? v.play() : v.pause()),
     m: () => toggleMute(),
     b: () => toggleBall(),
+    k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),

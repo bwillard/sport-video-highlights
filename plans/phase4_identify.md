@@ -207,6 +207,8 @@ For a chosen player, find the stretches of a game where they're involved with th
 
 - **2026-10-22 — Set pieces.** The filter decides a whole clip at once, so it can look back in time: a ball parked 3 s+ is now credited when the chosen path leaves it with a kick (within 0.5 s, even if the kicker hides the ball for a few frames) or arrives at it as the ball comes to rest. The kicked/arriving piece must actually travel (≥ 40 px), otherwise a spare ball briefly hidden and seen again looked like a kick (wrong went back to 10% until that check). Bench unchanged at 82% / 5% / 12%; synthetic tests cover a 5 s free-kick wait with the kick hidden 0/4/8 frames, a ball rolling to a stop, and a spare ball blinking.
 
+- **2026-10-22 — Whole-game tracks and fixes while watching.** First whole game (ebu, 60 min) on a US RTX 5090: 65 min, $1.28; ball on 59% of frames (44% seen, 15% filled), mostly 50–90% per minute in open play. The GPU sat idle: one CPU core (decoding + camera motion) was the limit, so long ranges now run as parallel chunks. In the tagger, `K` / `Shift+K` fix the ball (placed ball wins its frame; a wrong ring's run of detections is suppressed; path redone ±2 min in ~2 s) and each fix becomes a labelled frame, assigned automatically: training, except one 30-s moment in five and anything within 10 s of a bench clip go to the benchmark. As the benchmark grows with hard frames, re-score older models on it before comparing.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

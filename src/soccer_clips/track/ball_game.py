@@ -13,6 +13,9 @@ Per game, in games/<year>/<game_id>/tracks/:
                 and motion (n, 2, 3) camera steps (step into each frame from the one before)
   ball.npz      the path: frame, x, y, r (fractions: x of width, y and r of height),
                 conf, kind (1 detected, 2 filled), plus the ranges it covers
+  ball_fixes.json  corrections made while watching (see `fix`): balls placed by hand
+                (they win their frame) and suppressed detections (a wrong ring's run);
+                applied every time the path is rebuilt
 Frames inside a range with no entry had no ball.
 
 To run somewhere the full game videos aren't (a GPU pod), `prepare_segments` cuts just
@@ -248,31 +251,137 @@ def track_game(store: Store, game_id: str, mode: str = "clips", model_name: str 
     return detected
 
 
-def retrack(store: Store, game: Game, p: ball_track.Params | None = None) -> int:
-    """Rebuild ball.npz from the saved detections and camera motion. Returns frames with a ball."""
+FIX_CONF = 3.0  # a hand-placed ball outweighs any detection
+FIX_R = 0.006  # its radius when not given (fraction of frame height, ~6 px)
+SUPPRESS_PX = 15  # detections this close to a suppressed point are dropped
+WRONG_RUN = 45  # a "wrong ring" fix suppresses the path's detections up to this many frames either side
+FIX_WINDOW = 3600  # a fix redoes the path this many frames either side (2 min)
+
+
+def _fixes_path(store: Store, game: Game) -> Path:
+    return tracks_dir(store, game) / "ball_fixes.json"
+
+
+def load_fixes(store: Store, game: Game) -> dict:
+    import json
+
+    path = _fixes_path(store, game)
+    return json.loads(path.read_text()) if path.exists() else {"balls": [], "suppress": []}
+
+
+def _apply_fixes(d: np.ndarray, fixes: dict, game: Game, s: int, e: int) -> np.ndarray:
+    """Detection rows (frame, x1, y1, x2, y2, conf) for [s, e) with hand fixes applied."""
+    W, H = game.width, game.height
+    cx, cy = (d[:, 1] + d[:, 3]) / 2, (d[:, 2] + d[:, 4]) / 2
+    drop = np.zeros(len(d), bool)
+    for p in fixes["suppress"]:
+        if s <= p["frame"] < e:
+            drop |= (d[:, 0] == p["frame"]) & (np.hypot(cx - p["x"] * W, cy - p["y"] * H) <= SUPPRESS_PX)
+    added = []
+    for b in fixes["balls"]:
+        if s <= b["frame"] < e:
+            drop |= d[:, 0] == b["frame"]  # the hand-placed ball is the only one that frame
+            r = (b.get("r") or FIX_R) * H
+            added.append((b["frame"], b["x"] * W - r, b["y"] * H - r, b["x"] * W + r, b["y"] * H + r, FIX_CONF))
+    return np.vstack([d[~drop], np.array(added, float).reshape(-1, 6)])
+
+
+def retrack(store: Store, game: Game, p: ball_track.Params | None = None,
+            window: tuple[int, int] | None = None) -> int:
+    """
+    Rebuild ball.npz from the saved detections, camera motion and hand fixes. With `window`
+    (game frames [a, b)), only that part is redone and the rest of the saved path is kept.
+    Returns frames with a ball.
+    """
     raw = load_raw(store, game)
+    fixes = load_fixes(store, game)
     order = np.argsort(raw["motion_frames"])
     mframes, motion = raw["motion_frames"][order], raw["motion"][order]
-    out = []
+    out, done = [], []
     for s, e in raw["ranges"].tolist():
+        if window:
+            s, e = max(s, window[0]), min(e, window[1])
+            if s >= e:
+                continue
         sel = (mframes >= s) & (mframes < e)
         steps = motion[sel].copy()
         if not len(steps):
             continue
         steps[0] = np.eye(2, 3)
         d = raw["dets"][(raw["dets"][:, 0] >= s) & (raw["dets"][:, 0] < e)]
+        d = _apply_fixes(d, fixes, game, s, e)
         boxes = np.column_stack([d[:, 0] - s, np.full(len(d), BALL), np.full(len(d), -1), d[:, 1:6]])
         path = ball_track.track(boxes, steps, p)
         keep = path[:, 4] > 0
         f = np.nonzero(keep)[0]
         out.append(np.column_stack([f + s, path[keep]]))
+        done.append((s, e))
     rows = np.vstack(out) if out else np.empty((0, 6))
+    rows = np.column_stack([rows[:, 0], rows[:, 1] / game.width, rows[:, 2] / game.height, rows[:, 3] / game.height,
+                            rows[:, 4], rows[:, 5]])
+    old = load_path(store, game) if window else None
+    if old is not None:  # keep the saved path outside the redone stretch
+        keep = np.ones(len(old["frame"]), bool)
+        for s, e in done:
+            keep &= ~((old["frame"] >= s) & (old["frame"] < e))
+        kept = np.column_stack([old[k][keep] for k in ("frame", "x", "y", "r", "conf", "kind")])
+        rows = np.vstack([kept, rows])
+        rows = rows[np.argsort(rows[:, 0], kind="stable")]
     save_npz(tracks_dir(store, game) / "ball.npz",
-             frame=rows[:, 0].astype(np.int32),
-             x=(rows[:, 1] / game.width).astype(np.float32), y=(rows[:, 2] / game.height).astype(np.float32),
-             r=(rows[:, 3] / game.height).astype(np.float32), conf=rows[:, 4].astype(np.float32),
+             frame=rows[:, 0].astype(np.int32), x=rows[:, 1].astype(np.float32), y=rows[:, 2].astype(np.float32),
+             r=rows[:, 3].astype(np.float32), conf=rows[:, 4].astype(np.float32),
              kind=rows[:, 5].astype(np.uint8), ranges=raw["ranges"].astype(np.int32))
     return len(rows)
+
+
+def fix(store: Store, game: Game, frame: int, action: str, x: float | None = None, y: float | None = None,
+        r: float | None = None, label_set: str | None = None) -> str | None:
+    """
+    A correction while watching: action "ball" (it's at x, y) or "none" (the ring is wrong and
+    there's no ball to see). Suppresses the wrong ring's run of detections nearby, records the
+    fix, redoes the path around it, and optionally adds the frame as a labelled ball frame to
+    a label set: "train", "bench", or "auto" (ball_labels.auto_set picks). Returns the set used.
+    """
+    import json
+
+    from soccer_clips.store import atomic_write_text
+    from soccer_clips.track import ball_labels
+
+    raw = load_raw(store, game)
+    if not any(s <= frame < e for s, e in raw["ranges"].tolist()):
+        raise ValueError(f"frame {frame} hasn't been tracked")
+    fixes = load_fixes(store, game)
+    path = load_path(store, game)
+    W, H = game.width, game.height
+    at = np.nonzero(path["frame"] == frame)[0] if path is not None else []
+    if len(at):
+        i = int(at[0])
+        wrong = action == "none" or np.hypot((path["x"][i] - x) * W, (path["y"][i] - y) * H) > 40
+        if wrong:  # suppress the run of detections the wrong ring came from, around this frame
+            lo = hi = i
+            while lo > 0 and path["frame"][lo - 1] == path["frame"][lo] - 1 and frame - path["frame"][lo - 1] <= WRONG_RUN:
+                lo -= 1
+            while (hi + 1 < len(path["frame"]) and path["frame"][hi + 1] == path["frame"][hi] + 1
+                   and path["frame"][hi + 1] - frame <= WRONG_RUN):
+                hi += 1
+            for k in range(lo, hi + 1):
+                if path["kind"][k] == ball_track.DETECTED:
+                    fixes["suppress"].append({"frame": int(path["frame"][k]), "x": float(path["x"][k]),
+                                              "y": float(path["y"][k])})
+    if action == "ball":
+        fixes["balls"] = [b for b in fixes["balls"] if b["frame"] != frame]
+        fixes["balls"].append({"frame": frame, "x": x, "y": y, "r": r})
+    atomic_write_text(_fixes_path(store, game), json.dumps(fixes, indent=1) + "\n")
+    retrack(store, game, window=(frame - FIX_WINDOW, frame + FIX_WINDOW))
+    if label_set == "auto":
+        label_set = ball_labels.auto_set(store, game.id, frame)
+    if label_set:
+        ball_labels.frame_image(store, game, frame)  # so the labelling page can show it
+        ball_labels.add_tasks(store, label_set, [ball_labels.BallTask(game_id=game.id, frame=frame)])
+        ball_labels.add_label(store.settings, ball_labels.BallLabel(
+            game_id=game.id, frame=frame, state="visible" if action == "ball" else "none",
+            x=x if action == "ball" else None, y=y if action == "ball" else None, r=r))
+    return label_set
 
 
 def load_path(store: Store, game: Game) -> dict | None:

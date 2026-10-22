@@ -73,3 +73,74 @@ def test_chunks():
     parts = ball_game.chunks([(0, 20000), (50000, 51000)], 4)
     assert parts[:4] == [(0, 5000), (5000, 10000), (10000, 15000), (15000, 20000)] and parts[4] == (50000, 51000)
     assert ball_game.chunks([(0, 9000)], 6) == [(0, 4500), (4500, 9000)]  # 2 min minimum per chunk
+
+
+def _game_with_wrong_path(settings):
+    """A game whose only detections are a junk object moving 3 px/frame; the real ball is never seen."""
+    make_video(settings, f"2026/{GAME}.mp4", duration_s=6, size="320x180")
+    store = Store(settings)
+    scan(settings, store)
+    game = store.load_game(GAME)
+    dets = np.array([(f, 40 + 3 * f, 50, 46 + 3 * f, 56, 0.5) for f in range(0, 60)], float)
+    ball_game.save_npz(ball_game.tracks_dir(store, game) / "ball_raw.npz", ranges=np.array([[0, 170]]),
+                       dets=dets, motion_frames=np.arange(170), motion=np.repeat(np.eye(2, 3)[None], 170, 0))
+    ball_game.retrack(store, game)
+    return store, game
+
+
+def test_fix_ball_here_and_label(settings):
+    from soccer_clips.track import ball_labels
+
+    store, game = _game_with_wrong_path(settings)
+    assert 30 in ball_game.load_path(store, game)["frame"].tolist()  # the junk is on the path
+    with TestClient(create_app(store)) as client:
+        r = client.post(f"/api/games/{GAME}/ball/fix", json={"frame": 30, "action": "ball", "x": 0.75, "y": 0.75,
+                                                               "label_set": "train"})
+        assert r.status_code == 200
+        b = r.json()
+        i = b["frame"].index(30)
+        assert abs(b["x"][i] - 0.75) < 1e-3 and abs(b["y"][i] - 0.75) < 1e-3  # the ring is where we put it
+        assert not any(abs(b["x"][k] - (43 + 3 * f) / 320) < 0.02 for k, f in enumerate(b["frame"]) if 0 <= f - 30 <= 10)
+        assert client.post(f"/api/games/{GAME}/ball/fix", json={"frame": 30, "action": "ball"}).status_code == 422
+        assert client.post(f"/api/games/{GAME}/ball/fix", json={"frame": 900, "action": "none"}).status_code == 422
+    label = ball_labels.load_labels(settings)[(GAME, 30)]
+    assert (label.state, label.x) == ("visible", 0.75)
+    assert any(t.frame == 30 for t in ball_labels.load_tasks(settings).sets["train"])
+    # fixes survive rebuilding the whole path
+    ball_game.retrack(store, game)
+    z = ball_game.load_path(store, game)
+    assert abs(z["x"][z["frame"].tolist().index(30)] - 0.75) < 1e-3
+
+
+def test_fix_wrong_ring(settings):
+    from soccer_clips.track import ball_labels
+
+    store, game = _game_with_wrong_path(settings)
+    ball_game.fix(store, game, 30, "none", label_set="bench")
+    frames = ball_game.load_path(store, game)["frame"].tolist()
+    assert not any(abs(f - 30) <= 15 for f in frames)  # the junk run around the fix is gone
+    assert ball_labels.load_labels(settings)[(GAME, 30)].state == "none"
+
+
+def test_auto_set(settings):
+    from soccer_clips.track import ball_labels, bench
+
+    make_video(settings, f"2026/{GAME}.mp4", duration_s=6, size="320x180")
+    store = Store(settings)
+    scan(settings, store)
+    with store.edit_game(GAME) as g:
+        g.clips.append(Clip(id="c1", start_s=1.0, end_s=2.0))
+    bench.add_clip(store, GAME, "c1", "one")
+    game = store.load_game(GAME)
+    assert ball_labels.auto_set(store, GAME, game.frame_at(5.0)) == "bench"  # within 10 s of a bench clip
+    # far from bench clips: whole 30 s moments go to one set, about one in five to the benchmark
+    frames = range(900, 900 * 400, 300)  # all well past the bench clip (frame numbers needn't be in the video)
+    moments = {}
+    for f in frames:
+        moments.setdefault(f // game.frame_at(30.0), set()).add(ball_labels.auto_set(store, GAME, f))
+    assert all(len(v) == 1 for v in moments.values())
+    share = sum(v == {"bench"} for v in moments.values()) / len(moments)
+    assert 0.1 < share < 0.3
+    # a frame already in a set stays there
+    ball_labels.add_tasks(store, "train", [ball_labels.BallTask(game_id=GAME, frame=150)])
+    assert ball_labels.auto_set(store, GAME, 150) == "train"

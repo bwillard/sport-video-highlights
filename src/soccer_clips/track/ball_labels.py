@@ -152,6 +152,33 @@ def add_tasks(store: Store, set_name: SetName, new: list[BallTask]) -> int:
     return len(fresh)
 
 
+BENCH_SHARE = 5  # one moment in this many goes to the benchmark
+MOMENT_S = 30.0  # frames of the same play this close together go to the same set
+NEAR_BENCH_S = 10.0  # frames this close to a bench clip always go to the benchmark
+
+
+def auto_set(store: Store, game_id: str, frame: int) -> str:
+    """
+    Which label set a frame labelled while watching (a ball fix) should join. Fixes are the
+    model's mistakes: the best training material, so most go to "train". One 30-second moment
+    in five goes to "bench", so the benchmark also covers hard cases. A whole moment goes to
+    one set (frames of the same play in both would flatter the benchmark), and anything
+    near a bench clip goes to "bench" for the same reason. A frame already in a set stays there.
+    """
+    import hashlib
+
+    for name, ts in load_tasks(store.settings).sets.items():
+        if any(t.game_id == game_id and t.frame == frame for t in ts):
+            return name
+    game = store.load_game(game_id)
+    for c in load_set(store.settings).clips:
+        if c.game_id == game_id and game.frame_at(c.start_s - NEAR_BENCH_S) <= frame <= game.frame_at(c.end_s + NEAR_BENCH_S):
+            return "bench"
+    moment = frame // game.frame_at(MOMENT_S)
+    h = int(hashlib.sha1(f"{game_id}:{moment}".encode()).hexdigest()[:8], 16)
+    return "bench" if h % BENCH_SHARE == 0 else "train"
+
+
 def frame_image(store: Store, game: Game, frame: int) -> Path:
     """One frame of the original as a high-quality JPEG, cached."""
     path = labels_dir(store.settings) / "frames" / game.id / f"{frame}.jpg"
