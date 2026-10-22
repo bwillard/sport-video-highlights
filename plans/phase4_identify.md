@@ -33,7 +33,7 @@ The ball is hard to *find* (5–15 px, motion blur, hidden by legs, look-alikes:
 - [x] Label the train set (2026-10-19): 318 visible, 70 hidden, 71 none, 41 can't tell; of 237 model guesses, 169 accepted and 68 wrong (spare balls, heads, etc.: useful hard negatives)
 - [x] Training pipeline (2026-10-19): `soccer-clips ball export/train/eval`. Export: 1280×720 native crops (centre + one random crop around the ball), boxes from your sizes or a fitted size-vs-height line, the ball kept as COCO class 32 so the pretrained head carries over; 700 train / 39 val images from separate frames. Eval on the bench frame images reproduces the clip-based score (stock YOLO11m centre: 57% / 80%).
 - [ ] Fine-tune a ball model (YOLO11m first; also try YOLO11l/x and YOLO26 as bases) on a rented GPU, score on the bench labels
-- [ ] Temporal filter + gap filling → `ball.npz`
+- [x] Temporal filter + gap filling (2026-10-21): `track/camera.py` (camera motion), `track/ball_track.py` (tracklets + DP chain + fill), `soccer-clips ball track`. Whole-game output to `ball.npz` comes with the tracking job (3.2).
 - [ ] Ball overlay in the tagger to check it by eye
 
 ## 4.2 — Team split
@@ -179,6 +179,19 @@ For a chosen player, find the stretches of a game where they're involved with th
   - Against stock YOLO26x, fine-tuning buys +6 (conf 0.25) to +12 (conf 0.4) points of game balls found, for ~0.05–0.1 junk detections per frame, which the temporal filter should absorb.
   - Validation (85–88% found) beats the bench (76–78%): the bench clips include the hardest cases (crowded corner, far side by a dark tree line).
   - `models/ball_yolo26x.pt` is now run 2; run 1's model is kept in its run folder.
+
+- **2026-10-21 — Temporal filter v1.** Camera motion from optical flow on background corners (RANSAC similarity fit, Veo logo masked); checked by warping later frames onto the first (lines, poles, goal line up). Detections are linked into tracklets, a chain is chosen by dynamic programming (confidence, missing frames, implausible jumps, parked balls penalised), gaps up to 1 s filled. On the bench, % of visible game-ball frames:
+
+  | Detector | Method | Found | Wrong | Missed |
+  |---|---|---|---|---|
+  | stock YOLO11m centre | top detection | 52% | 7% | 41% |
+  | stock YOLO11m centre | **filter** | **72%** | 3% | 24% |
+  | stock YOLO11s centre | top detection | 45% | 6% | 49% |
+  | stock YOLO11s centre | filter | 57–60% | 3% | 37–39% |
+  | stock YOLO11m full frame | top detection | 31% | 22% | 47% |
+  | stock YOLO11m full frame | filter | 47% | 12% | 41% |
+
+  About 30% of the found frames are filled gaps; a quarter of the hidden balls are found by interpolation. Of the misses left (YOLO11m centre), 31 of 41 had no detection on the ball at all (17 on the far side by the tree line, 9 in the crowded corner): a detector problem, which the fine-tuned model should help. Fine-tuned YOLO26x detections on every bench frame are being computed on the CPU (`bench run ft26x-centre`, ~4 h).
 
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |

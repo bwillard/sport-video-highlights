@@ -81,6 +81,23 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
             entries = [b for bs in ball_others.load(store.settings).frames.values() for b in bs]
             c = Counter("manual" if b.source == "manual" else (b.verdict or "to review") for b in entries)
             print(", ".join(f"{v} {k}" for k, v in c.items()) or "no other balls yet")
+    elif args.ball_command == "track":
+        from soccer_clips.track import ball_track
+        from soccer_clips.track.bench import bench_dir
+
+        results = bench_dir(store.settings) / args.results
+        print("variant          method   found  wrong  missed  (filled)  hidden-near  claimed-when-none")
+        for v in args.variants:
+            for method in ("top1", "track"):
+                s = ball_track.evaluate(store, results, v, method=method)
+                f = lambda k: "   –" if s[k] is None else f"{s[k]:4.0%}"
+                print(f"{v:16} {method:6}  {f('found')}   {f('wrong')}   {f('missed')}     {f('filled_share_of_found')}"
+                      f"        {f('hidden_near')}         {f('claimed_when_none')}", flush=True)
+            if args.draw:
+                from soccer_clips.track.bench import load_set
+
+                for c in load_set(store.settings).clips:
+                    print(ball_track.draw(store, results, v, c.name))
     elif args.ball_command == "export":
         from soccer_clips.track import ball_train
 
@@ -185,6 +202,10 @@ def main() -> None:
     find = others_sub.add_parser("find", help="find candidate other balls in labelled frames with a model")
     find.add_argument("--model", default="ball_yolo26x", help="name in models/ (default ball_yolo26x)")
     find.add_argument("--imgsz", type=int, default=1920, help="1920 = whole frame at native resolution")
+    trk = ball_sub.add_parser("track", help="game-ball path through the bench clips, scored against bench labels")
+    trk.add_argument("variants", nargs="+", help="benchmark variants with per-frame detections, e.g. m1280-centre")
+    trk.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
+    trk.add_argument("--draw", action="store_true", help="also write review videos (<clip>.track.mp4)")
     ball_sub.add_parser("export", help="turn train-set labels into a YOLO dataset (labels/dataset/)")
     train = ball_sub.add_parser("train", help="fine-tune YOLO bases on the exported dataset (GPU)")
     train.add_argument("bases", nargs="+", help="e.g. yolo11m yolo26l; weights go to models/ball_<base>.pt")
