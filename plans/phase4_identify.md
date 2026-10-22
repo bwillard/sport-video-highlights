@@ -193,6 +193,18 @@ For a chosen player, find the stretches of a game where they're involved with th
 
   About 30% of the found frames are filled gaps; a quarter of the hidden balls are found by interpolation. Of the misses left (YOLO11m centre), 31 of 41 had no detection on the ball at all (17 on the far side by the tree line, 9 in the crowded corner): a detector problem, which the fine-tuned model should help. Fine-tuned YOLO26x detections on every bench frame are being computed on the CPU (`bench run ft26x-centre`, ~4 h).
 
+- **2026-10-21 — Filter with the fine-tuned detector** (YOLO26x run 2 on every bench frame, CPU, 2.6 h). % of visible game-ball frames:
+
+  | Detector | Method | Found | Wrong | Missed |
+  |---|---|---|---|---|
+  | stock YOLO11m centre | filter | 72% | 3% | 24% |
+  | fine-tuned YOLO26x centre | top detection | 58% | 20% | 22% |
+  | **fine-tuned YOLO26x centre** | **filter** | **82%** | **5%** | **12%** |
+
+  - The far-side clip (saa-far-hustle) went from 10 to 17 of 25 labelled frames found; its path covers 63% of the clip (was 28%).
+  - With the fine-tuned model also finding spare balls, the filter first fell back on a spare when the game ball went undetected (5 of 12 wrong positions, mostly in the crowded corner). Balls still for 3 s or more are now never used, and a chain worth less than "no ball" isn't chosen: wrong 10% → 5% with no loss of found frames.
+  - Lowering the detection threshold doesn't help: in the long empty stretches the stock model sees nothing near the ball even at 0.005, and the filter at ≥ 0.05 found less (68%) with more wrong (6%). A 2x zoomed tile let the fine-tuned model see 4 of 9 missed balls in the crowded far-goal corner (0 at normal size), but not on the far side (6 vs 9 of 15). Options: a zoomed pass over the far band of the field, targeted labels (far side, crowded goalmouths), manual anchors in clips that matter.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

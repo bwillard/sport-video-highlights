@@ -20,7 +20,10 @@ Output per frame: x, y (frame pixels), r, conf, kind: 0 none, 1 detected, 2 fill
 
 Defaults were set on the bench labels (2026-10-21) with a coarse grid, checked on two
 detectors: filling gaps up to 1 s and not discounting weak detections helped a few
-points; the start cost made no difference.
+points; the start cost made no difference. With the fine-tuned detector, which also finds
+spare balls, the path fell back on a spare when the game ball went undetected (5 of 12
+wrong positions); ignoring balls parked for 3 s halved the wrong positions (10% -> 5%)
+without losing any found frames (2026-10-21).
 """
 
 from dataclasses import dataclass, field
@@ -46,9 +49,9 @@ class Params:
     jump_cost: float = 0.004  # per reference pixel of the jump between tracklets
     teleport_gap: int = 45  # after this many empty frames any jump is allowed (ball left the view)
     teleport_cost: float = 1.0
-    parked_frames: int = 45  # a tracklet still for this long looks like a spare ball...
+    parked_frames: int = 90  # a tracklet still for this long (3 s) looks like a spare ball...
     parked_spread_px: float = 12.0  # ...if it stays within this (reference pixels)
-    parked_penalty: float = 0.6  # times its detection score
+    parked_penalty: float = 1.0  # times its detection score: 1 = never used (it can't beat start_cost)
     fill_max_gap: int = 30  # interpolate gaps up to this many frames (1 s)
 
 
@@ -161,8 +164,8 @@ def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
             v = best[i] + scores[j] - trans
             if v > best[j]:
                 best[j], prev[j] = v, i
-    if not len(ts):
-        return []
+    if not len(ts) or best.max() <= 0:
+        return []  # nothing worth more than no ball at all
     j = int(np.argmax(best))
     chain = []
     while j >= 0:

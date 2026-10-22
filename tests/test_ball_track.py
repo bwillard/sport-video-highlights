@@ -38,11 +38,15 @@ def test_follows_the_moving_ball_ignores_a_spare_and_fills_gaps():
     assert (kinds[[0, 3, 7]] == ball_track.DETECTED).all()
 
 
-def test_spare_ball_used_only_when_nothing_else():
-    n = 90
-    rows = [box(f, 1500, 900, 0.6) for f in range(n)]
+def test_long_parked_ball_never_used_but_a_short_stop_is():
+    n = 200
+    rows = [box(f, 1500, 900, 0.6) for f in range(n)]  # spare: still for the whole clip
     path = ball_track.track(np.array(rows, np.float32), still_camera(n))
-    assert (path[:, 4] == ball_track.DETECTED).all()  # better a parked ball than nothing
+    assert (path[:, 4] == ball_track.NONE).all()  # no ball beats a spare ball
+    rows = [box(f, 700, 500, 0.6) for f in range(60)]  # the game ball waiting 2 s for a goal kick...
+    rows += [box(f, 700 + 10 * (f - 60), 500, 0.6) for f in range(60, 120)]  # ...then kicked
+    path = ball_track.track(np.array(rows, np.float32), still_camera(120))
+    assert (path[:, 4] == ball_track.DETECTED).all()
 
 
 def test_long_gap_left_empty():
