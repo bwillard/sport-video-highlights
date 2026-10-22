@@ -159,7 +159,7 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
             job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs,
                                      batch=args.batch)
         runner = gpu.Runner(store, job, gpu_types=args.gpu or gpu.GPU_TYPES, max_hours=args.max_hours,
-                            log=lambda m: print(m, flush=True))
+                            log=lambda m: print(m, flush=True), countries=args.countries)
         print(f"run folder: {runner.dir}", flush=True)
         results = runner.run()
         if args.job == "ball-games":
@@ -256,6 +256,8 @@ def main() -> None:
     run_gpu.add_argument("--batch", type=int, default=4,
                          help="images per step; YOLO26x at 1280 runs out of memory at 8 on a 24 GB card")
     run_gpu.add_argument("--gpu", nargs="+", help="RunPod GPU type ids, in order of preference")
+    run_gpu.add_argument("--countries", nargs="*", help="country codes for the pod's data centre (default: US; "
+                         "give none to allow anywhere)")
     run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also stops itself after this")
     g_sub.add_parser("cleanup", help="delete every soccer-clips pod")
     args = parser.parse_args()

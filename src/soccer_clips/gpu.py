@@ -32,6 +32,7 @@ API = "https://rest.runpod.io/v1"
 POD_PREFIX = "soccer-clips-"
 IMAGE = "runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404"  # PyTorch 2.8, CUDA 12.8, Ubuntu 24.04, sshd
 GPU_TYPES = ["NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 5090", "NVIDIA L40S"]  # in order of preference
+COUNTRIES = ["US"]  # pods in US data centres: closer, so uploads are quicker
 SSH_KEY = Path.home() / ".ssh" / "id_ed25519"
 
 
@@ -108,8 +109,10 @@ y.backward(); torch.cuda.synchronize(); print('gpu self-test ok')
 
 
 class Runner:
-    def __init__(self, store: Store, job: Job, gpu_types: list[str], max_hours: float, log: Callable[[str], None]):
+    def __init__(self, store: Store, job: Job, gpu_types: list[str], max_hours: float, log: Callable[[str], None],
+                 countries: list[str] | None = None):
         self.store, self.job, self.gpu_types, self.max_hours = store, job, gpu_types, max_hours
+        self.countries = COUNTRIES if countries is None else countries
         self.run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + job.name
         self.dir = data_root(store) / "gpu" / self.run_id
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -142,6 +145,8 @@ class Runner:
             "interruptible": False,
             "env": {"SSH_PUBLIC_KEY": SSH_KEY.with_suffix(".pub").read_text().strip()},
         }
+        if self.countries:
+            body["countryCodes"] = self.countries
         deadline = time.time() + wait_s
         while True:
             try:
@@ -153,8 +158,9 @@ class Runner:
                 self.log("no machine free for those GPU types; retrying in 60 s")
                 time.sleep(60)
         (self.dir / "pod.json").write_text(json.dumps(self.pod, indent=2))
+        where = (api("GET", f"/pods/{self.pod['id']}?includeMachine=true") or {}).get("machine") or {}
         self.log(f"pod {self.pod['id']} created ({self.pod.get('gpu', {}).get('displayName', '?')}, "
-                 f"${self.pod.get('costPerHr', '?')}/h)")
+                 f"${self.pod.get('costPerHr', '?')}/h, {where.get('location') or where.get('dataCenterId') or 'location ?'})")
 
     def wait_for_ssh(self, timeout_s: int = 900) -> None:
         deadline = time.time() + timeout_s
