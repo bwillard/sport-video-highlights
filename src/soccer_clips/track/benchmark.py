@@ -32,6 +32,7 @@ class Variant:
     model: str  # ultralytics weights name
     imgsz: int
     crop: tuple[int, int, int, int] | None = None  # x, y, w, h in full-frame pixels
+    ball_only: bool = False  # our fine-tuned ball models: people aren't labelled in their training
 
 
 # Centre crop: the middle 2/3 of a 1920x1080 frame at native resolution. Veo's
@@ -46,6 +47,8 @@ VARIANTS = {v.name: v for v in [
     Variant("s1920", "yolo11s.pt", 1920),
     Variant("m1280-centre", "yolo11m.pt", 1280, crop=(320, 180, 1280, 720)),
     Variant("m1920", "yolo11m.pt", 1920),
+    # Our fine-tuned ball model (Phase 4.1, run 2), on the centre crop like it was trained.
+    Variant("ft26x-centre", "ball_yolo26x.pt", 1280, crop=(320, 180, 1280, 720), ball_only=True),
 ]}
 
 # Columns of the per-clip box array.
@@ -87,7 +90,8 @@ def run_clip(model, variant: Variant, path: Path) -> tuple[np.ndarray, dict]:
         if variant.crop:
             ox, oy, w, h = variant.crop
             img = frame[oy:oy + h, ox:ox + w]
-        res = model.predict(img, imgsz=variant.imgsz, conf=MIN_CONF, classes=[PERSON, BALL], verbose=False)[0]
+        classes = [BALL] if variant.ball_only else [PERSON, BALL]
+        res = model.predict(img, imgsz=variant.imgsz, conf=MIN_CONF, classes=classes, verbose=False)[0]
         t2 = time.perf_counter()
         boxes = res.boxes.cpu().numpy()
         people = boxes[boxes.cls == PERSON]

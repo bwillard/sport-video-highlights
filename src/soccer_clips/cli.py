@@ -166,7 +166,7 @@ def main() -> None:
     cut = bench_sub.add_parser("cut", help="cut the set's mp4s (only new or changed ones)")
     cut.add_argument("--force", action="store_true", help="recut everything")
     run = bench_sub.add_parser("run", help="run detection + tracking variants on the set")
-    run.add_argument("variants", nargs="*", help="default: all (n640 s640 n1280 s1280 s1280-centre s1920 m1280-centre m1920)")
+    run.add_argument("variants", nargs="*", help="default: all (n640 s640 n1280 s1280 s1280-centre s1920 m1280-centre m1920 ft26x-centre)")
     draw = bench_sub.add_parser("draw", help="draw a variant's boxes onto the clips for checking by eye")
     draw.add_argument("variant")
     draw.add_argument("clips", nargs="*", help="default: all")
