@@ -205,6 +205,8 @@ For a chosen player, find the stretches of a game where they're involved with th
   - With the fine-tuned model also finding spare balls, the filter first fell back on a spare when the game ball went undetected (5 of 12 wrong positions, mostly in the crowded corner). Balls still for 3 s or more are now never used, and a chain worth less than "no ball" isn't chosen: wrong 10% → 5% with no loss of found frames.
   - Lowering the detection threshold doesn't help: in the long empty stretches the stock model sees nothing near the ball even at 0.005, and the filter at ≥ 0.05 found less (68%) with more wrong (6%). A 2x zoomed tile let the fine-tuned model see 4 of 9 missed balls in the crowded far-goal corner (0 at normal size), but not on the far side (6 vs 9 of 15). Options: a zoomed pass over the far band of the field, targeted labels (far side, crowded goalmouths), manual anchors in clips that matter.
 
+- **2026-10-22 — Set pieces.** The filter decides a whole clip at once, so it can look back in time: a ball parked 3 s+ is now credited when the chosen path leaves it with a kick (within 0.5 s, even if the kicker hides the ball for a few frames) or arrives at it as the ball comes to rest. The kicked/arriving piece must actually travel (≥ 40 px), otherwise a spare ball briefly hidden and seen again looked like a kick (wrong went back to 10% until that check). Bench unchanged at 82% / 5% / 12%; synthetic tests cover a 5 s free-kick wait with the kick hidden 0/4/8 frames, a ball rolling to a stop, and a spare ball blinking.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

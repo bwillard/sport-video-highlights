@@ -54,3 +54,31 @@ def test_long_gap_left_empty():
     rows = [box(f, 300 + 5 * f, 400, 0.5) for f in list(range(0, 20)) + list(range(70, 100))]
     path = ball_track.track(np.array(rows, np.float32), still_camera(n))
     assert (path[25:65, 4] == ball_track.NONE).all()  # 50 empty frames: longer than the 1 s fill
+
+
+def test_set_piece_wait_claimed_back_when_the_kick_is_hidden():
+    for hidden in (0, 4, 8):  # frames the kicker hides the ball at the kick
+        n = 210
+        rows = [box(f, 700, 500, 0.6) for f in range(150)]  # 5 s waiting for a free kick
+        rows += [box(f, 700 + 25 * (f - 149), 500, 0.6) for f in range(150 + hidden, n)]
+        rows += [box(f, 1500, 900, 0.7) for f in range(n)]  # a spare ball, still the whole time
+        path = ball_track.track(np.array(rows, np.float32), still_camera(n))
+        waiting = np.hypot(path[:150, 0] - 700, path[:150, 1] - 500) < 3
+        assert (waiting & (path[:150, 4] == ball_track.DETECTED)).all(), hidden
+        assert not (np.hypot(path[:, 0] - 1500, path[:, 1] - 900) < 3).any(), hidden  # never the spare
+
+
+def test_ball_that_rolls_to_a_stop_keeps_its_resting_place():
+    n = 200
+    rows = [box(f, 300 + 12 * f, 400, 0.6) for f in range(50)]  # rolling...
+    rows += [box(f, 300 + 12 * 49 + 4, 400, 0.6) for f in range(55, n)]  # ...stops (5 frames unseen), sits 5 s
+    path = ball_track.track(np.array(rows, np.float32), still_camera(n))
+    assert (path[55:, 4] == ball_track.DETECTED).all()
+
+
+def test_spare_ball_briefly_hidden_is_not_a_kick():
+    n = 240
+    rows = [box(f, 1500, 900, 0.7) for f in range(n) if not 150 <= f < 155]  # spare hidden for 5 frames
+    rows += [box(f, 200 + 6 * f, 300, 0.4) for f in range(n)]  # the game ball elsewhere, weaker
+    path = ball_track.track(np.array(rows, np.float32), still_camera(n))
+    assert not (np.hypot(path[:, 0] - 1500, path[:, 1] - 900) < 3).any()

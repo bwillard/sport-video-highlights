@@ -20,7 +20,8 @@ Output per frame: x, y (frame pixels), r, conf, kind: 0 none, 1 detected, 2 fill
 
 Defaults were set on the bench labels (2026-10-21) with a coarse grid, checked on two
 detectors: filling gaps up to 1 s and not discounting weak detections helped a few
-points; the start cost made no difference. With the fine-tuned detector, which also finds
+points; the start cost made no difference. A ball still for 3 s+ is only used when the chain
+leaves it with a kick or arrives at it as it comes to rest (set pieces). With the fine-tuned detector, which also finds
 spare balls, the path fell back on a spare when the game ball went undetected (5 of 12
 wrong positions); ignoring balls parked for 3 s halved the wrong positions (10% -> 5%)
 without losing any found frames (2026-10-21).
@@ -53,6 +54,11 @@ class Params:
     parked_spread_px: float = 12.0  # ...if it stays within this (reference pixels)
     parked_penalty: float = 1.0  # times its detection score: 1 = never used (it can't beat start_cost)
     fill_max_gap: int = 30  # interpolate gaps up to this many frames (1 s)
+    # A parked ball the path leaves by being kicked (or arrives at as it comes to rest) is the
+    # game ball after all: a free kick, corner or goal kick waiting to be taken.
+    kick_gap: int = 15  # frames between the parked ball and the moving one (the kicker may hide it)
+    rest_jump_px: float = 30.0  # coming to rest: the parked ball must start this close to where the path was
+    moving_px: float = 40.0  # the kicked (or arriving) tracklet must travel at least this far (reference pixels)
 
 
 @dataclass
@@ -82,8 +88,15 @@ class Tracklet:
             return False
         return max(np.ptp(self.rx), np.ptp(self.ry)) <= max(p.parked_spread_px, 2 * float(np.median(self.r)))
 
+    def moving(self, p: Params) -> bool:
+        """Travels somewhere: not just a short, still piece (a spare ball briefly hidden and seen again)."""
+        return float(np.hypot(np.ptp(self.rx), np.ptp(self.ry))) >= p.moving_px
+
+    def raw_score(self, p: Params) -> float:
+        return float(np.sum(np.asarray(self.conf) - p.conf_offset))
+
     def score(self, p: Params) -> float:
-        s = float(np.sum(np.asarray(self.conf) - p.conf_offset))
+        s = self.raw_score(p)
         return s * (1 - p.parked_penalty) if self.parked(p) else s
 
 
@@ -142,11 +155,18 @@ def link(dets: list[np.ndarray], steps: np.ndarray, ref: np.ndarray, p: Params) 
 
 
 def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
-    """Best chain of tracklets, in time order (dynamic programming over tracklets sorted by end)."""
+    """
+    Best chain of tracklets, in time order (dynamic programming over tracklets sorted by end).
+    The whole clip is decided at once, so a parked ball is credited when the chain later
+    leaves it with a kick, or arrives at it as the ball comes to rest.
+    """
     ts = sorted(tracklets, key=lambda t: t.end)
     scores = [t.score(p) for t in ts]
+    parked = [t.parked(p) for t in ts]
+    moving = [t.moving(p) for t in ts]
     best = np.empty(len(ts))
     prev = np.full(len(ts), -1)
+    credited = np.zeros(len(ts), bool)  # a parked tracklet's own score already added along its best chain
     for j, tj in enumerate(ts):
         best[j] = scores[j] - p.start_cost
         for i in range(j):
@@ -161,9 +181,15 @@ def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
                 trans = p.miss_cost * (gap - 1) + p.jump_cost * jump
             else:
                 continue  # too far, too fast
-            v = best[i] + scores[j] - trans
+            bonus, credit = 0.0, False
+            if gap <= p.kick_gap:
+                if parked[i] and moving[j] and not credited[i]:
+                    bonus = ts[i].raw_score(p)  # the ball was kicked from where it sat
+                elif parked[j] and moving[i] and jump <= p.rest_jump_px:
+                    bonus, credit = ts[j].raw_score(p), True  # the ball came to rest here
+            v = best[i] + scores[j] - trans + bonus
             if v > best[j]:
-                best[j], prev[j] = v, i
+                best[j], prev[j], credited[j] = v, i, credit
     if not len(ts) or best.max() <= 0:
         return []  # nothing worth more than no ball at all
     j = int(np.argmax(best))
