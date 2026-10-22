@@ -6,6 +6,8 @@ and the reel page.
 
 import logging
 import re
+
+import numpy as np
 import shutil
 from contextlib import asynccontextmanager
 from datetime import date
@@ -429,6 +431,18 @@ def create_app(store: Store | None = None) -> FastAPI:
             entries[index].verdict = body.verdict
 
         ball_others.edit(store.settings, set_verdict)
+
+    @app.get("/api/games/{game_id}/ball")
+    def game_ball(game_id: str) -> dict:
+        """The game-ball path: parallel arrays, positions as fractions of the frame (empty if not tracked)."""
+        from soccer_clips.track import ball_game
+
+        z = ball_game.load_path(store, load(game_id))
+        if z is None:
+            return {"ranges": [], "frame": [], "x": [], "y": [], "r": [], "kind": []}
+        return {"ranges": z["ranges"].tolist(), "frame": z["frame"].tolist(),
+                "x": np.round(z["x"], 4).tolist(), "y": np.round(z["y"], 4).tolist(),
+                "r": np.round(z["r"], 4).tolist(), "kind": z["kind"].tolist()}
 
     @app.get("/review-balls")
     def review_balls_page() -> FileResponse:

@@ -87,6 +87,8 @@ Draw a marker that follows the chosen player while the video plays, in the tagge
 - [ ] Correction clicks (relabel a tracklet from a frame on) + present/missing timeline strip
 - [ ] Same overlay on the reel page (reel time → game time via the segment map)
 
+**Ball overlay (2026-10-22):** the same canvas-over-video idea is built for the game ball: `B` in the tagger draws a ring on the tracked ball (`/api/games/{id}/ball`), as a first step towards 3.3's player marker.
+
 ## 3.4 — Marker burned into reels
 For downloads and sharing, the marker has to be in the pixels.
 

@@ -23,6 +23,8 @@
   <span class="stat">match <b id="clock">–</b></span>
   <span class="stat">rate <b id="rate">1</b>×</span>
   <button id="sound" title="M">🔇 sound off</button>
+  <button id="ballBtn" title="B: show the game ball">⚽ ball</button>
+  <span class="stat" id="ballStat" hidden></span>
   <span class="stat">in <b id="markin">–</b></span>
   <span class="stat">kickoff <b id="kickoffs">–</b></span>
   <span id="flash"></span>
@@ -46,7 +48,7 @@
       <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
       <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff (H late in the game asks which)<br>
       <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
-      <kbd>Shift</kbd>+<kbd>C</kbd> remove it
+      <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)
     </p>
   </section>
   <aside>
@@ -484,6 +486,62 @@ overlay.addEventListener("pointerup", async () => {
   flash(`callout set at ${fmt(t)}`);
 });
 
+// ---------- game ball (Phase 4.1) ----------
+// The tracked game-ball path, drawn as a ring while the video plays. Frames are game
+// frames; positions are fractions of the frame. Solid ring: detected; dashed: filled gap.
+let showBall = false, ball = null;  // ball: {gameId, ranges, frame, x, y, r, kind}
+try { showBall = localStorage.getItem("showBall") === "1"; } catch {}
+
+async function loadBall() {
+  if (!showBall || !game || ball?.gameId === game.id) return;
+  const id = game.id;
+  const b = await getJson(`/api/games/${encodeURIComponent(id)}/ball`);
+  if (game?.id === id) ball = { gameId: id, ...b };
+}
+function toggleBall() {
+  showBall = !showBall;
+  try { localStorage.setItem("showBall", showBall ? "1" : "0"); } catch {}
+  showBallButton();
+  loadBall();
+}
+function showBallButton() {
+  $("ballBtn").classList.toggle("on", showBall);
+  $("ballStat").hidden = !showBall;
+}
+function ballAt(f) {
+  // index of frame f in ball.frame (sorted), or -1
+  const a = ball.frame;
+  let lo = 0, hi = a.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (a[mid] === f) return mid;
+    if (a[mid] < f) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
+}
+function drawBall(ctx) {
+  if (!showBall || !ball || ball.gameId !== game?.id) { if (showBall) $("ballStat").textContent = "ball: loading…"; return; }
+  const f = Math.round(v.currentTime * fps);
+  const tracked = ball.ranges.some(([s, e]) => f >= s && f < e);
+  const i = tracked ? ballAt(f) : -1;
+  $("ballStat").textContent = !ball.ranges.length ? "ball: not tracked in this game"
+    : !tracked ? "ball: not tracked here" : i < 0 ? "ball: not seen" : ball.kind[i] === 1 ? "ball: seen" : "ball: filled in";
+  if (i < 0) return;
+  const r = videoRect(), cx = r.x + ball.x[i] * r.w, cy = r.y + ball.y[i] * r.h;
+  const rad = Math.max(9, ball.r[i] * r.h * 2.2);
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.beginPath(); ctx.arc(cx, cy, rad + 1.5, 0, 2 * Math.PI); ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#ffe14d";
+  if (ball.kind[i] !== 1) ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI); ctx.stroke();
+  ctx.restore();
+}
+$("ballBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleBall(); });
+showBallButton();
+
 function drawOverlay() {
   const dpr = window.devicePixelRatio || 1;
   const W = overlay.clientWidth, H = overlay.clientHeight;
@@ -491,6 +549,7 @@ function drawOverlay() {
   const ctx = overlay.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  drawBall(ctx);
   let co = null;
   if (placing) {
     co = placing.x == null ? null : placing;
@@ -571,6 +630,7 @@ document.addEventListener("keydown", (e) => {
   const actions = {
     " ": () => (v.paused ? v.play() : v.pause()),
     m: () => toggleMute(),
+    b: () => toggleBall(),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),
@@ -686,6 +746,8 @@ async function loadGame(id, startT = 0, clipId = null) {
   render();
   document.querySelector("#clips li.sel")?.scrollIntoView({ block: "nearest" });
   pollJobs();
+  ball = null;
+  loadBall();
 }
 
 function applyHash() {

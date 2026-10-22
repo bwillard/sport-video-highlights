@@ -25,22 +25,23 @@ def _as3(a: np.ndarray) -> np.ndarray:
     return np.vstack([a, [0, 0, 1]])
 
 
-def estimate(path: Path) -> np.ndarray:
-    """(n, 2, 3) transforms: step[0] = identity, step[f] maps frame f-1 pixels to frame f pixels."""
-    cap = cv2.VideoCapture(str(path))
-    steps, prev, mask = [], None, None
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
+class Tracker:
+    """Feed frames one at a time; each call returns the step from the previous frame."""
+
+    def __init__(self):
+        self.prev = None
+        self.mask = None
+
+    def step(self, frame: np.ndarray) -> np.ndarray:
         grey = cv2.cvtColor(cv2.resize(frame, None, fx=SCALE, fy=SCALE, interpolation=cv2.INTER_AREA),
                             cv2.COLOR_BGR2GRAY)
-        if mask is None:
-            mask = np.full(grey.shape, 255, np.uint8)
-            mask[int(LOGO[1] * SCALE):, int(LOGO[0] * SCALE):] = 0
+        if self.mask is None:
+            self.mask = np.full(grey.shape, 255, np.uint8)
+            self.mask[int(LOGO[1] * SCALE):, int(LOGO[0] * SCALE):] = 0
         step = np.eye(2, 3)
+        prev = self.prev
         if prev is not None:
-            pts = cv2.goodFeaturesToTrack(prev, maxCorners=500, qualityLevel=0.01, minDistance=8, mask=mask)
+            pts = cv2.goodFeaturesToTrack(prev, maxCorners=500, qualityLevel=0.01, minDistance=8, mask=self.mask)
             if pts is not None and len(pts) >= 8:
                 nxt, status, _ = cv2.calcOpticalFlowPyrLK(prev, grey, pts, None)
                 good = status.ravel() == 1
@@ -50,8 +51,19 @@ def estimate(path: Path) -> np.ndarray:
                     if a is not None:
                         a[:, 2] /= SCALE  # shift back to full-size pixels
                         step = a
-        steps.append(step)
-        prev = grey
+        self.prev = grey
+        return step
+
+
+def estimate(path: Path) -> np.ndarray:
+    """(n, 2, 3) transforms: step[0] = identity, step[f] maps frame f-1 pixels to frame f pixels."""
+    cap = cv2.VideoCapture(str(path))
+    t, steps = Tracker(), []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        steps.append(t.step(frame))
     cap.release()
     return np.array(steps)
 

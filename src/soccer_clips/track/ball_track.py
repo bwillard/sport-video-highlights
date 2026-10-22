@@ -159,17 +159,34 @@ def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
     Best chain of tracklets, in time order (dynamic programming over tracklets sorted by end).
     The whole clip is decided at once, so a parked ball is credited when the chain later
     leaves it with a kick, or arrives at it as the ball comes to rest.
+
+    Predecessors ending more than teleport_gap frames before tj starts can always be reached
+    (at teleport cost plus miss_cost per empty frame), so for them only the best value of
+    best[i] + miss_cost * end_i matters: a prefix maximum over tracklets in end order, looked
+    up by binary search on tj's start (starts aren't in end order, so it can't be a single
+    moving pointer). Only near ones are compared one by one, which keeps a whole game quick.
     """
     ts = sorted(tracklets, key=lambda t: t.end)
+    if not ts:
+        return []
     scores = [t.score(p) for t in ts]
     parked = [t.parked(p) for t in ts]
     moving = [t.moving(p) for t in ts]
+    ends = np.array([t.end for t in ts])
     best = np.empty(len(ts))
     prev = np.full(len(ts), -1)
     credited = np.zeros(len(ts), bool)  # a parked tracklet's own score already added along its best chain
+    pm_val = np.full(len(ts), -np.inf)  # pm_val[k]: max of best[i] + miss_cost * end_i over i <= k
+    pm_arg = np.full(len(ts), -1)
     for j, tj in enumerate(ts):
         best[j] = scores[j] - p.start_cost
-        for i in range(j):
+        k = int(np.searchsorted(ends, tj.start - p.teleport_gap, side="left"))  # ts[:k] end long before tj
+        k = min(k, j)
+        if k > 0 and pm_arg[k - 1] >= 0:
+            v = pm_val[k - 1] - p.miss_cost * tj.start - p.teleport_cost + scores[j]
+            if v > best[j]:
+                best[j], prev[j] = v, pm_arg[k - 1]
+        for i in range(k, j):
             ti = ts[i]
             gap = tj.start - ti.end
             if gap <= 0:
@@ -190,7 +207,12 @@ def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
             v = best[i] + scores[j] - trans + bonus
             if v > best[j]:
                 best[j], prev[j], credited[j] = v, i, credit
-    if not len(ts) or best.max() <= 0:
+        here = best[j] + p.miss_cost * tj.end
+        if j and pm_val[j - 1] >= here:
+            pm_val[j], pm_arg[j] = pm_val[j - 1], pm_arg[j - 1]
+        else:
+            pm_val[j], pm_arg[j] = here, j
+    if best.max() <= 0:
         return []  # nothing worth more than no ball at all
     j = int(np.argmax(best))
     chain = []
@@ -198,6 +220,25 @@ def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
         chain.append(ts[j])
         j = prev[j]
     return chain[::-1]
+
+
+def chain_value(chain: list[Tracklet], p: Params) -> float:
+    """What `choose` scores a chain at (for tests and debugging)."""
+    v, credited = chain[0].score(p) - p.start_cost, False
+    for ti, tj in zip(chain, chain[1:]):
+        gap = tj.start - ti.end
+        jump = np.hypot(tj.rx[0] - ti.rx[-1], tj.ry[0] - ti.ry[-1])
+        trans = (p.teleport_cost + p.miss_cost * gap if gap > p.teleport_gap
+                 else p.miss_cost * (gap - 1) + p.jump_cost * jump)
+        bonus, credit = 0.0, False
+        if gap <= p.kick_gap:
+            if ti.parked(p) and tj.moving(p) and not credited:
+                bonus = ti.raw_score(p)
+            elif tj.parked(p) and ti.moving(p) and jump <= p.rest_jump_px:
+                bonus, credit = tj.raw_score(p), True
+        v += tj.score(p) - trans + bonus
+        credited = credit
+    return v
 
 
 def path(chain: list[Tracklet], ref: np.ndarray, n_frames: int, p: Params) -> np.ndarray:

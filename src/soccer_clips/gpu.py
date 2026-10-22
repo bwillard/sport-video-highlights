@@ -310,3 +310,49 @@ soccer-clips ball eval $(for b in {fixed} $BEST; do echo ball_$b; done) --json $
         downloads=["out", "models/ball_*.pt", "labels/runs/*/results.csv", "labels/runs/*/args.yaml",
                    "labels/runs/*/selection.json"],
     )
+
+
+def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 3,
+                   log=print) -> Job:
+    """
+    Game-ball paths for games: 'clips' uploads just the tagged-clip stretches still to do
+    (cut here into segments), 'all' uploads the original videos. Games run `workers` at a time
+    on the pod (they share the GPU). Brings back each game's tracks/ folder.
+    """
+    from soccer_clips.track import ball_game
+    from soccer_clips.track.benchmark import models_dir
+
+    root = data_root(store)
+    uploads = [str((models_dir(store) / "ball_yolo26x.pt").relative_to(root))]
+    for gid in game_ids:
+        game = store.load_game(gid)
+        game_dir = store.game_dir(game.year, game.id)
+        uploads.append(str((game_dir / "game.json").relative_to(root)))
+        raw = game_dir / "tracks" / "ball_raw.npz"
+        if raw.exists():  # what's done already: the pod only does the rest
+            uploads.append(str(raw.relative_to(root)))
+        if mode == "clips":
+            uploads += [str(p.relative_to(root)) for p in ball_game.prepare_segments(store, game, mode, log)]
+        else:
+            uploads.append(str(store.original_path(game).relative_to(root)))
+    ids = " ".join(game_ids)
+    quiet = '2>&1 | (grep -vE "━|^\\s*$" || true)'
+    script = f"""
+printf '%s\\n' {ids} | xargs -P {workers} -I{{}} sh -c 'soccer-clips ball track-game {{}} --mode {mode} {quiet}'
+"""
+    return Job(name=f"ball-games-{mode}", uploads=uploads, script=script, downloads=["games"],
+               exclude=["*.part.*"])
+
+
+def install_ball_tracks(store: Store, results: Path, log=print) -> int:
+    """Copy tracks/ folders brought back by ball_games_job into the local games folders."""
+    import shutil
+
+    n = 0
+    for f in sorted((results / "games").glob("*/*/tracks/ball*.npz")):
+        dest = data_root(store) / f.relative_to(results)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(f, dest)
+        n += 1
+        log(f"installed {dest.relative_to(data_root(store))}")
+    return n

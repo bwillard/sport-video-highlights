@@ -98,6 +98,18 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
 
                 for c in load_set(store.settings).clips:
                     print(ball_track.draw(store, results, v, c.name))
+    elif args.ball_command == "track-game":
+        from soccer_clips.track import ball_game
+
+        ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
+        for gid in ids:
+            if args.retrack:
+                n = ball_game.retrack(store, store.load_game(gid))
+            else:
+                ball_game.track_game(store, gid, mode=args.mode, model_name=args.model,
+                                     log=lambda m: print(m, flush=True))
+                n = len((ball_game.load_path(store, store.load_game(gid)) or {"frame": []})["frame"])
+            print(f"{gid}: ball in {n} frames", flush=True)
     elif args.ball_command == "export":
         from soccer_clips.track import ball_train
 
@@ -140,11 +152,18 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         from soccer_clips.track import ball_labels
         from soccer_clips.track.benchmark import models_dir
 
-        job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs, batch=args.batch)
+        if args.job == "ball-games":
+            ids = args.games or [g.id for g in store.list_games()]
+            job = gpu.ball_games_job(store, ids, mode=args.mode, log=lambda m: print(m, flush=True))
+        else:
+            job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs,
+                                     batch=args.batch)
         runner = gpu.Runner(store, job, gpu_types=args.gpu or gpu.GPU_TYPES, max_hours=args.max_hours,
                             log=lambda m: print(m, flush=True))
         print(f"run folder: {runner.dir}", flush=True)
         results = runner.run()
+        if args.job == "ball-games":
+            gpu.install_ball_tracks(store, results, log=print)
         for w in sorted((results / "models").glob("ball_*.pt")):
             shutil.copy(w, models_dir(store) / w.name)
             print(f"model: {models_dir(store) / w.name}")
@@ -206,6 +225,11 @@ def main() -> None:
     trk.add_argument("variants", nargs="+", help="benchmark variants with per-frame detections, e.g. m1280-centre")
     trk.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
     trk.add_argument("--draw", action="store_true", help="also write review videos (<clip>.track.mp4)")
+    tg = ball_sub.add_parser("track-game", help="game-ball path for a game's tagged clips (or whole game)")
+    tg.add_argument("game", help="game id, or 'all'")
+    tg.add_argument("--mode", choices=["clips", "all"], default="clips", help="tagged clips (+2s) or the whole game")
+    tg.add_argument("--model", default="ball_yolo26x", help="ball model in models/")
+    tg.add_argument("--retrack", action="store_true", help="redo the path from saved detections (no detecting)")
     ball_sub.add_parser("export", help="turn train-set labels into a YOLO dataset (labels/dataset/)")
     train = ball_sub.add_parser("train", help="fine-tune YOLO bases on the exported dataset (GPU)")
     train.add_argument("bases", nargs="+", help="e.g. yolo11m yolo26l; weights go to models/ball_<base>.pt")
@@ -221,7 +245,11 @@ def main() -> None:
     g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")
     g_sub = g.add_subparsers(dest="gpu_command")
     run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")
-    run_gpu.add_argument("job", choices=["ball-train"], help="ball-train: score stock bases, fine-tune, score")
+    run_gpu.add_argument("job", choices=["ball-train", "ball-games"],
+                         help="ball-train: fine-tune the ball model; ball-games: game-ball paths for games")
+    run_gpu.add_argument("--mode", choices=["clips", "all"], default="clips",
+                         help="ball-games: tagged clips only (uploads just those stretches) or whole games")
+    run_gpu.add_argument("--games", nargs="+", help="ball-games: game ids (default: all games)")
     run_gpu.add_argument("--stock", nargs="*", default=[], help="stock bases to score first (the best other one is also fine-tuned)")
     run_gpu.add_argument("--train", nargs="+", default=["yolo26x"], help="bases to fine-tune")
     run_gpu.add_argument("--epochs", type=int, default=60)

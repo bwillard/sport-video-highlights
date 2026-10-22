@@ -82,3 +82,55 @@ def test_spare_ball_briefly_hidden_is_not_a_kick():
     rows += [box(f, 200 + 6 * f, 300, 0.4) for f in range(n)]  # the game ball elsewhere, weaker
     path = ball_track.track(np.array(rows, np.float32), still_camera(n))
     assert not (np.hypot(path[:, 0] - 1500, path[:, 1] - 900) < 3).any()
+
+
+def _brute_choose(tracklets, p):
+    """The plain O(n^2) chooser the fast one must agree with."""
+    ts = sorted(tracklets, key=lambda t: t.end)
+    scores = [t.score(p) for t in ts]
+    best = [s - p.start_cost for s in scores]
+    prev = [-1] * len(ts)
+    credited = [False] * len(ts)
+    for j, tj in enumerate(ts):
+        for i in range(j):
+            ti = ts[i]
+            gap = tj.start - ti.end
+            if gap <= 0:
+                continue
+            jump = np.hypot(tj.rx[0] - ti.rx[-1], tj.ry[0] - ti.ry[-1])
+            if gap > p.teleport_gap:
+                trans = p.teleport_cost + p.miss_cost * gap
+            elif jump <= p.vmax_px * gap + 20:
+                trans = p.miss_cost * (gap - 1) + p.jump_cost * jump
+            else:
+                continue
+            bonus, credit = 0.0, False
+            if gap <= p.kick_gap:
+                if ti.parked(p) and tj.moving(p) and not credited[i]:
+                    bonus = ti.raw_score(p)
+                elif tj.parked(p) and ti.moving(p) and jump <= p.rest_jump_px:
+                    bonus, credit = tj.raw_score(p), True
+            v = best[i] + scores[j] - trans + bonus
+            if v > best[j]:
+                best[j], prev[j], credited[j] = v, i, credit
+    return max(best) if best else 0
+
+
+def test_fast_chooser_matches_brute_force():
+    rng = np.random.default_rng(1)
+    p = ball_track.Params()
+    for _ in range(30):
+        ts = []
+        for _ in range(rng.integers(5, 40)):
+            t = ball_track.Tracklet()
+            start, n = int(rng.integers(0, 600)), int(rng.integers(1, 120))
+            x0, y0, still = rng.uniform(0, 1900), rng.uniform(0, 1000), rng.random() < 0.3
+            for k in range(n):
+                x = x0 + (0 if still else 6 * k)
+                t.add(start + k, x, y0, 5.0, float(rng.uniform(0.1, 0.9)), x, y0)
+            ts.append(t)
+        chain = ball_track.choose(ts, p)
+        brute = _brute_choose(ts, p)
+        # the fast chooser's chain must be worth what the brute-force best is worth
+        fast = ball_track.chain_value(chain, p) if chain else 0
+        assert abs(fast - max(brute, 0)) < 1e-6, (fast, brute)
