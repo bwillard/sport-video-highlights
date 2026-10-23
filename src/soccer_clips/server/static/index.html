@@ -56,7 +56,7 @@
       <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
       <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)<br>
       Fixing the ball (ring on): <kbd>K</kbd> then click the ball = it's here · <kbd>Shift</kbd>+<kbd>K</kbd> = that ring is wrong, no ball to see ·
-      <kbd>X</kbd> other balls: click each spare / next-field ball (cyan), click again to remove, <kbd>X</kbd>/<kbd>Esc</kbd> to stop
+      <kbd>K</kbd> <kbd>O</kbd> other balls: click each spare / next-field ball (cyan), click again to remove, <kbd>O</kbd>/<kbd>Esc</kbd> to stop
       (for training; a click on a detection takes its exact spot and size) ·
       <kbd>D</kbd> debug layer: every ball detection as a circle with its confidence (dim below 0.25), magenta dot = a ball you placed,
       red × = a detection your fix suppressed, dashed box = the area the detector searches (balls outside it are never found).
@@ -547,7 +547,7 @@ function startBallFix() {
   v.pause();
   fixingBall = true;
   stage.classList.add("placing");
-  flash("click on the ball (Esc cancels)");
+  flash("click on the ball (Esc cancels) · O = mark other balls instead");
 }
 function stopBallFix() {
   fixingBall = false;
@@ -566,7 +566,7 @@ async function fixBall(action, x = null, y = null, r = null) {
   const where = { train: " · added to the training set", bench: " · added to the benchmark set" }[b.labelled_as] || "";
   flash((action === "ball" ? "ball placed" : "ring removed") + `, path redone${where}`);
 }
-// Other balls (spares, the next field) while watching: X, then click each one; click one
+// Other balls (spares, the next field) while watching: K then O, then click each one; click one
 // again to remove it. They go with the frame's label, so training boxes them as balls
 // rather than learning them as background. An unlabelled frame is labelled first, with
 // the ring as the game ball. The path itself doesn't change.
@@ -580,7 +580,7 @@ function toggleOtherMode(on = !otherMode) {
   if (!on) return;
   v.pause();
   loadRaw(true);
-  flash("other balls: click each one (click again to remove) · X or Esc when done");
+  flash("other balls: click each one (click again to remove) · O or Esc when done");
 }
 v.addEventListener("play", () => toggleOtherMode(false));
 function snapToDetection(p) {
@@ -795,6 +795,10 @@ document.addEventListener("keydown", (e) => {
   if (placing && e.key === "Escape") { e.preventDefault(); cancelCallout(); return; }
   if (fixingBall && e.key === "Escape") { e.preventDefault(); stopBallFix(); return; }
   if (otherMode && e.key === "Escape") { e.preventDefault(); toggleOtherMode(false); return; }
+  // O while fixing the ball switches to other balls (as on the labelling page); otherwise it's the out point
+  if ((fixingBall || otherMode) && e.key.toLowerCase() === "o" && !e.shiftKey) {
+    e.preventDefault(); toggleOtherMode(); return;
+  }
 
   // Digits by physical key, since Shift+1 types "!" on most layouts.
   if (e.code.startsWith("Digit")) {
@@ -812,7 +816,6 @@ document.addEventListener("keydown", (e) => {
     b: () => toggleBall(),
     d: () => toggleDebug(),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
-    x: () => toggleOtherMode(),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),
