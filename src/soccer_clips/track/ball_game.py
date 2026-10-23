@@ -140,7 +140,7 @@ def detect_range(store: Store, game: Game, model, start: int, end: int, log=prin
 
     def flush():
         res = model.predict([f[oy:oy + ch, ox:ox + cw] for f in batch], imgsz=cw, conf=MIN_CONF,
-                            classes=[BALL], half=_on_gpu(), verbose=False)
+                            classes=[BALL], verbose=False)  # full precision, by choice (2026-10-22)
         for fno, r in zip(frames, res):
             b = r.boxes.cpu().numpy()
             for (x1, y1, x2, y2), c in zip(b.xyxy, b.conf):
@@ -184,7 +184,7 @@ def save_npz(path: Path, **arrays) -> None:
 
 
 MIN_CHUNK = 3600  # frames (2 min): smallest piece worth its own worker
-GPU_GB_PER_WORKER = 4.0  # YOLO26x at 1280, batch 8, half precision, with room to spare
+GPU_GB_PER_WORKER = 6.0  # YOLO26x at 1280, batch 8, full precision (~4.7 GB), with room to spare
 
 
 def _on_gpu() -> bool:
