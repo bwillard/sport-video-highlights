@@ -161,9 +161,11 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         runner = gpu.Runner(store, job, gpu_types=args.gpu or gpu.GPU_TYPES, max_hours=args.max_hours,
                             log=lambda m: print(m, flush=True), countries=args.countries)
         print(f"run folder: {runner.dir}", flush=True)
-        results = runner.run()
-        if args.job == "ball-games":
-            gpu.install_ball_tracks(store, results, log=print)
+        try:
+            results = runner.run()
+        finally:  # install whatever came back, even from a run that failed part-way
+            if args.job == "ball-games" and (runner.dir / "results").exists():
+                gpu.install_ball_tracks(store, runner.dir / "results", log=print)
         for w in sorted((results / "models").glob("ball_*.pt")):
             shutil.copy(w, models_dir(store) / w.name)
             print(f"model: {models_dir(store) / w.name}")

@@ -213,6 +213,8 @@ class Runner:
         self.log("job script finished")
 
     def download(self) -> None:
+        if not self.ssh_args:
+            return
         paths = " ".join(self.job.downloads)  # our own patterns, unquoted so the remote shell expands them
         cmd = f"cd /workspace/data && tar -czf - $(ls -d {paths} 2>/dev/null)"
         out = self.dir / "results"
@@ -252,7 +254,14 @@ class Runner:
             self.wait_for_ssh()
             self.arm_dead_mans_switch()
             self.upload()
-            self.run_script()
+            try:
+                self.run_script()
+            except BaseException:
+                try:  # jobs save progress as they go, so bring back what there is
+                    self.download()
+                except Exception as e:
+                    self.log(f"couldn't bring back partial results: {e}")
+                raise
             self.download()
         except BaseException as e:  # KeyboardInterrupt too: always tear down
             self.log(f"FAILED: {type(e).__name__}: {e}")
@@ -346,7 +355,10 @@ def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 
     ids = " ".join(game_ids)
     quiet = '2>&1 | (grep --line-buffered -vE "━|^\\s*$" || true)'
     script = f"""
-for g in {ids}; do soccer-clips ball track-game $g --mode {mode} --workers {workers} {quiet}; done
+for g in {ids}; do
+  # one game failing mustn't stop the others (the setup runs with pipefail)
+  soccer-clips ball track-game $g --mode {mode} --workers {workers} {quiet} || echo "FAILED: $g"
+done
 """
     return Job(name=f"ball-games-{mode}", uploads=uploads, script=script, downloads=["games"],
                exclude=["*.part.*"])

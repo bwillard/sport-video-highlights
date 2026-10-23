@@ -61,3 +61,22 @@ def test_pod_deleted_when_a_step_fails(store, monkeypatch):
     assert ("DELETE", "/pods/pod1") in calls
     log = (runner.dir / "log.txt").read_text()
     assert "FAILED" in log and "pod pod1 deleted" in log
+
+
+def test_partial_results_downloaded_when_the_job_fails(store, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gpu, "api", lambda m, p, b=None: {"id": "pod1", "costPerHr": 0.9} if m == "POST" else [])
+    monkeypatch.setattr(gpu.Runner, "wait_for_ssh", lambda self: setattr(self, "ssh_args", ["x"]))
+    for step in ("arm_dead_mans_switch", "upload"):
+        monkeypatch.setattr(gpu.Runner, step, lambda self: None)
+
+    def boom(self):
+        raise RuntimeError("job script failed")
+
+    monkeypatch.setattr(gpu.Runner, "run_script", boom)
+    monkeypatch.setattr(gpu.Runner, "download", lambda self: calls.append("download"))
+    monkeypatch.setattr(gpu.Runner, "teardown", lambda self: calls.append("teardown"))
+    runner = gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), ["X"], 1, lambda m: None)
+    with pytest.raises(RuntimeError, match="job script failed"):
+        runner.run()
+    assert calls == ["download", "teardown"]

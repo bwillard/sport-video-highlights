@@ -140,7 +140,7 @@ def detect_range(store: Store, game: Game, model, start: int, end: int, log=prin
 
     def flush():
         res = model.predict([f[oy:oy + ch, ox:ox + cw] for f in batch], imgsz=cw, conf=MIN_CONF,
-                            classes=[BALL], verbose=False)
+                            classes=[BALL], half=_on_gpu(), verbose=False)
         for fno, r in zip(frames, res):
             b = r.boxes.cpu().numpy()
             for (x1, y1, x2, y2), c in zip(b.xyxy, b.conf):
@@ -184,6 +184,26 @@ def save_npz(path: Path, **arrays) -> None:
 
 
 MIN_CHUNK = 3600  # frames (2 min): smallest piece worth its own worker
+GPU_GB_PER_WORKER = 4.0  # YOLO26x at 1280, batch 8, half precision, with room to spare
+
+
+def _on_gpu() -> bool:
+    import torch
+
+    return torch.cuda.is_available()
+
+
+def fit_workers(wanted: int, log=print) -> int:
+    """As many workers as the GPU's free memory allows (6 x ~4.7 GB ran a 24 GB 4090 out of memory)."""
+    if wanted <= 1 or not _on_gpu():
+        return wanted
+    import torch
+
+    free_gb = torch.cuda.mem_get_info()[0] / 2**30
+    n = max(1, min(wanted, int(free_gb // GPU_GB_PER_WORKER)))
+    if n < wanted:
+        log(f"{free_gb:.0f} GB of GPU memory free: {n} worker(s) instead of {wanted}")
+    return n
 
 
 def chunks(ranges: list[tuple[int, int]], workers: int) -> list[tuple[int, int]]:
@@ -235,17 +255,26 @@ def track_game(store: Store, game_id: str, mode: str = "clips", model_name: str 
         detected += len(mframes)
         log(f"{game.id}: detected frames {s}-{e}")
 
+    workers = fit_workers(workers, log) if todo else workers
+    failed = []
     if todo and workers > 1:
         # spawn, not fork: each worker starts its own CUDA context
         with mp.get_context("spawn").Pool(min(workers, len(todo))) as pool:
-            for result in pool.imap_unordered(_detect_chunk, [(store.settings, game.id, model_name, s, e)
-                                                              for s, e in todo]):
-                add(*result)
-    elif todo:
+            jobs = [(s, e, pool.apply_async(_detect_chunk, ((store.settings, game.id, model_name, s, e),)))
+                    for s, e in todo]
+            for s, e, job in jobs:
+                try:
+                    add(*job.get())
+                except Exception as err:  # e.g. out of GPU memory: redo it below, one at a time
+                    log(f"{game.id}: chunk {s}-{e} failed in a worker ({type(err).__name__}); will redo it")
+                    failed.append((s, e))
+    else:
+        failed = todo
+    if failed:
         from ultralytics import YOLO
 
         model = YOLO(models_dir(store) / f"{model_name}.pt")
-        for s, e in todo:
+        for s, e in failed:
             add(s, e, *detect_range(store, game, model, s, e, log))
     retrack(store, game)
     return detected
