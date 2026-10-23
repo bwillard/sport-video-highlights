@@ -46,6 +46,8 @@ Updated after the L4 test: the quality gap is now measured, not guessed. The big
 ## Network volume (2026-10-22)
 Uploading full game videos was most of a whole-game run's cost (14 GB took 68 min, ~$1 of GPU time). A 50 GB RunPod network volume in US-KS-2 (~$3.50/month) now holds the videos and the ball model; files go up over RunPod's S3-compatible API (no pod at all), and each GPU run uploads only what's new before its pod starts. A volume pins pods to its data centre, where 4090/5090 stock is thin, so runs accept any of 4090 / 5090 / L40S / RTX 6000 Ada / L40 / A6000 there and fall back to another US data centre (with a full upload) after 20 minutes. RunPod's "global networking" doesn't help: it's pod-to-pod networking capped at 100 Mbit/s, GPU pods only, not shared storage. The footage stays on RunPod until `soccer-clips gpu volume delete --yes`.
 
+**First run on the volume (2026-10-23):** five whole games (~708k frames) on a Kansas A100 80GB PCIe ($1.79/h; nothing cheaper was free there), six workers, full precision: 227 min, ~$6.77, ~53 frames/s with the GPU at 100%. Upload: 216 KB (everything else came from the volume). Full-precision YOLO26x is what makes a whole game ~45 min here; a 4090/5090 when free, or half precision (roughly 2x on these cards), would cut that.
+
 ## Measurements
 | Hardware | Model / imgsz / frame step | fps | Full game (h) | Notes |
 |---|---|---|---|---|

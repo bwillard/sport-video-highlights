@@ -209,6 +209,8 @@ For a chosen player, find the stretches of a game where they're involved with th
 
 - **2026-10-22 — Whole-game tracks and fixes while watching.** First whole game (ebu, 60 min) on a US RTX 5090: 65 min, $1.28; ball on 59% of frames (44% seen, 15% filled), mostly 50–90% per minute in open play. The GPU sat idle: one CPU core (decoding + camera motion) was the limit, so long ranges now run as parallel chunks. In the tagger, `K` / `Shift+K` fix the ball (placed ball wins its frame; a wrong ring's run of detections is suppressed; path redone ±2 min in ~2 s) and each fix becomes a labelled frame, assigned automatically: training, except one 30-s moment in five and anything within 10 s of a bench clip go to the benchmark. As the benchmark grows with hard frames, re-score older models on it before comparing.
 
+- **2026-10-23 — All six games tracked end to end** (7.6 h of video; fine-tuned YOLO26x, full precision). Ball on 60–76% of frames per game (43–57% seen, 10–24% filled), 68% overall, counting out-of-play time and stretches with no ball in view. Fixes made while watching (`K`) feed the next fine-tune.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|
