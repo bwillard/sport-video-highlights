@@ -215,8 +215,8 @@ class Runner:
                 self.pod = api("POST", "/pods", body)
                 break
             except RuntimeError as e:
-                if "no instances currently available" not in str(e):
-                    raise
+                if "instances" not in str(e) or "available" not in str(e):
+                    raise  # RunPod words it "no instances currently available" or "no longer any instances available"
                 if time.time() > deadline:
                     if not (self.volume and self.fallback and not self.cpu):
                         raise

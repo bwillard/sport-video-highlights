@@ -183,6 +183,7 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
             runner = gpu.Runner(store, gpu.volume_fill_job(store), gpu_types=[], max_hours=args.max_hours,
                                 log=lambda m: print(m, flush=True), cpu=True)
             print(f"run folder: {runner.dir}", flush=True)
+            runner.start_pod = lambda: gpu.Runner.start_pod(runner, wait_s=args.wait_min * 60)
             runner.run()
         elif args.volume_command == "delete":
             if not args.yes:
@@ -295,6 +296,7 @@ def main() -> None:
     vc.add_argument("--size", type=int, default=50, help="GB (can grow later, never shrink)")
     vf = vol_sub.add_parser("fill", help="copy game videos and the ball model onto the volume from a CPU pod")
     vf.add_argument("--max-hours", type=float, default=3.0)
+    vf.add_argument("--wait-min", type=int, default=5, help="how long to wait for a CPU pod in the volume's data centre")
     vd = vol_sub.add_parser("delete", help="delete the volume and everything on it")
     vd.add_argument("--yes", action="store_true")
     args = parser.parse_args()
