@@ -1,4 +1,4 @@
-// Shared by the tagger (index.html) and the reel page (reel.html).
+// Shared by every page: the tagger, the reel page and the ball labelling pages.
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -78,3 +78,48 @@ function setupMute(video) {
   show();
   return () => { video.muted = !video.muted; };
 }
+
+// Tooltips: anything with a title gets a styled one, shown sooner than the browser's own
+// (which waits about a second). Line breaks in a title (&#10; in HTML) are kept.
+(() => {
+  const tip = document.createElement("div");
+  tip.id = "tip";
+  tip.hidden = true;
+  let target = null, timer = null;
+  function hide() {
+    clearTimeout(timer);
+    tip.hidden = true;
+    if (target && target.dataset.tip != null) {  // put the title back (re-renders may read it)
+      target.title = target.dataset.tip;
+      delete target.dataset.tip;
+    }
+    target = null;
+  }
+  function show() {
+    if (!target?.isConnected) return hide();
+    if (!tip.isConnected) document.body.append(tip);
+    tip.textContent = target.dataset.tip;
+    tip.hidden = false;
+    const b = target.getBoundingClientRect(), t = tip.getBoundingClientRect();
+    const left = Math.max(6, Math.min(innerWidth - t.width - 6, b.left + b.width / 2 - t.width / 2));
+    const below = b.bottom + 6 + t.height < innerHeight;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${below ? b.bottom + 6 : Math.max(6, b.top - t.height - 6)}px`;
+  }
+  document.addEventListener("pointerover", (e) => {
+    const el = e.target.closest?.("[title], [data-tip]");
+    if (el === target) return;
+    hide();
+    if (!el?.title) return;
+    target = el;
+    el.dataset.tip = el.title;
+    el.title = "";  // so the browser doesn't show its own as well
+    timer = setTimeout(show, 350);
+  });
+  document.addEventListener("pointerout", (e) => {
+    if (target && !target.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener("pointerdown", hide, true);
+  document.addEventListener("keydown", hide, true);
+  addEventListener("scroll", hide, true);
+})();

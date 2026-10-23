@@ -35,12 +35,12 @@
 </head>
 <body>
 <div class="bar">
-  <a href="/">← Tagger</a>
-  <select id="setPick" aria-label="label set"></select>
-  <span class="stat"><b id="done">0</b> / <b id="total">0</b> labelled</span>
+  <a href="/" title="Back to tagging games">← Tagger</a>
+  <select id="setPick" aria-label="label set" title="Which set of frames to label:&#10;bench = the benchmark, used only to score models (never trained on);&#10;train = frames the detector is fine-tuned on.&#10;Frames you fix in the tagger land in one of these automatically."></select>
+  <span class="stat" title="Frames in this set with an answer (including no ball and can't tell)"><b id="done">0</b> / <b id="total">0</b> labelled</span>
   <div class="progress"><div id="bar"></div></div>
-  <span class="stat">frame <b id="pos">–</b></span>
-  <a href="/review-balls">Review other balls →</a>
+  <span class="stat" title="Which frame of the set you're on">frame <b id="pos">–</b></span>
+  <a href="/review-balls" title="Check the model's finds that aren't the game ball: real spare balls (they count as correct) or junk">Review other balls →</a>
   <span id="flash"></span>
 </div>
 
@@ -60,26 +60,26 @@
       <div id="peek" hidden></div>
       <div id="mode" hidden>adding <b>other</b> balls: click to add, click one to remove · <kbd>O</kbd> / <kbd>Esc</kbd> to stop</div>
     </div>
-    <div id="where"></div>
-    <div id="strip" title="click to jump"></div>
+    <div id="where" title="Where this frame comes from: bench clip, game, and time in the game"></div>
+    <div id="strip" title="Every frame in the set: green = ball visible, yellow = hidden, grey = no ball / can't tell, dark = not labelled yet; white outline = this frame. Click to jump."></div>
   </section>
   <aside>
     <div class="box">
       <h3>This frame</h3>
       <div class="answer" id="answer">not labelled</div>
       <div class="row" style="margin-top: 8px">
-        <button id="none">No ball <span class="hk">N</span></button>
-        <button id="skip">Can't tell <span class="hk">S</span></button>
-        <button id="clear" class="danger">Clear <span class="hk">Del</span></button>
+        <button id="none" title="No ball in the frame (N). If it's there but you can't see it, use Shift+click (hidden) instead.">No ball <span class="hk">N</span></button>
+        <button id="skip" title="Can't tell (S): left out of training and scoring">Can't tell <span class="hk">S</span></button>
+        <button id="clear" class="danger" title="Remove this frame's answer (Del)">Clear <span class="hk">Del</span></button>
       </div>
       <div class="row" style="margin-top: 8px" id="guessRow" hidden>
-        <button id="accept">Accept guess <span class="hk">Enter</span></button>
-        <span class="stat" id="guessConf"></span>
+        <button id="accept" title="The dashed blue ring is the model's guess: accept it as the game ball (Enter). Only when it's on the game ball, not a spare.">Accept guess <span class="hk">Enter</span></button>
+        <span class="stat" id="guessConf" title="How confident the model was in its guess (0–1)"></span>
       </div>
       <div class="row" style="margin-top: 8px">
-        <button id="prev">← Prev</button>
-        <button id="next">Next →</button>
-        <button id="unl">Next unlabelled <span class="hk">U</span></button>
+        <button id="prev" title="Previous frame (←)">← Prev</button>
+        <button id="next" title="Next frame (→)">Next →</button>
+        <button id="unl" title="Next frame without an answer (U)">Next unlabelled <span class="hk">U</span></button>
       </div>
     </div>
     <div class="box help">

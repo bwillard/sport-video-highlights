@@ -24,10 +24,10 @@
 </head>
 <body>
 <div class="bar">
-  <a href="/label-ball">← Ball labels</a>
-  <span class="stat"><b id="done">0</b> / <b id="total">0</b> reviewed</span>
+  <a href="/label-ball" title="Back to labelling frames">← Ball labels</a>
+  <span class="stat" title="Candidates with a verdict / all candidates found so far"><b id="done">0</b> / <b id="total">0</b> reviewed</span>
   <div class="progress"><div id="bar"></div></div>
-  <span class="stat">candidate <b id="pos">–</b></span>
+  <span class="stat" title="Which candidate you're on">candidate <b id="pos">–</b></span>
   <span id="flash"></span>
 </div>
 
@@ -39,21 +39,21 @@
   <section>
     <div class="review">
       <div>
-        <canvas id="zoom" width="384" height="384"></canvas>
+        <canvas id="zoom" width="384" height="384" title="Close-up of the candidate, 3× the video pixels"></canvas>
         <div class="verdict" id="verdict"></div>
         <div class="row">
-          <button id="yes">Ball <span class="hk">Y</span></button>
-          <button id="no">Not a ball <span class="hk">N</span></button>
-          <button id="unsure">Can't tell <span class="hk">S</span></button>
+          <button id="yes" title="A real ball (Y): spare, next field, in a net or bag. The detector finding it counts as correct, and training boxes it.">Ball <span class="hk">Y</span></button>
+          <button id="no" title="Not a ball (N): a head, cleat, cone, bottle, line… Finding it counts as a mistake.">Not a ball <span class="hk">N</span></button>
+          <button id="unsure" title="Can't tell (S): neither rewarded nor counted as a mistake">Can't tell <span class="hk">S</span></button>
         </div>
         <div class="row">
-          <button id="prev">← Prev</button>
-          <button id="next">Next →</button>
-          <button id="todo">Next to review <span class="hk">Space</span></button>
+          <button id="prev" title="Previous candidate (←)">← Prev</button>
+          <button id="next" title="Next candidate (→)">Next →</button>
+          <button id="todo" title="Next candidate without a verdict (Space)">Next to review <span class="hk">Space</span></button>
         </div>
         <div class="meta" id="meta"></div>
       </div>
-      <canvas id="context"></canvas>
+      <canvas id="context" title="The whole frame: yellow box = the candidate, green ring = the game ball you labelled"></canvas>
     </div>
   </section>
   <aside>

@@ -27,12 +27,12 @@
 </head>
 <body>
 <div class="bar">
-  <a href="/">← Tagger</a>
-  <select id="reelPick" aria-label="reel"></select>
-  <span class="stat">time <b id="time">0:00.0</b> / <b id="dur">–</b></span>
-  <span class="stat">clip <b id="chap">–</b></span>
-  <span class="stat">rate <b id="rate">1</b>×</span>
-  <button id="sound" title="M">🔇 sound off</button>
+  <a href="/" title="Back to tagging games">← Tagger</a>
+  <select id="reelPick" aria-label="reel" title="Which reel to watch and edit"></select>
+  <span class="stat" title="Position in the rendered reel / its length">time <b id="time">0:00.0</b> / <b id="dur">–</b></span>
+  <span class="stat" title="Which clip of the reel is playing (↑ / ↓ jump between them)">clip <b id="chap">–</b></span>
+  <span class="stat" title="Playback speed: [ and ] change it by 0.5×">rate <b id="rate">1</b>×</span>
+  <button id="sound" title="Sound on/off (M). Starts off.">🔇 sound off</button>
   <span id="flash"></span>
 </div>
 
@@ -47,12 +47,12 @@
   <section>
     <div id="previewBar" hidden>
       <span id="previewText"></span><span style="flex:1"></span>
-      <button id="previewReplay" title="play the clip again">▶ again</button>
-      <button id="previewBack" title="Esc">✕ back to reel</button>
+      <button id="previewReplay" title="Play the previewed clip again">▶ again</button>
+      <button id="previewBack" title="Stop previewing and go back to the rendered reel (Esc)">✕ back to reel</button>
     </div>
     <video id="v" preload="auto"></video>
     <div id="placeholder" class="placeholder" hidden>Not rendered yet. Use “Render preview” (quick) or “Render full” on the right.</div>
-    <canvas id="timeline"></canvas>
+    <canvas id="timeline" title="The rendered reel: click or drag to seek.&#10;Segments are its clips (orange = with the default player, purple = team play, blue = others; bright = playing now); white = a callout freeze; grey = a title card."></canvas>
     <p class="help">
       <kbd>Space</kbd> play/pause · <kbd>M</kbd> sound on/off · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× · <kbd>←</kbd>/<kbd>→</kbd> ±5s ·
       <kbd>↑</kbd>/<kbd>↓</kbd> previous / next clip ·
@@ -62,12 +62,12 @@
   </section>
   <aside>
     <div class="box">
-      <input id="title" aria-label="reel title">
+      <input id="title" aria-label="reel title" title="The reel's title, shown on its opening card; change it and re-render">
       <div id="gameInfo"></div>
       <div class="row">
-        <span class="stat" id="summary"></span>
+        <span class="stat" id="summary" title="Clips in the reel (missing = a clip deleted from its game since it was added), and the rendered length"></span>
         <span style="flex:1"></span>
-        <button id="deleteReel" class="danger">Delete reel</button>
+        <button id="deleteReel" class="danger" title="Delete this reel and its rendered videos (the clips stay in their games)">Delete reel</button>
       </div>
     </div>
     <div class="box">
@@ -92,7 +92,7 @@
           freeze <input type="number" id="calloutS" min="0" max="10" step="0.25" style="width:4.5em"> s</label>
       </div>
       <div class="row" id="jobRow" hidden><span class="stat" id="jobText"></span><div class="progress"><div id="jobBar"></div></div></div>
-      <div class="row warn" id="stale" hidden></div>
+      <div class="row warn" id="stale" hidden title="The reel changed since this version was rendered; render again to update it"></div>
       <div class="row" id="versions"></div>
     </div>
     <div class="box">

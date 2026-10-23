@@ -1,4 +1,4 @@
-/* Shared by the tagger (index.html) and the reel page (reel.html). */
+/* Shared by every page: the tagger, the reel page and the ball labelling pages. */
 :root {
   --bg: #111; --panel: #1b1b1b; --line: #333; --text: #eee; --muted: #999;
   --accent: #4ea1ff; --her: #ff8a3d; --team: #b48cff; --in: #3ddc84; --bad: #ff5c5c; --warn: #ffcf5c;
@@ -51,3 +51,6 @@ a.x.done:hover { text-decoration: underline; }
 .list li.empty { display: block; }  /* one message, not grid columns */
 .hk { color: var(--muted); font-size: 11px; margin-left: 3px; }
 button.on .hk { color: #00000099; }
+#tip { position: fixed; z-index: 1000; max-width: 360px; padding: 6px 9px; border-radius: 5px;
+       background: #2b2b2b; border: 1px solid #4a4a4a; color: var(--text); font-size: 12.5px; line-height: 1.45;
+       white-space: pre-line; pointer-events: none; box-shadow: 0 4px 14px #0009; }

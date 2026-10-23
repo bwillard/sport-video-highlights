@@ -18,24 +18,24 @@
 <body>
 <div class="bar">
   <a id="back" hidden>← back to reel</a>
-  <select id="game" aria-label="game"></select>
-  <span class="stat">time <b id="time">0:00.0</b></span>
-  <span class="stat">match <b id="clock">–</b></span>
-  <span class="stat">rate <b id="rate">1</b>×</span>
-  <button id="sound" title="M">🔇 sound off</button>
-  <button id="ballBtn" title="B: show the game ball">⚽ ball</button>
-  <button id="debugBtn" title="D: show every ball detection (debug)">🔍 raw</button>
-  <span class="stat" id="debugStat" hidden></span>
-  <span class="stat" id="ballStat" hidden></span>
-  <select id="fixTo" hidden title="Ball fixes (K) also become labelled frames: most go to training, one moment in five to the benchmark">
+  <select id="game" aria-label="game" title="Which game to tag. Games come from the folder of full-game videos (soccer-clips scan picks up new ones)."></select>
+  <span class="stat" title="Position in the video (minutes:seconds)">time <b id="time">0:00.0</b></span>
+  <span class="stat" title="Match clock from the kickoff times you set with H / Shift+H: 23' in the 1st half, 2H 7' in the 2nd, &quot;pre&quot; before kickoff">match <b id="clock">–</b></span>
+  <span class="stat" title="Playback speed: [ and ] change it by 0.5×">rate <b id="rate">1</b>×</span>
+  <button id="sound" title="Sound on/off (M). Starts off.">🔇 sound off</button>
+  <button id="ballBtn" title="Show the game ball (B): a yellow ring follows it where the game has been ball-tracked.&#10;Solid ring = detected in that frame; dashed = filled in across a short gap.&#10;With it on: K fixes the ball, K then O marks other balls.">⚽ ball</button>
+  <button id="debugBtn" title="Debug layer (D): every ball the detector found, not just the game ball.&#10;White circle + confidence (dim below 0.25) = a detection. Grey circle with no yellow ring = seen but dropped by the filter; no circle = never detected.&#10;Dashed box = where the detector looks (balls outside it are never found). Magenta dot = a ball you placed; red × = a detection a fix suppressed.">🔍 raw</button>
+  <span class="stat" id="debugStat" hidden title="Ball detections in this frame (before the filter picks the game ball)"></span>
+  <span class="stat" id="ballStat" hidden title="The game ball in this frame:&#10;seen = detected; filled in = between detections, a short gap bridged;&#10;not seen = no game ball chosen (hidden, out of shot, or missed);&#10;not tracked here = this part of the game hasn't been through ball tracking"></span>
+  <select id="fixTo" hidden title="What happens to frames you fix (K) or mark other balls on (K then O):&#10;label too = each also becomes a labelled ball frame for training the detector. Most go to the training set; one 30-second moment in five (and anything near a benchmark clip) goes to the benchmark set, used to score models.&#10;don't label = only the ball path is corrected.">
     <option value="auto">fixes → label too</option>
     <option value="">fixes → don't label</option>
   </select>
-  <span class="stat">in <b id="markin">–</b></span>
-  <span class="stat">kickoff <b id="kickoffs">–</b></span>
+  <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
+  <span class="stat" title="Kickoff times, for the match clock and reel captions: H sets the 1st half, Shift+H the 2nd (H late in the game asks which)">kickoff <b id="kickoffs">–</b></span>
   <span id="flash"></span>
-  <a href="/label-ball">Ball labels</a>
-  <a href="/reel">Reels →</a>
+  <a href="/label-ball" title="Label the ball in sampled frames: the training and benchmark data for the ball detector">Ball labels</a>
+  <a href="/reel" title="Build highlight reels from tagged clips, across games">Reels →</a>
 </div>
 <div class="layout">
   <section>
@@ -43,7 +43,7 @@
       <video id="v" preload="auto"></video>
       <canvas id="overlay"></canvas>
     </div>
-    <canvas id="timeline"></canvas>
+    <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <p class="help">
       <kbd>Space</kbd> play/pause · <kbd>M</kbd> sound on/off · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× ·
       <kbd>←</kbd>/<kbd>→</kbd> ±5s (<kbd>Shift</kbd> ±60s) · <kbd>,</kbd>/<kbd>.</kbd> frame step<br>
@@ -67,28 +67,28 @@
   </section>
   <aside>
     <div class="box filters" title="Shown on the opening card of reels made from this game">
-      <input type="date" id="playedOn" aria-label="game date">
-      <input id="desc" aria-label="game description" placeholder="game description, e.g. Home vs SAA, 3-1 win" style="flex:1; min-width:12em; padding:2px 6px">
+      <input type="date" id="playedOn" aria-label="game date" title="Date the game was played (shown on reel opening cards)">
+      <input id="desc" aria-label="game description" placeholder="game description, e.g. Home vs SAA, 3-1 win" title="Shown on the opening card of reels made from this game" style="flex:1; min-width:12em; padding:2px 6px">
     </div>
     <div class="box filters">
-      <select id="ftag" aria-label="filter by tag"><option value="">all tags</option></select>
-      <select id="frating" aria-label="filter by rating">
+      <select id="ftag" aria-label="filter by tag" title="Show only clips with this tag (the list, the timeline and Export shown / Add shown to reel all follow the filters)"><option value="">all tags</option></select>
+      <select id="frating" aria-label="filter by rating" title="Show only clips with this rating (+ / - on a clip)">
         <option value="">any rating</option><option value="happy">😊 only</option>
         <option value="notsad">hide 🙁</option><option value="sad">🙁 only</option>
       </select>
-      <select id="fwho" aria-label="filter by player"><option value="">everyone</option></select>
-      <span class="stat" id="count"></span>
+      <select id="fwho" aria-label="filter by player" title="Show only clips for this player number, or team play"><option value="">everyone</option></select>
+      <span class="stat" id="count" title="Clips shown by the filters / clips in this game"></span>
     </div>
     <div class="box"><ul id="clips" class="list"></ul></div>
     <div class="box filters">
-      <button id="exportShown">Export shown</button>
-      <label title="stream copy: quick, but starts snap to the previous keyframe (up to 2.5s early)">
+      <button id="exportShown" title="Cut every clip shown (after filters) to its own mp4, for downloading or sharing. Runs in the background; progress shows on each clip.">Export shown</button>
+      <label title="Fast export: copies the video without re-encoding, so it's quick, but each clip starts at the keyframe before its start (up to 2.5s early)">
         <input type="checkbox" id="fast"> fast</label>
-      <span class="stat" id="jobs"></span>
+      <span class="stat" id="jobs" title="Exports running or waiting"></span>
     </div>
     <div class="box filters">
-      <select id="reelPick" aria-label="reel to add to"><option value="">new reel…</option></select>
-      <button id="addToReel">Add shown to reel</button>
+      <select id="reelPick" aria-label="reel to add to" title="Reel to add clips to, or start a new one"><option value="">new reel…</option></select>
+      <button id="addToReel" title="Add every clip shown (after filters) to the chosen reel, in game order. Clips already in it are skipped.">Add shown to reel</button>
       <a id="openReel" hidden></a>
     </div>
     <div class="box" id="detail"></div>
@@ -273,9 +273,9 @@ function render() {
   $("clips").innerHTML = list.length ? list.map((c) => {
     const [cls, txt] = exportStatus(c);
     return `<li data-id="${c.id}" class="${c.id === selectedId ? "sel" : ""}">
-      <span class="t" title="${fmt(c.start_s)}">${esc(label(c.start_s))}</span>
-      <span class="d">${(c.end_s - c.start_s).toFixed(1)}s</span>
-      <span class="tags">${whoBadges(c, defaultPlayer)}${c.callout ? "◎ " : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
+      <span class="t" title="Starts at ${fmt(c.start_s)} in the video${matchClock(c.start_s) ? ` (match clock ${esc(matchClock(c.start_s))})` : ""}">${esc(label(c.start_s))}</span>
+      <span class="d" title="Length">${(c.end_s - c.start_s).toFixed(1)}s</span>
+      <span class="tags" title="${esc([...c.players.map((n) => "#" + n), ...(c.team ? ["team play"] : []), ...(c.callout ? ["◎ has a callout"] : []), ...c.tags, ...(c.note ? ["✎ " + c.note] : [])].join(" · ") || "no tags yet")}">${whoBadges(c, defaultPlayer)}${c.callout ? "◎ " : ""}${esc(c.tags.join(", "))}${c.note ? " ✎" : ""}</span>
       <span>${RATING_ICONS[c.rating] || ""} ${cls === "done"
         ? `<a class="x done" href="${exportUrl(c)}" download title="download exported clip">⬇ mp4</a>`
         : `<span class="x ${cls}">${esc(txt)}</span>`}</span>
@@ -298,30 +298,30 @@ function renderDetail() {
   el.innerHTML = `
     <h3>${fmt(c.start_s)} → ${fmt(c.end_s)} <span class="stat">${esc(matchClock(c.start_s))} (${(c.end_s - c.start_s).toFixed(1)}s)</span></h3>
     <div class="row"><span class="lbl">range</span>
-      <button data-act="start" title="Shift+I">start = now</button>
-      <button data-act="end" title="Shift+O">end = now</button>
-      <button data-act="replay" title="R">▶ replay</button></div>
+      <button data-act="start" title="Move the clip's start to the playhead (Shift+I)">start = now</button>
+      <button data-act="end" title="Move the clip's end to the playhead (Shift+O)">end = now</button>
+      <button data-act="replay" title="Play the clip from its start; stops at its end (R)">▶ replay</button></div>
     <div class="row"><span class="lbl">tags</span>
-      ${tags.map((t) => `<button data-tag="${esc(t.name)}" class="${c.tags.includes(t.name) ? "on" : ""}">${esc(t.name)}${t.hotkey ? `<span class="hk">${esc(t.hotkey)}</span>` : ""}</button>`).join("")}
+      ${tags.map((t) => `<button data-tag="${esc(t.name)}" title="Tag: ${esc(t.name)}${t.hotkey ? ` (${esc(t.hotkey)})` : ""}" class="${c.tags.includes(t.name) ? "on" : ""}">${esc(t.name)}${t.hotkey ? `<span class="hk">${esc(t.hotkey)}</span>` : ""}</button>`).join("")}
     </div>
     <div class="row"><span class="lbl">who</span>
-      ${knownPlayers(c).map((n) => `<button data-player="${n}" class="${n === defaultPlayer ? "her" : ""} ${c.players.includes(n) ? "on" : ""}">#${n}${n === defaultPlayer ? '<span class="hk">F</span>' : ""}</button>`).join("")}
-      <input id="addPlayer" inputmode="numeric" placeholder="#" title="add a player number (P), Enter to save" style="width:3.5em">
-      <button data-act="team" class="team ${c.team ? "on" : ""}">team<span class="hk">T</span></button></div>
+      ${knownPlayers(c).map((n) => `<button data-player="${n}" title="${n === defaultPlayer ? `#${n}, the default player (F): clips with them are orange on the timeline` : `Player #${n}`} — click to add or remove" class="${n === defaultPlayer ? "her" : ""} ${c.players.includes(n) ? "on" : ""}">#${n}${n === defaultPlayer ? '<span class="hk">F</span>' : ""}</button>`).join("")}
+      <input id="addPlayer" inputmode="numeric" placeholder="#" title="Add another player's number to this clip (P to jump here), Enter to save" style="width:3.5em">
+      <button data-act="team" title="Team play: a good team move rather than one player's moment (T)" class="team ${c.team ? "on" : ""}">team<span class="hk">T</span></button></div>
     <div class="row"><span class="lbl">rating</span>
-      ${[["happy", "+"], ["sad", "-"]].map(([n, hk]) => `<button data-rating="${n}" title="${n}" class="${c.rating === n ? "on" : ""}">${RATING_ICONS[n]}<span class="hk">${hk}</span></button>`).join("")}</div>
+      ${[["happy", "+"], ["sad", "-"]].map(([n, hk]) => `<button data-rating="${n}" title="${n === "happy" ? "A favourite (+)" : "Not so good (-): filter these out with “hide 🙁”"}" class="${c.rating === n ? "on" : ""}">${RATING_ICONS[n]}<span class="hk">${hk}</span></button>`).join("")}</div>
     <div class="row"><span class="lbl">callout</span>
       ${c.callout
-        ? `<span>◎ at ${fmt(c.callout.t_s)}</span><button data-act="calloutGo">go to</button>
-           <button data-act="calloutSet" title="C">move</button><button data-act="calloutRemove" title="Shift+C">remove</button>`
-        : `<button data-act="calloutSet" title="C">set</button><span class="stat">pause inside the clip, press C, click on the player</span>`}</div>
-    <div class="row"><textarea id="note" placeholder="note (N to edit, Esc to leave)">${esc(c.note || "")}</textarea></div>
+        ? `<span>◎ at ${fmt(c.callout.t_s)}</span><button data-act="calloutGo" title="Jump to the callout moment">go to</button>
+           <button data-act="calloutSet" title="Pause where you want the freeze, press C (or this), then click on the player; drag to size the ring">move</button><button data-act="calloutRemove" title="Remove the callout (Shift+C)">remove</button>`
+        : `<button data-act="calloutSet" title="A callout freezes the reel on this moment with a ring and arrow on the player. Pause inside the clip, press C (or this), then click on the player; drag to size the ring.">set</button><span class="stat">pause inside the clip, press C, click on the player</span>`}</div>
+    <div class="row"><textarea id="note" placeholder="note (N to edit, Esc to leave)" title="A note about the clip; reels can show it as a caption or title card">${esc(c.note || "")}</textarea></div>
     <div class="row">
-      <button data-act="export" title="E">Export</button>
+      <button data-act="export" title="Cut this clip to its own mp4 (E)">Export</button>
       <span class="x ${cls}">${esc(txt)}</span>
-      ${c.export ? `<a href="${exportUrl(c)}" download>⬇ download</a>` : ""}
+      ${c.export ? `<a href="${exportUrl(c)}" download title="Download the exported mp4">⬇ download</a>` : ""}
       <span style="flex:1"></span>
-      <button data-act="delete" class="danger" title="Del">Delete</button></div>`;
+      <button data-act="delete" class="danger" title="Delete this clip (Del)">Delete</button></div>`;
   $("note").addEventListener("change", (e) => patchSelected({ note: e.target.value.trim() || null }));
   $("addPlayer").addEventListener("keydown", (e) => {
     if (e.key === "Escape") return e.target.blur();
