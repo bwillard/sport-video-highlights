@@ -80,3 +80,52 @@ def test_partial_results_downloaded_when_the_job_fails(store, monkeypatch):
     with pytest.raises(RuntimeError, match="job script failed"):
         runner.run()
     assert calls == ["download", "teardown"]
+
+
+def test_volume_plan(tmp_path):
+    (tmp_path / "full" / "2026").mkdir(parents=True)
+    (tmp_path / "full" / "2026" / "a.mp4").write_bytes(b"x" * 10)
+    (tmp_path / "full" / "2026" / "b.mp4").write_bytes(b"x" * 20)
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "m.pt").write_bytes(b"x" * 5)
+    listing = "full/2026/a.mp4\t10\nfull/2026/b.mp4\t7\n"  # b was cut short last time
+    files, missing = gpu.volume_plan(tmp_path, ["full", "models/m.pt"], listing)
+    assert files == ["full/2026/a.mp4", "full/2026/b.mp4", "models/m.pt"]
+    assert missing == ["full/2026/b.mp4", "models/m.pt"]
+
+
+def test_pod_uses_the_volume_and_falls_back(store, monkeypatch):
+    import json as _json
+
+    vol = {"id": "vol1", "dataCenterId": "US-KS-2", "size": 50}
+    path = gpu.data_root(store) / "gpu" / "volume.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(vol))
+    bodies = []
+
+    def fake_api(method, p, body=None):
+        if method == "POST":
+            bodies.append(dict(body))  # the runner reuses the dict when it falls back
+            if "networkVolumeId" in body:
+                raise RuntimeError('RunPod API POST /pods: 500 {"error":"There are no instances currently available"}')
+            return {"id": "pod1", "costPerHr": 0.9}
+        return {}
+
+    monkeypatch.setattr(gpu, "api", fake_api)
+    monkeypatch.setattr(gpu.time, "sleep", lambda s: None)
+    runner = gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), ["4090"], 1, lambda m: None)
+    assert runner.volume == vol
+    runner.start_pod(wait_s=0)
+    first, last = bodies[0], bodies[-1]
+    assert first["networkVolumeId"] == "vol1" and first["dataCenterIds"] == ["US-KS-2"] and first["volumeMountPath"] == "/vol"
+    assert "NVIDIA RTX 6000 Ada Generation" in first["gpuTypeIds"] and "countryCodes" not in first
+    assert "networkVolumeId" not in last and last["countryCodes"] == ["US"] and last["gpuTypeIds"] == ["4090"]
+    assert runner.volume is None  # so everything gets uploaded
+    bodies.clear()
+    with pytest.raises(RuntimeError, match="no instances"):
+        gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), ["4090"], 1, lambda m: None,
+                   fallback=False).start_pod(wait_s=0)
+    cpu = gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), [], 1, lambda m: None, cpu=True)
+    monkeypatch.setattr(gpu, "api", lambda m, p, b=None: bodies.append(dict(b)) or {"id": "pod2"} if m == "POST" else {})
+    cpu.start_pod(wait_s=0)
+    assert bodies[-1]["computeType"] == "CPU" and "gpuTypeIds" not in bodies[-1] and bodies[-1]["networkVolumeId"] == "vol1"

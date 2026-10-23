@@ -33,6 +33,10 @@ POD_PREFIX = "soccer-clips-"
 IMAGE = "runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404"  # PyTorch 2.8, CUDA 12.8, Ubuntu 24.04, sshd
 GPU_TYPES = ["NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 5090", "NVIDIA L40S"]  # in order of preference
 COUNTRIES = ["US"]  # pods in US data centres: closer, so uploads are quicker
+# In the network volume's data centre any of these will do (stock there is thinner).
+VOLUME_GPU_TYPES = GPU_TYPES + ["NVIDIA RTX 6000 Ada Generation", "NVIDIA L40", "NVIDIA RTX A6000"]
+CPU_IMAGE = "runpod/base:1.4.0-ubuntu2404"  # small image with sshd, for CPU-only pods (filling the volume)
+VOLUME_MOUNT = "/vol"  # where the network volume is mounted; /workspace stays scratch that's wiped
 SSH_KEY = Path.home() / ".ssh" / "id_ed25519"
 
 
@@ -76,10 +80,43 @@ class Job:
     script: str  # bash, run in /workspace/code with the venv active; data root is $W
     downloads: list[str]  # files or folders under the remote data root, copied into the run folder
     exclude: list[str] = field(default_factory=list)  # tar --exclude patterns for the upload
+    # Big files that don't change (game videos, models, clip segments): kept on the network
+    # volume when there is one (sent only if missing there), else uploaded with the rest.
+    volume_files: list[str] = field(default_factory=list)
+    setup: bool = True  # install the package and check the GPU first (off for CPU-only jobs)
 
 
 def data_root(store: Store) -> Path:
     return store.settings.games_dir.parent
+
+
+# ---- network volume (persistent storage in one data centre) ----
+
+def _volume_file(store: Store) -> Path:
+    return data_root(store) / "gpu" / "volume.json"
+
+
+def load_volume(store: Store) -> dict | None:
+    path = _volume_file(store)
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def create_volume(store: Store, data_center: str, size_gb: int) -> dict:
+    if load_volume(store):
+        raise ConfigError(f"a volume is already set up ({_volume_file(store)})")
+    vol = api("POST", "/networkvolumes", {"name": "soccer-clips", "size": size_gb, "dataCenterId": data_center})
+    _volume_file(store).parent.mkdir(parents=True, exist_ok=True)
+    _volume_file(store).write_text(json.dumps(vol, indent=2))
+    return vol
+
+
+def delete_volume(store: Store) -> dict:
+    vol = load_volume(store)
+    if not vol:
+        raise ConfigError("no volume is set up")
+    api("DELETE", f"/networkvolumes/{vol['id']}")
+    _volume_file(store).unlink()
+    return vol
 
 
 SETUP = r"""
@@ -108,11 +145,27 @@ y.backward(); torch.cuda.synchronize(); print('gpu self-test ok')
 """
 
 
+def volume_plan(root: Path, volume_files: list[str], listing: str) -> tuple[list[str], list[str]]:
+    """
+    (all files, files to send): volume_files expanded to files, and those missing from the
+    volume's listing ("path<TAB>size" lines) or there with a different size (an interrupted copy).
+    """
+    there = dict(line.rsplit("\t", 1) for line in listing.splitlines() if "\t" in line)
+    files = [f for p in volume_files
+             for f in ([p] if (root / p).is_file() else
+                       [str(q.relative_to(root)) for q in sorted((root / p).rglob("*")) if q.is_file()])]
+    return files, [f for f in files if there.get(f) != str((root / f).stat().st_size)]
+
+
 class Runner:
     def __init__(self, store: Store, job: Job, gpu_types: list[str], max_hours: float, log: Callable[[str], None],
-                 countries: list[str] | None = None):
+                 countries: list[str] | None = None, use_volume: bool = True, fallback: bool = True,
+                 cpu: bool = False):
         self.store, self.job, self.gpu_types, self.max_hours = store, job, gpu_types, max_hours
         self.countries = COUNTRIES if countries is None else countries
+        self.volume = load_volume(store) if use_volume else None
+        self.fallback = fallback  # no GPU free in the volume's data centre: run elsewhere and upload
+        self.cpu = cpu
         self.run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + job.name
         self.dir = data_root(store) / "gpu" / self.run_id
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -139,13 +192,22 @@ class Runner:
         # No allowedCudaVersions filter: together with an exposed TCP port it left no
         # machines at all (2026-10-19). The job's setup checks CUDA works instead.
         body = {
-            "name": POD_PREFIX + self.run_id, "cloudType": "SECURE", "computeType": "GPU",
-            "gpuTypeIds": self.gpu_types, "gpuTypePriority": "custom", "gpuCount": 1,
-            "imageName": IMAGE, "ports": ["22/tcp"], "containerDiskInGb": 40, "volumeInGb": 0,
-            "interruptible": False,
+            "name": POD_PREFIX + self.run_id, "cloudType": "SECURE",
+            "ports": ["22/tcp"], "containerDiskInGb": 40, "volumeInGb": 0, "interruptible": False,
             "env": {"SSH_PUBLIC_KEY": SSH_KEY.with_suffix(".pub").read_text().strip()},
         }
-        if self.countries:
+        if self.cpu:
+            body.update(computeType="CPU", vcpuCount=2, imageName=CPU_IMAGE, containerDiskInGb=10)
+        else:
+            body.update(computeType="GPU", gpuTypeIds=self.gpu_types, gpuTypePriority="custom", gpuCount=1,
+                        imageName=IMAGE)
+        if self.volume:
+            body.update(networkVolumeId=self.volume["id"], volumeMountPath=VOLUME_MOUNT,
+                        dataCenterIds=[self.volume["dataCenterId"]])
+            if not self.cpu:
+                body["gpuTypeIds"] = list(dict.fromkeys(self.gpu_types + VOLUME_GPU_TYPES))
+            self.log(f"using network volume {self.volume['id']} in {self.volume['dataCenterId']}")
+        elif self.countries:
             body["countryCodes"] = self.countries
         deadline = time.time() + wait_s
         while True:
@@ -153,9 +215,23 @@ class Runner:
                 self.pod = api("POST", "/pods", body)
                 break
             except RuntimeError as e:
-                if "no instances currently available" not in str(e) or time.time() > deadline:
+                if "no instances currently available" not in str(e):
                     raise
-                self.log("no machine free for those GPU types; retrying in 60 s")
+                if time.time() > deadline:
+                    if not (self.volume and self.fallback and not self.cpu):
+                        raise
+                    # nothing free next to the volume: anywhere in the allowed countries, uploading everything
+                    self.log(f"nothing free in {self.volume['dataCenterId']} for {wait_s // 60} min: "
+                             "running elsewhere and uploading the videos instead")
+                    self.volume = None
+                    for k in ("networkVolumeId", "volumeMountPath", "dataCenterIds"):
+                        body.pop(k)
+                    body["gpuTypeIds"] = self.gpu_types
+                    if self.countries:
+                        body["countryCodes"] = self.countries
+                    deadline = time.time() + wait_s
+                    continue
+                self.log("no machine free for those types; retrying in 60 s")
                 time.sleep(60)
         (self.dir / "pod.json").write_text(json.dumps(self.pod, indent=2))
         where = (api("GET", f"/pods/{self.pod['id']}?includeMachine=true") or {}).get("machine") or {}
@@ -191,9 +267,17 @@ class Runner:
                               check=True, capture_output=True).stdout
         subprocess.run(["ssh", *self.ssh_args, "mkdir -p /workspace/code && tar -xf - -C /workspace/code"],
                        input=code, check=True)
+        uploads = list(self.job.uploads)
+        if self.volume:
+            self.sync_volume()
+        else:
+            uploads += self.job.volume_files
+        if not uploads:
+            self.log(f"uploaded code ({len(code) // 1024} KB)")
+            return
         excludes = sum((["--exclude", e] for e in self.job.exclude), [])
         listing = self.dir / "uploads.txt"  # exactly what is sent, kept for the record
-        listing.write_text("\n".join(self.job.uploads) + "\n")
+        listing.write_text("\n".join(uploads) + "\n")
         tar = subprocess.Popen(["tar", "-czf", "-", "-C", str(root), *excludes, "-T", str(listing)],
                                stdout=subprocess.PIPE)
         self.ssh("mkdir -p /workspace/data && tar -xzf - -C /workspace/data", stdin=tar.stdout)
@@ -202,8 +286,35 @@ class Runner:
         size = self.ssh("du -sh /workspace/data | cut -f1", stdout=subprocess.PIPE).stdout.decode().strip()
         self.log(f"uploaded code ({len(code) // 1024} KB) and data ({size})")
 
+    def sync_volume(self) -> None:
+        """
+        Send volume files that are missing on the volume (or a different size: an interrupted
+        copy), then link them into /workspace/data so jobs find them where they expect.
+        """
+        root = data_root(self.store)
+        listing = self.ssh(f"mkdir -p {VOLUME_MOUNT}/data && cd {VOLUME_MOUNT}/data && find . -type f -printf '%P\\t%s\\n'",
+                           stdout=subprocess.PIPE).stdout.decode()
+        files, missing = volume_plan(root, self.job.volume_files, listing)
+        if missing:
+            size = sum((root / f).stat().st_size for f in missing)
+            self.log(f"volume: sending {len(missing)} file(s), {size / 1e9:.1f} GB "
+                     f"({len(files) - len(missing)} already there)")
+            listing_file = self.dir / "volume-uploads.txt"
+            listing_file.write_text("\n".join(missing) + "\n")
+            tar = subprocess.Popen(["tar", "-cf", "-", "-C", str(root), "-T", str(listing_file)], stdout=subprocess.PIPE)
+            self.ssh(f"tar -xf - -C {VOLUME_MOUNT}/data", stdin=tar.stdout)
+            if tar.wait():
+                raise RuntimeError("tar of the volume files failed")
+        else:
+            self.log(f"volume: all {len(files)} file(s) already there")
+        links = "\n".join(files)
+        subprocess.run(["ssh", *self.ssh_args,
+                        f"mkdir -p /workspace/data && cd /workspace/data && while read -r f; do "
+                        f"mkdir -p \"$(dirname \"$f\")\" && ln -sfn \"{VOLUME_MOUNT}/data/$f\" \"$f\"; done"],
+                       input=(links + "\n").encode(), check=True)
+
     def run_script(self) -> None:
-        script = SETUP + "\n" + self.job.script
+        script = (SETUP if self.job.setup else "set -euo pipefail\nW=/workspace/data\n") + "\n" + self.job.script
         remote_log = self.dir / "remote.txt"
         with open(remote_log, "ab") as out:
             proc = subprocess.run(["ssh", *self.ssh_args, "bash -s"], input=script.encode(), stdout=out,
@@ -213,7 +324,7 @@ class Runner:
         self.log("job script finished")
 
     def download(self) -> None:
-        if not self.ssh_args:
+        if not self.ssh_args or not self.job.downloads:
             return
         paths = " ".join(self.job.downloads)  # our own patterns, unquoted so the remote shell expands them
         cmd = f"cd /workspace/data && tar -czf - $(ls -d {paths} 2>/dev/null)"
@@ -340,7 +451,8 @@ def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 
     from soccer_clips.track.benchmark import models_dir
 
     root = data_root(store)
-    uploads = [str((models_dir(store) / "ball_yolo26x.pt").relative_to(root))]
+    uploads = []
+    big = [str((models_dir(store) / "ball_yolo26x.pt").relative_to(root))]  # kept on the volume if there is one
     for gid in game_ids:
         game = store.load_game(gid)
         game_dir = store.game_dir(game.year, game.id)
@@ -349,9 +461,9 @@ def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 
         if raw.exists():  # what's done already: the pod only does the rest
             uploads.append(str(raw.relative_to(root)))
         if mode == "clips":
-            uploads += [str(p.relative_to(root)) for p in ball_game.prepare_segments(store, game, mode, log)]
+            big += [str(p.relative_to(root)) for p in ball_game.prepare_segments(store, game, mode, log)]
         else:
-            uploads.append(str(store.original_path(game).relative_to(root)))
+            big.append(str(store.original_path(game).relative_to(root)))
     ids = " ".join(game_ids)
     quiet = '2>&1 | (grep --line-buffered -vE "━|^\\s*$" || true)'
     script = f"""
@@ -360,8 +472,21 @@ for g in {ids}; do
   soccer-clips ball track-game $g --mode {mode} --workers {workers} {quiet} || echo "FAILED: $g"
 done
 """
-    return Job(name=f"ball-games-{mode}", uploads=uploads, script=script, downloads=["games"],
+    return Job(name=f"ball-games-{mode}", uploads=uploads, volume_files=big, script=script, downloads=["games"],
                exclude=["*.part.*"])
+
+
+def volume_fill_job(store: Store) -> Job:
+    """Put every game video and the ball model on the network volume (run on a CPU pod)."""
+    from soccer_clips.track.benchmark import models_dir
+
+    root = data_root(store)
+    files = [str(store.original_path(g).relative_to(root)) for g in store.list_games()]
+    model = models_dir(store) / "ball_yolo26x.pt"
+    if model.exists():
+        files.append(str(model.relative_to(root)))
+    return Job(name="volume-fill", uploads=[], volume_files=files, script="du -sh /vol/data", downloads=[],
+               setup=False)
 
 
 def install_ball_tracks(store: Store, results: Path, log=print) -> int:

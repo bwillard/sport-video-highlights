@@ -43,6 +43,9 @@ Updated after the L4 test: the quality gap is now measured, not guessed. The big
 ## Cloud jobs (2026-10-19)
 `soccer-clips gpu run <job>` drives RunPod's REST API from this machine: create a Secure Cloud pod (`runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404`; RTX 4090, else 5090 / L40S), upload exactly the listed files, run, download, wipe and delete the pod in a `finally`. A dead-man's switch on the pod (`kill 1` after `--max-hours`) stops GPU billing even if this machine dies. The API key stays in `.env` and never goes to the pod. A Claude Code "ask" rule (`.claude/settings.local.json`) makes every launch need your approval. Bigger cards were judged not worth it for this job size (2026-10-19): the dataloader, not the GPU, likely limits a 700-image training run.
 
+## Network volume (2026-10-22)
+Uploading full game videos was most of a whole-game run's cost (14 GB took 68 min, ~$1 of GPU time). A 50 GB RunPod network volume in US-KS-2 (~$3.50/month) now holds the videos and the ball model; runs send only what's new. A volume pins pods to its data centre, where 4090/5090 stock is thin, so runs accept any of 4090 / 5090 / L40S / RTX 6000 Ada / L40 / A6000 there and fall back to another US data centre (with a full upload) after 20 minutes. RunPod's "global networking" doesn't help: it's pod-to-pod networking capped at 100 Mbit/s, GPU pods only, not shared storage. The footage stays on RunPod until `soccer-clips gpu volume delete --yes`.
+
 ## Measurements
 | Hardware | Model / imgsz / frame step | fps | Full game (h) | Notes |
 |---|---|---|---|---|

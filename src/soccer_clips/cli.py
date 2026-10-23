@@ -159,7 +159,8 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
             job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs,
                                      batch=args.batch)
         runner = gpu.Runner(store, job, gpu_types=args.gpu or gpu.GPU_TYPES, max_hours=args.max_hours,
-                            log=lambda m: print(m, flush=True), countries=args.countries)
+                            log=lambda m: print(m, flush=True), countries=args.countries,
+                            use_volume=not args.no_volume, fallback=not args.no_fallback)
         print(f"run folder: {runner.dir}", flush=True)
         try:
             results = runner.run()
@@ -173,6 +174,27 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
             f = results / "out" / f"{name}.json"
             if f.exists():
                 print(f"\n{name}:\n" + ball_labels.score_table(json.loads(f.read_text())))
+    elif args.gpu_command == "volume":
+        vol = gpu.load_volume(store)
+        if args.volume_command == "create":
+            vol = gpu.create_volume(store, args.dc, args.size)
+            print(f"created volume {vol['id']}: {vol['size']} GB in {vol['dataCenterId']}")
+        elif args.volume_command == "fill":
+            runner = gpu.Runner(store, gpu.volume_fill_job(store), gpu_types=[], max_hours=args.max_hours,
+                                log=lambda m: print(m, flush=True), cpu=True)
+            print(f"run folder: {runner.dir}", flush=True)
+            runner.run()
+        elif args.volume_command == "delete":
+            if not args.yes:
+                raise SystemExit("this deletes the volume and everything on it; add --yes to go ahead")
+            vol = gpu.delete_volume(store)
+            print(f"deleted volume {vol['id']} ({vol['dataCenterId']})")
+        elif vol:
+            live = next((v for v in gpu.api("GET", "/networkvolumes") or [] if v.get("id") == vol["id"]), None)
+            print(f"volume {vol['id']}: {vol['size']} GB in {vol['dataCenterId']}"
+                  + ("" if live else "  (NOT FOUND on RunPod)"))
+        else:
+            print("no volume set up (soccer-clips gpu volume create)")
     elif args.gpu_command == "cleanup":
         pods = gpu.list_pods()
         for p in pods:
@@ -261,8 +283,20 @@ def main() -> None:
     run_gpu.add_argument("--gpu", nargs="+", help="RunPod GPU type ids, in order of preference")
     run_gpu.add_argument("--countries", nargs="*", help="country codes for the pod's data centre (default: US; "
                          "give none to allow anywhere)")
+    run_gpu.add_argument("--no-volume", action="store_true", help="upload everything instead of using the volume")
+    run_gpu.add_argument("--no-fallback", action="store_true",
+                         help="with a volume: wait for its data centre instead of running elsewhere")
     run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also stops itself after this")
     g_sub.add_parser("cleanup", help="delete every soccer-clips pod")
+    vol = g_sub.add_parser("volume", help="network volume for game videos and models (status with no subcommand)")
+    vol_sub = vol.add_subparsers(dest="volume_command")
+    vc = vol_sub.add_parser("create", help="create the network volume (billed monthly until deleted)")
+    vc.add_argument("--dc", default="US-KS-2", help="data centre (default US-KS-2)")
+    vc.add_argument("--size", type=int, default=50, help="GB (can grow later, never shrink)")
+    vf = vol_sub.add_parser("fill", help="copy game videos and the ball model onto the volume from a CPU pod")
+    vf.add_argument("--max-hours", type=float, default=3.0)
+    vd = vol_sub.add_parser("delete", help="delete the volume and everything on it")
+    vd.add_argument("--yes", action="store_true")
     args = parser.parse_args()
 
     store = Store(get_settings())
