@@ -34,7 +34,10 @@ IMAGE = "runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404"  # PyTorch 2.8, CUDA 1
 GPU_TYPES = ["NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 5090", "NVIDIA L40S"]  # in order of preference
 COUNTRIES = ["US"]  # pods in US data centres: closer, so uploads are quicker
 # In the network volume's data centre any of these will do (stock there is thinner).
-VOLUME_GPU_TYPES = GPU_TYPES + ["NVIDIA RTX 6000 Ada Generation", "NVIDIA L40", "NVIDIA RTX A6000"]
+# A100s last: they do the job fine but cost the most per hour (~$1.79 on 2026-10-23, when they were all
+# Kansas had).
+VOLUME_GPU_TYPES = GPU_TYPES + ["NVIDIA RTX 6000 Ada Generation", "NVIDIA L40", "NVIDIA RTX A6000",
+                                "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"]
 VOLUME_MOUNT = "/vol"  # where the network volume is mounted; /workspace stays scratch that's wiped
 SSH_KEY = Path.home() / ".ssh" / "id_ed25519"
 
