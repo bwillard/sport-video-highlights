@@ -156,6 +156,9 @@ def volume_plan(root: Path, volume_files: list[str], listing: str) -> tuple[list
     return files, [f for f in files if there.get(f) != str((root / f).stat().st_size)]
 
 
+S3_PART_BYTES = 25 * 2**20
+
+
 def s3_client(store: Store):
     """boto3 client for the network volume's S3-compatible API (no pod needed)."""
     import boto3
@@ -175,8 +178,10 @@ def s3_client(store: Store):
 def s3_sync(store: Store, volume_files: list[str], log=print) -> list[str]:
     """
     Upload volume files missing from the volume (or a different size: an interrupted copy)
-    under data/ over the S3 API, in 200 MB parts (RunPod's limit is 500 MB). Returns all the
-    files, now all on the volume.
+    under data/ over the S3 API, in small parts. RunPod's front end drops any request over
+    ~100 s (HTTP 524), so a part has to finish well within that on a home upload link: 200 MB
+    parts, 4 at a time, failed on ~37 Mbit/s; 25 MB parts, 3 at a time, take ~15 s each.
+    Returns all the files, now all on the volume.
     """
     from boto3.s3.transfer import TransferConfig
 
@@ -191,7 +196,7 @@ def s3_sync(store: Store, volume_files: list[str], log=print) -> list[str]:
         return files
     total = sum((root / f).stat().st_size for f in missing)
     log(f"volume: uploading {len(missing)} file(s), {total / 1e9:.1f} GB ({len(files) - len(missing)} already there)")
-    cfg = TransferConfig(multipart_threshold=400 * 2**20, multipart_chunksize=200 * 2**20, max_concurrency=4)
+    cfg = TransferConfig(multipart_threshold=S3_PART_BYTES, multipart_chunksize=S3_PART_BYTES, max_concurrency=3)
     done, t0 = 0, time.time()
     for f in missing:
         size = (root / f).stat().st_size

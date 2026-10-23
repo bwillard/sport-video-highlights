@@ -155,4 +155,4 @@ def test_s3_sync_uploads_only_what_is_missing(store, monkeypatch):
     monkeypatch.setattr(gpu, "s3_client", lambda store: FakeS3())
     files = gpu.s3_sync(store, ["vids"], log=lambda m: None)
     assert files == ["vids/a.mp4", "vids/b.mp4", "vids/c.mp4"]
-    assert uploaded == [("data/vids/b.mp4", 200 * 2**20), ("data/vids/c.mp4", 200 * 2**20)]
+    assert uploaded == [("data/vids/b.mp4", gpu.S3_PART_BYTES), ("data/vids/c.mp4", gpu.S3_PART_BYTES)]
