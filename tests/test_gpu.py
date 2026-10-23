@@ -125,7 +125,34 @@ def test_pod_uses_the_volume_and_falls_back(store, monkeypatch):
     with pytest.raises(RuntimeError, match="no instances"):
         gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), ["4090"], 1, lambda m: None,
                    fallback=False).start_pod(wait_s=0)
-    cpu = gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), [], 1, lambda m: None, cpu=True)
-    monkeypatch.setattr(gpu, "api", lambda m, p, b=None: bodies.append(dict(b)) or {"id": "pod2"} if m == "POST" else {})
-    cpu.start_pod(wait_s=0)
-    assert bodies[-1]["computeType"] == "CPU" and "gpuTypeIds" not in bodies[-1] and bodies[-1]["networkVolumeId"] == "vol1"
+
+
+def test_s3_sync_uploads_only_what_is_missing(store, monkeypatch):
+    import json as _json
+
+    root = gpu.data_root(store)
+    (root / "gpu").mkdir(exist_ok=True)
+    (root / "gpu" / "volume.json").write_text(_json.dumps({"id": "vol1", "dataCenterId": "US-KS-2"}))
+    (root / "vids").mkdir(parents=True, exist_ok=True)
+    for name, size in (("a.mp4", 10), ("b.mp4", 20), ("c.mp4", 30)):
+        (root / "vids" / name).write_bytes(b"x" * size)
+    uploaded = []
+
+    class FakeS3:
+        def get_paginator(self, _):
+            class P:
+                def paginate(self, Bucket, Prefix):
+                    assert Bucket == "vol1" and Prefix == "data/"
+                    # a is there, b was cut short, c is missing
+                    return [{"Contents": [{"Key": "data/vids/a.mp4", "Size": 10},
+                                          {"Key": "data/vids/b.mp4", "Size": 3}]}]
+            return P()
+
+        def upload_file(self, path, bucket, key, Config, Callback):
+            uploaded.append((key, Config.multipart_chunksize))
+            Callback(1)
+
+    monkeypatch.setattr(gpu, "s3_client", lambda store: FakeS3())
+    files = gpu.s3_sync(store, ["vids"], log=lambda m: None)
+    assert files == ["vids/a.mp4", "vids/b.mp4", "vids/c.mp4"]
+    assert uploaded == [("data/vids/b.mp4", 200 * 2**20), ("data/vids/c.mp4", 200 * 2**20)]

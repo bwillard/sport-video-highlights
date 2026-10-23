@@ -35,7 +35,6 @@ GPU_TYPES = ["NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 5090", "NVIDIA L40S"
 COUNTRIES = ["US"]  # pods in US data centres: closer, so uploads are quicker
 # In the network volume's data centre any of these will do (stock there is thinner).
 VOLUME_GPU_TYPES = GPU_TYPES + ["NVIDIA RTX 6000 Ada Generation", "NVIDIA L40", "NVIDIA RTX A6000"]
-CPU_IMAGE = "runpod/base:1.4.0-ubuntu2404"  # small image with sshd, for CPU-only pods (filling the volume)
 VOLUME_MOUNT = "/vol"  # where the network volume is mounted; /workspace stays scratch that's wiped
 SSH_KEY = Path.home() / ".ssh" / "id_ed25519"
 
@@ -157,15 +156,67 @@ def volume_plan(root: Path, volume_files: list[str], listing: str) -> tuple[list
     return files, [f for f in files if there.get(f) != str((root / f).stat().st_size)]
 
 
+def s3_client(store: Store):
+    """boto3 client for the network volume's S3-compatible API (no pod needed)."""
+    import boto3
+    from botocore.config import Config
+
+    vol = load_volume(store)
+    key, secret = os.environ.get("RUNPOD_S3_ACCESS_KEY"), os.environ.get("RUNPOD_S3_SECRET_KEY")
+    if not vol or not key or not secret:
+        raise ConfigError("needs a volume (gpu volume create) and RUNPOD_S3_ACCESS_KEY / RUNPOD_S3_SECRET_KEY in .env")
+    dc = vol["dataCenterId"]
+    return boto3.client("s3", aws_access_key_id=key, aws_secret_access_key=secret, region_name=dc,
+                        endpoint_url=f"https://s3api-{dc.lower()}.runpod.io/",
+                        config=Config(retries={"mode": "standard", "max_attempts": 10}, read_timeout=7200,
+                                      s3={"addressing_style": "path"}))
+
+
+def s3_sync(store: Store, volume_files: list[str], log=print) -> list[str]:
+    """
+    Upload volume files missing from the volume (or a different size: an interrupted copy)
+    under data/ over the S3 API, in 200 MB parts (RunPod's limit is 500 MB). Returns all the
+    files, now all on the volume.
+    """
+    from boto3.s3.transfer import TransferConfig
+
+    s3, bucket = s3_client(store), load_volume(store)["id"]
+    lines = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="data/"):
+        lines += [f"{o['Key'][5:]}\t{o['Size']}" for o in page.get("Contents", [])]
+    root = data_root(store)
+    files, missing = volume_plan(root, volume_files, "\n".join(lines))
+    if not missing:
+        log(f"volume: all {len(files)} file(s) already there")
+        return files
+    total = sum((root / f).stat().st_size for f in missing)
+    log(f"volume: uploading {len(missing)} file(s), {total / 1e9:.1f} GB ({len(files) - len(missing)} already there)")
+    cfg = TransferConfig(multipart_threshold=400 * 2**20, multipart_chunksize=200 * 2**20, max_concurrency=4)
+    done, t0 = 0, time.time()
+    for f in missing:
+        size = (root / f).stat().st_size
+        sent = [0, 0.0]
+
+        def progress(n, f=f, size=size):
+            sent[0] += n
+            if sent[0] - sent[1] >= 2**30 or sent[0] == size:  # every GB and at the end
+                sent[1] = sent[0]
+                rate = (done + sent[0]) / max(1.0, time.time() - t0) / 1e6
+                log(f"volume: {f} {sent[0] / 1e9:.1f}/{size / 1e9:.1f} GB ({rate * 8:.0f} Mbit/s)")
+
+        s3.upload_file(str(root / f), bucket, f"data/{f}", Config=cfg, Callback=progress)
+        done += size
+    log(f"volume: uploaded {total / 1e9:.1f} GB in {(time.time() - t0) / 60:.0f} min")
+    return files
+
+
 class Runner:
     def __init__(self, store: Store, job: Job, gpu_types: list[str], max_hours: float, log: Callable[[str], None],
-                 countries: list[str] | None = None, use_volume: bool = True, fallback: bool = True,
-                 cpu: bool = False):
+                 countries: list[str] | None = None, use_volume: bool = True, fallback: bool = True):
         self.store, self.job, self.gpu_types, self.max_hours = store, job, gpu_types, max_hours
         self.countries = COUNTRIES if countries is None else countries
         self.volume = load_volume(store) if use_volume else None
         self.fallback = fallback  # no GPU free in the volume's data centre: run elsewhere and upload
-        self.cpu = cpu
         self.run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + job.name
         self.dir = data_root(store) / "gpu" / self.run_id
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -196,16 +247,12 @@ class Runner:
             "ports": ["22/tcp"], "containerDiskInGb": 40, "volumeInGb": 0, "interruptible": False,
             "env": {"SSH_PUBLIC_KEY": SSH_KEY.with_suffix(".pub").read_text().strip()},
         }
-        if self.cpu:
-            body.update(computeType="CPU", vcpuCount=2, imageName=CPU_IMAGE, containerDiskInGb=10)
-        else:
-            body.update(computeType="GPU", gpuTypeIds=self.gpu_types, gpuTypePriority="custom", gpuCount=1,
-                        imageName=IMAGE)
+        body.update(computeType="GPU", gpuTypeIds=self.gpu_types, gpuTypePriority="custom", gpuCount=1,
+                    imageName=IMAGE)
         if self.volume:
             body.update(networkVolumeId=self.volume["id"], volumeMountPath=VOLUME_MOUNT,
                         dataCenterIds=[self.volume["dataCenterId"]])
-            if not self.cpu:
-                body["gpuTypeIds"] = list(dict.fromkeys(self.gpu_types + VOLUME_GPU_TYPES))
+            body["gpuTypeIds"] = list(dict.fromkeys(self.gpu_types + VOLUME_GPU_TYPES))
             self.log(f"using network volume {self.volume['id']} in {self.volume['dataCenterId']}")
         elif self.countries:
             body["countryCodes"] = self.countries
@@ -218,7 +265,7 @@ class Runner:
                 if "instances" not in str(e) or "available" not in str(e):
                     raise  # RunPod words it "no instances currently available" or "no longer any instances available"
                 if time.time() > deadline:
-                    if not (self.volume and self.fallback and not self.cpu):
+                    if not (self.volume and self.fallback):
                         raise
                     # nothing free next to the volume: anywhere in the allowed countries, uploading everything
                     self.log(f"nothing free in {self.volume['dataCenterId']} for {wait_s // 60} min: "
@@ -269,7 +316,7 @@ class Runner:
                        input=code, check=True)
         uploads = list(self.job.uploads)
         if self.volume:
-            self.sync_volume()
+            self.link_volume_files()
         else:
             uploads += self.job.volume_files
         if not uploads:
@@ -286,32 +333,16 @@ class Runner:
         size = self.ssh("du -sh /workspace/data | cut -f1", stdout=subprocess.PIPE).stdout.decode().strip()
         self.log(f"uploaded code ({len(code) // 1024} KB) and data ({size})")
 
-    def sync_volume(self) -> None:
-        """
-        Send volume files that are missing on the volume (or a different size: an interrupted
-        copy), then link them into /workspace/data so jobs find them where they expect.
-        """
+    def link_volume_files(self) -> None:
+        """The volume files are on the volume already (s3_sync ran before the pod): link them in."""
         root = data_root(self.store)
-        listing = self.ssh(f"mkdir -p {VOLUME_MOUNT}/data && cd {VOLUME_MOUNT}/data && find . -type f -printf '%P\\t%s\\n'",
-                           stdout=subprocess.PIPE).stdout.decode()
-        files, missing = volume_plan(root, self.job.volume_files, listing)
-        if missing:
-            size = sum((root / f).stat().st_size for f in missing)
-            self.log(f"volume: sending {len(missing)} file(s), {size / 1e9:.1f} GB "
-                     f"({len(files) - len(missing)} already there)")
-            listing_file = self.dir / "volume-uploads.txt"
-            listing_file.write_text("\n".join(missing) + "\n")
-            tar = subprocess.Popen(["tar", "-cf", "-", "-C", str(root), "-T", str(listing_file)], stdout=subprocess.PIPE)
-            self.ssh(f"tar -xf - -C {VOLUME_MOUNT}/data", stdin=tar.stdout)
-            if tar.wait():
-                raise RuntimeError("tar of the volume files failed")
-        else:
-            self.log(f"volume: all {len(files)} file(s) already there")
-        links = "\n".join(files)
+        files, _ = volume_plan(root, self.job.volume_files, "")
         subprocess.run(["ssh", *self.ssh_args,
                         f"mkdir -p /workspace/data && cd /workspace/data && while read -r f; do "
+                        f"test -f \"{VOLUME_MOUNT}/data/$f\" || {{ echo \"missing on the volume: $f\"; exit 1; }}; "
                         f"mkdir -p \"$(dirname \"$f\")\" && ln -sfn \"{VOLUME_MOUNT}/data/$f\" \"$f\"; done"],
-                       input=(links + "\n").encode(), check=True)
+                       input=("\n".join(files) + "\n").encode(), check=True)
+        self.log(f"linked {len(files)} file(s) from the volume")
 
     def run_script(self) -> None:
         script = (SETUP if self.job.setup else "set -euo pipefail\nW=/workspace/data\n") + "\n" + self.job.script
@@ -361,6 +392,8 @@ class Runner:
             if leftovers:
                 self.log(f"warning: {len(leftovers)} soccer-clips pod(s) already exist: "
                          f"{[p['id'] for p in leftovers]} (`soccer-clips gpu cleanup` deletes them)")
+            if self.volume and self.job.volume_files:
+                s3_sync(self.store, self.job.volume_files, self.log)  # before the pod: no GPU idles during uploads
             self.start_pod()
             self.wait_for_ssh()
             self.arm_dead_mans_switch()
@@ -477,7 +510,7 @@ done
 
 
 def volume_fill_job(store: Store) -> Job:
-    """Put every game video and the ball model on the network volume (run on a CPU pod)."""
+    """Every game video and the ball model, for the network volume (its volume_files are what matters)."""
     from soccer_clips.track.benchmark import models_dir
 
     root = data_root(store)

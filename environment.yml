@@ -22,3 +22,4 @@ dependencies:
       - ultralytics
       - lap  # ultralytics' tracker matching
       - onnxruntime
+      - boto3  # RunPod network volume S3 API

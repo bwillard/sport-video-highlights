@@ -180,11 +180,8 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
             vol = gpu.create_volume(store, args.dc, args.size)
             print(f"created volume {vol['id']}: {vol['size']} GB in {vol['dataCenterId']}")
         elif args.volume_command == "fill":
-            runner = gpu.Runner(store, gpu.volume_fill_job(store), gpu_types=[], max_hours=args.max_hours,
-                                log=lambda m: print(m, flush=True), cpu=True)
-            print(f"run folder: {runner.dir}", flush=True)
-            runner.start_pod = lambda: gpu.Runner.start_pod(runner, wait_s=args.wait_min * 60)
-            runner.run()
+            files = gpu.s3_sync(store, gpu.volume_fill_job(store).volume_files, log=lambda m: print(m, flush=True))
+            print(f"volume has all {len(files)} file(s)")
         elif args.volume_command == "delete":
             if not args.yes:
                 raise SystemExit("this deletes the volume and everything on it; add --yes to go ahead")
@@ -294,9 +291,7 @@ def main() -> None:
     vc = vol_sub.add_parser("create", help="create the network volume (billed monthly until deleted)")
     vc.add_argument("--dc", default="US-KS-2", help="data centre (default US-KS-2)")
     vc.add_argument("--size", type=int, default=50, help="GB (can grow later, never shrink)")
-    vf = vol_sub.add_parser("fill", help="copy game videos and the ball model onto the volume from a CPU pod")
-    vf.add_argument("--max-hours", type=float, default=3.0)
-    vf.add_argument("--wait-min", type=int, default=5, help="how long to wait for a CPU pod in the volume's data centre")
+    vol_sub.add_parser("fill", help="upload game videos and the ball model to the volume (S3 API, no pod)")
     vd = vol_sub.add_parser("delete", help="delete the volume and everything on it")
     vd.add_argument("--yes", action="store_true")
     args = parser.parse_args()
