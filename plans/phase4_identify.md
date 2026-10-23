@@ -211,6 +211,20 @@ For a chosen player, find the stretches of a game where they're involved with th
 
 - **2026-10-23 — All six games tracked end to end** (7.6 h of video; fine-tuned YOLO26x, full precision). Ball on 60–76% of frames per game (43–57% seen, 10–24% filled), 68% overall, counting out-of-play time and stretches with no ball in view. Fixes made while watching (`K`) feed the next fine-tune.
 
+- **2026-10-23 — Still objects through a drifting camera estimate.** In PRSC (22–24 min) the path kept landing on a white flag/towel lying behind the far goal line (conf 0.6–0.8, above the real ball's). It never moves, but over minutes the chained camera estimate slips during pans and zooms, so in the reference it seemed to wander 100–180 px and failed the "still within 12 px" test. New yardstick: `soccer-clips ball eval-games` scores the whole-game paths, without hand fixes, at every labelled frame in the games (580 visible, 94 no-ball). Bench clips are short, so drift never builds up there: bench unchanged at 82 / 5 / 12 throughout.
+  - A tracklet is also parked if it moves at most 30 px (or 2 radii) per second for 75%+ of its life. 12 px was too tight: the same failure also hid in fc-1, where at 22 px the path sat 20 s on a still object by the far tree line; 25–40 px all scored alike.
+  - A parked tracklet costs at least what "no ball" would, so it can't fill gaps for free.
+  - Set-piece credit only if the camera kept the parked ball within 300 px on screen: Veo follows the game ball, so a set piece waiting to be taken stays put; the 28 set pieces credited before moved ≤ 227 px, the flag ~1000.
+  - Tracklets are cut where a ball still for 3 s moves 40 px away within 20 frames (a kick, or a ball coming to rest), so a free kick taken without the ball ever being lost is credited too. With no time limit, drift "kicked" the flag every 3 s.
+  - Tried and dropped: cutting out every still stretch (lost balls held at a player's feet), "the spot is empty after the kick" (no gain), rejoining pieces seen again in place (cost found frames).
+
+  | Whole-game labels, no fixes | Found | Wrong | Missed | Ball claimed when none |
+  |---|---|---|---|---|
+  | before | 55.5% | 24.3% | 20.2% | 35% |
+  | **now** | **66.9%** | **12.6%** | **20.5%** | **32%** |
+
+  PRSC 22–24 min without fixes: 10 of the 18 hand-placed balls matched (was 1); with the fixes, 0 of 513 frames after the last fix on the flag (was all). `detections()` scanned every detection per frame; one sort makes whole-game retracks ~15 s instead of minutes.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

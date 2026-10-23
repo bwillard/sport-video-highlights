@@ -177,3 +177,16 @@ def test_other_balls_while_watching(settings):
         others = client.get(f"/api/games/{GAME}/ball/raw").json()["others"]
     assert others == [{"frame": 20, "index": 0, "x": 0.5, "y": 0.5, "r": 0.02}]
     assert len(ball_others.balls(ball_others.load(settings), GAME, 20)) == 1
+
+
+def test_evaluate_scores_whole_game_paths_at_labels(settings):
+    from soccer_clips.track import ball_labels
+
+    store, game = _game_with_wrong_path(settings)  # the path follows junk at (43 + 3f, 53) for frames 0-59
+    for f, x in ((30, (43 + 90) / 320), (40, 0.9), (100, 0.9)):  # on the path, off it, where nothing was seen
+        ball_labels.add_label(settings, ball_labels.BallLabel(game_id=GAME, frame=f, state="visible", x=x, y=53 / 180))
+    ball_labels.add_label(settings, ball_labels.BallLabel(game_id=GAME, frame=150, state="none"))
+    ball_game.fix(store, game, 100, "ball", x=0.9, y=53 / 180)  # a fix there: ignored unless asked for
+    n = ball_game.evaluate(store)[GAME]
+    assert (n["visible"], n["found"], n["wrong"], n["missed"], n["none"], n["claimed"]) == (3, 1, 1, 1, 1, 0)
+    assert ball_game.evaluate(store, fixes=True)[GAME]["found"] == 2

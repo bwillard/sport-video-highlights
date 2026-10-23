@@ -25,6 +25,12 @@ leaves it with a kick or arrives at it as it comes to rest (set pieces). With th
 spare balls, the path fell back on a spare when the game ball went undetected (5 of 12
 wrong positions); ignoring balls parked for 3 s halved the wrong positions (10% -> 5%)
 without losing any found frames (2026-10-21).
+
+Over whole games the camera estimate drifts during pans, so a still object far away seemed
+to wander and was taken for the game ball (a flag behind a goal, 2026-10-23). Stillness is
+now also judged over 1 s spans, set pieces are only credited when the camera kept the ball in
+place on screen, and parked tracklets never fill gaps: on the labelled frames of the six
+games (ball_game.evaluate), found 55% -> 67%, wrong 24% -> 13%; bench unchanged.
 """
 
 from dataclasses import dataclass, field
@@ -53,12 +59,26 @@ class Params:
     parked_frames: int = 90  # a tracklet still for this long (3 s) looks like a spare ball...
     parked_spread_px: float = 12.0  # ...if it stays within this (reference pixels)
     parked_penalty: float = 1.0  # times its detection score: 1 = never used (it can't beat start_cost)
+    # Stillness is also judged over short spans, since over a minute the camera estimate drifts
+    # (a still object far away can seem to wander 100+ px across pans): a tracklet is parked
+    # too if it moves at most the parked spread per still_lag frames for most of its life (a
+    # still object's tracklet also has pan slips and the odd hop onto a passing ball). Whole
+    # tracklets only: a ball held at a player's feet for a few seconds, then played on, stays
+    # the game ball; tracklets are cut only at kicks (split_kicks).
+    still_lag: int = 30
+    still_px: float = 30.0  # moves at most this (or 2 radii) per still_lag: 25-40 all did about as well
+    still_share: float = 0.75
     fill_max_gap: int = 30  # interpolate gaps up to this many frames (1 s)
     # A parked ball the path leaves by being kicked (or arrives at as it comes to rest) is the
     # game ball after all: a free kick, corner or goal kick waiting to be taken.
     kick_gap: int = 15  # frames between the parked ball and the moving one (the kicker may hide it)
     rest_jump_px: float = 30.0  # coming to rest: the parked ball must start this close to where the path was
     moving_px: float = 40.0  # the kicked (or arriving) tracklet must travel at least this far (reference pixels)
+    # The camera follows the game ball, so a set piece waiting to be taken stays put on screen
+    # too (28 credited on the games moved at most 227 px); a still object off to the side
+    # drifts across the screen as the camera follows play.
+    set_piece_screen_px: float = 300.0
+    kick_frames: int = 20  # split_kicks: moving off means getting moving_px away within this (slow drift doesn't)
 
 
 @dataclass
@@ -86,7 +106,15 @@ class Tracklet:
     def parked(self, p: Params) -> bool:
         if self.end - self.start < p.parked_frames:
             return False
-        return max(np.ptp(self.rx), np.ptp(self.ry)) <= max(p.parked_spread_px, 2 * float(np.median(self.r)))
+        tol = max(p.parked_spread_px, 2 * float(np.median(self.r)))
+        rx, ry = np.asarray(self.rx), np.asarray(self.ry)
+        if max(np.ptp(rx), np.ptp(ry)) <= tol:
+            return True
+        f = np.asarray(self.frames)  # detections about still_lag frames apart
+        a = np.clip(np.searchsorted(f, f - p.still_lag // 2), 0, len(f) - 1)
+        b = np.clip(np.searchsorted(f, f + p.still_lag // 2, side="right") - 1, 0, len(f) - 1)
+        tol = max(p.still_px, 2 * float(np.median(self.r)))
+        return float(np.mean(np.hypot(rx[b] - rx[a], ry[b] - ry[a]) <= tol)) >= p.still_share
 
     def moving(self, p: Params) -> bool:
         """Travels somewhere: not just a short, still piece (a spare ball briefly hidden and seen again)."""
@@ -97,18 +125,91 @@ class Tracklet:
 
     def score(self, p: Params) -> float:
         s = self.raw_score(p)
-        return s * (1 - p.parked_penalty) if self.parked(p) else s
+        if not self.parked(p):
+            return s
+        # never worth more than showing no ball for the frames it covers (it would fill gaps for free)
+        return s * (1 - p.parked_penalty) - p.parked_penalty * p.miss_cost * (self.end - self.start + 1)
+
+
+def watched(t: Tracklet, p: Params) -> bool:
+    """The camera kept it in place on screen, as it does with a set piece about to be taken."""
+    return float(np.ptp(t.x)) <= p.set_piece_screen_px
+
+
+def kicked(ti: Tracklet, tj: Tracklet, p: Params) -> bool:
+    """tj kicks the ball away from parked ti."""
+    return watched(ti, p) and tj.moving(p)
+
+
+def arrives(ti: Tracklet, tj: Tracklet, p: Params) -> bool:
+    """Moving ti comes to rest as parked tj."""
+    return watched(tj, p) and ti.moving(p)
 
 
 def detections(boxes: np.ndarray, n_frames: int, min_conf: float) -> list[np.ndarray]:
     """Per frame: (k, 4) array of ball detections cx, cy, r, conf from a benchmark box array."""
-    b = boxes[(boxes[:, 1] == BALL) & (boxes[:, 7] >= min_conf)]
+    b = boxes[(boxes[:, 1] == BALL) & (boxes[:, 7] >= min_conf) & (boxes[:, 0] < n_frames)]
+    b = b[np.argsort(b[:, 0], kind="stable")]
+    rows = np.column_stack([(b[:, 3] + b[:, 5]) / 2, (b[:, 4] + b[:, 6]) / 2,
+                            np.maximum(b[:, 5] - b[:, 3], b[:, 6] - b[:, 4]) / 2, b[:, 7]])
     out = [np.empty((0, 4)) for _ in range(n_frames)]
-    for f in np.unique(b[:, 0]).astype(int):
-        if f < n_frames:
-            d = b[b[:, 0] == f]
-            out[f] = np.column_stack([(d[:, 3] + d[:, 5]) / 2, (d[:, 4] + d[:, 6]) / 2,
-                                      np.maximum(d[:, 5] - d[:, 3], d[:, 6] - d[:, 4]) / 2, d[:, 7]])
+    frames, starts = np.unique(b[:, 0].astype(int), return_index=True)
+    for f, d in zip(frames, np.split(rows, starts[1:])):  # one sort, not a scan per frame
+        out[f] = d
+    return out
+
+
+def split_kicks(t: Tracklet, p: Params) -> list[Tracklet]:
+    """
+    Cut a tracklet where a ball still for parked_frames moves off (gets moving_px away within
+    kick_frames), or where one arrives that fast and stays still that long, so the still part
+    is judged as parked on its own and `choose` decides whether it was a set piece. Drift in
+    the camera estimate is far slower, so a still object isn't cut into pieces too short to
+    look parked (with no time limit, every 3 s of a far-off flag was "kicked" by the drift).
+    """
+    f = np.asarray(t.frames)
+    if f[-1] - f[0] < p.parked_frames:
+        return [t]
+    rx, ry = np.asarray(t.rx), np.asarray(t.ry)
+    tol = max(p.parked_spread_px, 2 * float(np.median(t.r)))
+    n = len(f)
+
+    def still(i, j):  # detections i..j-1 within tol of each other
+        return j - i > 1 and max(np.ptp(rx[i:j]), np.ptp(ry[i:j])) <= tol
+
+    def far(i, j, k):  # any of detections i..j-1 at least moving_px from detection k
+        return j > i and float(np.max(np.hypot(rx[i:j] - rx[k], ry[i:j] - ry[k]))) >= p.moving_px
+
+    cuts = []
+    i = 0
+    while i < n:
+        s0 = cuts[-1] if cuts else 0  # the piece so far starts here
+        lo = max(s0, int(np.searchsorted(f, f[i] - p.parked_frames)))  # still for parked_frames up to i, then moves off
+        soon = int(np.searchsorted(f, f[i] + p.kick_frames, side="right"))
+        if f[i] - f[s0] >= p.parked_frames and still(lo, i + 1) and far(i + 1, soon, i):
+            j = i  # cut where it starts moving
+            while j + 1 < n and np.hypot(rx[j + 1] - rx[i], ry[j + 1] - ry[i]) <= tol:
+                j += 1
+            cuts.append(j + 1)
+            i = j + 1
+            continue
+        hi = np.searchsorted(f, f[i] + p.parked_frames, side="right")  # arrives, then still for parked_frames
+        if (i > s0 and f[-1] - f[i] >= p.parked_frames and still(i, hi)
+                and far(max(s0, int(np.searchsorted(f, f[i] - p.kick_frames))), i, i)):
+            cuts.append(i)
+            i = hi
+            continue
+        i += 1
+    if not cuts:
+        return [t]
+    out = []
+    for a, b in zip([0] + cuts, cuts + [n]):
+        if b > a:
+            piece = Tracklet()
+            for lst, src in zip((piece.frames, piece.x, piece.y, piece.r, piece.conf, piece.rx, piece.ry),
+                                (t.frames, t.x, t.y, t.r, t.conf, t.rx, t.ry)):
+                lst.extend(src[a:b])
+            out.append(piece)
     return out
 
 
@@ -172,6 +273,7 @@ def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
     scores = [t.score(p) for t in ts]
     parked = [t.parked(p) for t in ts]
     moving = [t.moving(p) for t in ts]
+    seen = [watched(t, p) for t in ts]  # see kicked / arrives
     ends = np.array([t.end for t in ts])
     best = np.empty(len(ts))
     prev = np.full(len(ts), -1)
@@ -200,9 +302,9 @@ def choose(tracklets: list[Tracklet], p: Params) -> list[Tracklet]:
                 continue  # too far, too fast
             bonus, credit = 0.0, False
             if gap <= p.kick_gap:
-                if parked[i] and moving[j] and not credited[i]:
+                if parked[i] and not credited[i] and seen[i] and moving[j]:
                     bonus = ts[i].raw_score(p)  # the ball was kicked from where it sat
-                elif parked[j] and moving[i] and jump <= p.rest_jump_px:
+                elif parked[j] and jump <= p.rest_jump_px and seen[j] and moving[i]:
                     bonus, credit = ts[j].raw_score(p), True  # the ball came to rest here
             v = best[i] + scores[j] - trans + bonus
             if v > best[j]:
@@ -232,9 +334,9 @@ def chain_value(chain: list[Tracklet], p: Params) -> float:
                  else p.miss_cost * (gap - 1) + p.jump_cost * jump)
         bonus, credit = 0.0, False
         if gap <= p.kick_gap:
-            if ti.parked(p) and tj.moving(p) and not credited:
+            if ti.parked(p) and not credited and kicked(ti, tj, p):
                 bonus = ti.raw_score(p)
-            elif tj.parked(p) and ti.moving(p) and jump <= p.rest_jump_px:
+            elif tj.parked(p) and jump <= p.rest_jump_px and arrives(ti, tj, p):
                 bonus, credit = tj.raw_score(p), True
         v += tj.score(p) - trans + bonus
         credited = credit
@@ -265,7 +367,8 @@ def track(boxes: np.ndarray, steps: np.ndarray, p: Params | None = None) -> np.n
     n = len(steps)
     ref = camera.to_reference(steps)
     dets = detections(boxes, n, p.min_conf)
-    return path(choose(link(dets, steps, ref, p), p), ref, n, p)
+    tracklets = [piece for t in link(dets, steps, ref, p) for piece in split_kicks(t, p)]
+    return path(choose(tracklets, p), ref, n, p)
 
 
 def top1(boxes: np.ndarray, n_frames: int, min_conf: float) -> np.ndarray:

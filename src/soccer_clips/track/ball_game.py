@@ -363,6 +363,51 @@ def retrack(store: Store, game: Game, p: ball_track.Params | None = None,
     return len(rows)
 
 
+def evaluate(store: Store, p: ball_track.Params | None = None, fixes: bool = False) -> dict:
+    """
+    Score whole-game ball paths at every labelled frame in the tracked games (the train and
+    bench labels come from them): visible labels found / wrong / missed, and none labels with
+    a ball claimed. Paths are rebuilt from the saved detections, by default without hand
+    fixes (many fixed frames are labels too, so with them the score would be circular).
+    Bench clips are labelled densely, so one moment can move the score by several points.
+    """
+    from soccer_clips.track import ball_labels
+
+    labels = ball_labels.load_labels(store.settings)
+    out = {}
+    for game in store.list_games():
+        if not (tracks_dir(store, game) / "ball_raw.npz").exists():
+            continue
+        raw = load_raw(store, game)
+        mine = {f: l for (gid, f), l in labels.items() if gid == game.id and l.state in ("visible", "none")}
+        n = dict.fromkeys(["visible", "found", "wrong", "missed", "none", "claimed"], 0)
+        order = np.argsort(raw["motion_frames"])
+        mframes, motion = raw["motion_frames"][order], raw["motion"][order]
+        hand = load_fixes(store, game) if fixes else {"balls": [], "suppress": []}
+        for s, e in raw["ranges"].tolist():
+            todo = [f for f in mine if s <= f < e]
+            if not todo:
+                continue
+            steps = motion[(mframes >= s) & (mframes < e)].copy()
+            steps[0] = np.eye(2, 3)
+            d = _apply_fixes(raw["dets"][(raw["dets"][:, 0] >= s) & (raw["dets"][:, 0] < e)], hand, game, s, e)
+            boxes = np.column_stack([d[:, 0] - s, np.full(len(d), BALL), np.full(len(d), -1), d[:, 1:6]])
+            path = ball_track.track(boxes, steps, p)
+            for f in todo:
+                x, y, _, _, kind = path[f - s]
+                if mine[f].state == "none":
+                    n["none"] += 1
+                    n["claimed"] += int(kind != ball_track.NONE)
+                    continue
+                n["visible"] += 1
+                if kind == ball_track.NONE:
+                    n["missed"] += 1
+                else:
+                    n["found" if ball_labels.on_ball(mine[f], game, np.array([x]), np.array([y]))[0] else "wrong"] += 1
+        out[game.id] = n
+    return out
+
+
 def fix(store: Store, game: Game, frame: int, action: str, x: float | None = None, y: float | None = None,
         r: float | None = None, label_set: str | None = None) -> str | None:
     """

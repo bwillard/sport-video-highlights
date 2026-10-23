@@ -84,6 +84,50 @@ def test_spare_ball_briefly_hidden_is_not_a_kick():
     assert not (np.hypot(path[:, 0] - 1500, path[:, 1] - 900) < 3).any()
 
 
+def test_still_object_seen_through_a_drifting_camera_estimate():
+    # A white flag lying beyond the far goal line, at the same spot on screen the whole time,
+    # but the camera estimate slips 2 px a frame during "pans" (5 frames in every 90), so in
+    # the reference it wanders 130 px over the clip: still over any second, not overall.
+    n = 1200
+    steps = still_camera(n)
+    for f in range(n):
+        if f % 90 >= 85:
+            steps[f, 0, 2] = -2.0
+    rows = [box(f, 900, 300, 0.75) for f in range(n)]
+    rows += [box(f, 300 + (f % 400) * 3, 600, 0.35) for f in range(n) if f % 400 < 300]  # the game ball, weaker
+    path = ball_track.track(np.array(rows, np.float32), steps)
+    assert not (np.hypot(path[:, 0] - 900, path[:, 1] - 300) < 3).any()
+    assert (np.hypot(path[:300, 0] - (300 + 3 * np.arange(300)), path[:300, 1] - 600) < 3).all()
+
+
+def test_set_piece_credit_needs_the_camera_on_it():
+    # The camera follows play away from a still object (it slides across the screen while
+    # still in the reference); something moving off next to it isn't a kick from it.
+    n = 260
+    steps = still_camera(n)
+    steps[1:, 0, 2] = -4.0  # panning: the scene moves 4 px left per frame
+    rows = [box(f, 1700 - 4 * f, 500, 0.7) for f in range(150)]  # still object, sliding across 600 px
+    rows += [box(f, 1700 - 4 * f + 20 * (f - 149), 500, 0.5) for f in range(152, n)]  # moves off it
+    path = ball_track.track(np.array(rows, np.float32), steps)
+    assert not (path[:150, 4] == ball_track.DETECTED).any()
+    # the same with the camera on it is a set piece, claimed back
+    rows = [box(f, 700, 500, 0.7) for f in range(150)] + [box(f, 700 + 20 * (f - 149), 500, 0.5) for f in range(152, n)]
+    path = ball_track.track(np.array(rows, np.float32), still_camera(n))
+    assert (path[:150, 4] == ball_track.DETECTED).all()
+
+
+def test_free_kick_and_kick_in_one_tracklet():
+    # The ball sits 4 s and is kicked without ever being lost: one tracklet, cut at the kick
+    rows = [box(f, 700, 500, 0.6) for f in range(120)] + [box(f, 700 + 15 * (f - 119), 500, 0.6) for f in range(120, 180)]
+    t = ball_track.link(ball_track.detections(np.array(rows, np.float32), 180, 0.1), still_camera(180),
+                        camera.to_reference(still_camera(180)), ball_track.Params())
+    assert len(t) == 1
+    pieces = ball_track.split_kicks(t[0], ball_track.Params())
+    assert [len(q.frames) for q in pieces] == [120, 60] and pieces[0].parked(ball_track.Params())
+    path = ball_track.track(np.array(rows, np.float32), still_camera(180))
+    assert (path[:, 4] == ball_track.DETECTED).all()
+
+
 def _brute_choose(tracklets, p):
     """The plain O(n^2) chooser the fast one must agree with."""
     ts = sorted(tracklets, key=lambda t: t.end)

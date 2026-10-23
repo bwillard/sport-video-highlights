@@ -98,6 +98,16 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
 
                 for c in load_set(store.settings).clips:
                     print(ball_track.draw(store, results, v, c.name))
+    elif args.ball_command == "eval-games":
+        from soccer_clips.track import ball_game
+
+        per = ball_game.evaluate(store, fixes=args.fixes)
+        tot = {k: sum(n[k] for n in per.values()) for k in next(iter(per.values()), {})}
+        print("game                                        found  wrong  missed  claimed-when-none  (visible, none)")
+        for gid, n in list(per.items()) + [("all", tot)]:
+            v, z = max(1, n["visible"]), max(1, n["none"])
+            print(f"{gid:42}  {n['found'] / v:5.0%}  {n['wrong'] / v:5.0%}  {n['missed'] / v:6.0%}  "
+                  f"{n['claimed'] / z:17.0%}  ({n['visible']}, {n['none']})")
     elif args.ball_command == "track-game":
         from soccer_clips.track import ball_game
 
@@ -253,6 +263,8 @@ def main() -> None:
     tg.add_argument("--model", default="ball_yolo26x", help="ball model in models/")
     tg.add_argument("--retrack", action="store_true", help="redo the path from saved detections (no detecting)")
     tg.add_argument("--workers", type=int, default=1, help="detect chunks of long ranges in parallel processes")
+    ev = ball_sub.add_parser("eval-games", help="score whole-game ball paths at the labelled frames in the games")
+    ev.add_argument("--fixes", action="store_true", help="with hand fixes (circular where fixed frames are labels)")
     ball_sub.add_parser("export", help="turn train-set labels into a YOLO dataset (labels/dataset/)")
     train = ball_sub.add_parser("train", help="fine-tune YOLO bases on the exported dataset (GPU)")
     train.add_argument("bases", nargs="+", help="e.g. yolo11m yolo26l; weights go to models/ball_<base>.pt")
