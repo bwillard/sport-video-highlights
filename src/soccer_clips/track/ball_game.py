@@ -374,7 +374,6 @@ def fix(store: Store, game: Game, frame: int, action: str, x: float | None = Non
     import json
 
     from soccer_clips.store import atomic_write_text
-    from soccer_clips.track import ball_labels
 
     raw = load_raw(store, game)
     if not any(s <= frame < e for s, e in raw["ranges"].tolist()):
@@ -402,15 +401,52 @@ def fix(store: Store, game: Game, frame: int, action: str, x: float | None = Non
         fixes["balls"].append({"frame": frame, "x": x, "y": y, "r": r})
     atomic_write_text(_fixes_path(store, game), json.dumps(fixes, indent=1) + "\n")
     retrack(store, game, window=(frame - FIX_WINDOW, frame + FIX_WINDOW))
+    if action == "ball":
+        return _label_frame(store, game, frame, label_set, "visible", x, y, r)
+    return _label_frame(store, game, frame, label_set, "none")
+
+
+def _label_frame(store: Store, game: Game, frame: int, label_set: str | None, state: str,
+                 x: float | None = None, y: float | None = None, r: float | None = None) -> str | None:
+    """Add the frame to a label set ("auto": ball_labels.auto_set picks) with this game-ball label."""
+    from soccer_clips.track import ball_labels
+
     if label_set == "auto":
         label_set = ball_labels.auto_set(store, game.id, frame)
     if label_set:
         ball_labels.frame_image(store, game, frame)  # so the labelling page can show it
         ball_labels.add_tasks(store, label_set, [ball_labels.BallTask(game_id=game.id, frame=frame)])
         ball_labels.add_label(store.settings, ball_labels.BallLabel(
-            game_id=game.id, frame=frame, state="visible" if action == "ball" else "none",
-            x=x if action == "ball" else None, y=y if action == "ball" else None, r=r))
+            game_id=game.id, frame=frame, state=state, x=x, y=y, r=r))
     return label_set
+
+
+def other_ball(store: Store, game: Game, frame: int, x: float, y: float, r: float | None = None,
+               label_set: str | None = "auto") -> tuple[int, str | None]:
+    """
+    Mark another real ball (a spare, the next field) in a frame while watching, for training:
+    the exporter boxes it, and scoring doesn't count detections on it as mistakes. Only
+    labelled frames are used, so an unlabelled frame is labelled first, taking the ring as
+    the game ball (it must be a detected or placed one; a filled-in guess isn't trusted).
+    The path is unchanged. Returns (index of the entry, label set the frame was added to).
+    """
+    from soccer_clips.track import ball_labels, ball_others
+
+    used = None
+    if (game.id, frame) not in ball_labels.load_labels(store.settings):
+        if not label_set:
+            raise ValueError("labelling is switched off, so other balls wouldn't be used")
+        path = load_path(store, game)
+        at = np.nonzero(path["frame"] == frame)[0] if path is not None else []
+        if not len(at) or path["kind"][at[0]] != ball_track.DETECTED:
+            raise ValueError("mark the game ball in this frame first (K, or Shift+K for none)")
+        i = int(at[0])
+        used = _label_frame(store, game, frame, label_set, "visible", float(path["x"][i]), float(path["y"][i]),
+                            min(0.1, float(path["r"][i])) or None)
+    k = ball_others.key(game.id, frame)
+    others = ball_others.edit(store.settings, lambda o: o.frames.setdefault(k, []).append(
+        ball_others.OtherBall(x=x, y=y, r=r, verdict="ball")))
+    return len(others.frames[k]) - 1, used
 
 
 def load_path(store: Store, game: Game) -> dict | None:

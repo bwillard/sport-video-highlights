@@ -119,6 +119,11 @@ class BallFixIn(RequestBody):
     label_set: Literal["auto", "train", "bench"] | None = None  # also add the frame as a labelled ball frame
 
 
+class OtherBallFixIn(OtherBallIn):
+    frame: int = Field(ge=0)
+    label_set: Literal["auto", "train", "bench"] | None = "auto"  # if the frame isn't labelled yet
+
+
 class VerdictIn(RequestBody):
     verdict: ball_others.Verdict
 
@@ -469,12 +474,16 @@ def create_app(store: Store | None = None) -> FastAPI:
         d = raw["dets"][np.argsort(raw["dets"][:, 0], kind="stable")]
         W, H = game.width, game.height
         fixes = ball_game.load_fixes(store, game)
+        prefix = f"{game_id}:"  # ball_others.key
+        others = [{"frame": int(k[len(prefix):]), "index": i, **b.model_dump(include={"x", "y", "r"})}
+                  for k, bs in ball_others.load(store.settings).frames.items() if k.startswith(prefix)
+                  for i, b in enumerate(bs) if b.verdict == "ball"]
         return {"ranges": raw["ranges"].tolist(), "frame": d[:, 0].astype(int).tolist(),
                 "x": np.round((d[:, 1] + d[:, 3]) / 2 / W, 4).tolist(),
                 "y": np.round((d[:, 2] + d[:, 4]) / 2 / H, 4).tolist(),
                 "r": np.round(np.maximum(d[:, 3] - d[:, 1], d[:, 4] - d[:, 2]) / 2 / H, 4).tolist(),
                 "conf": np.round(d[:, 5], 2).tolist(),
-                "fix_balls": fixes["balls"], "suppressed": fixes["suppress"]}
+                "fix_balls": fixes["balls"], "suppressed": fixes["suppress"], "others": others}
 
     @app.post("/api/games/{game_id}/ball/fix")
     def game_ball_fix(game_id: str, body: BallFixIn) -> dict:
@@ -489,6 +498,18 @@ def create_app(store: Store | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(422, str(e))
         return {**ball_json(game), "labelled_as": used}
+
+    @app.post("/api/games/{game_id}/ball/other", status_code=201)
+    def game_ball_other(game_id: str, body: OtherBallFixIn) -> dict:
+        """Mark another real ball (not the game ball) in a frame while watching, for training."""
+        from soccer_clips.track import ball_game
+
+        game = load(game_id)
+        try:
+            index, used = ball_game.other_ball(store, game, body.frame, body.x, body.y, body.r, body.label_set)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"index": index, "labelled_as": used}
 
     @app.get("/review-balls")
     def review_balls_page() -> FileResponse:

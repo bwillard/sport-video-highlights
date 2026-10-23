@@ -154,3 +154,26 @@ def test_raw_detections_api(settings):
     assert r["frame"] == sorted(r["frame"]) and len(r["frame"]) == 60
     assert abs(r["x"][0] - 43 / 320) < 1e-3 and abs(r["y"][0] - 53 / 180) < 1e-3 and r["conf"][0] == 0.5
     assert r["fix_balls"][0]["frame"] == 30 and any(p["frame"] == 30 for p in r["suppressed"])
+
+
+def test_other_balls_while_watching(settings):
+    from soccer_clips.track import ball_labels, ball_others
+
+    store, game = _game_with_wrong_path(settings)
+    with TestClient(create_app(store)) as client:
+        url = f"/api/games/{GAME}/ball/other"
+        # an unlabelled frame is labelled first, with the (detected) ring as the game ball
+        r = client.post(url, json={"frame": 20, "x": 0.5, "y": 0.5, "r": 0.02})
+        assert r.status_code == 201 and r.json()["labelled_as"] in ("train", "bench")
+        label = ball_labels.load_labels(settings)[(GAME, 20)]
+        assert label.state == "visible" and abs(label.x - (43 + 60) / 320) < 0.01
+        # a second ball on the same, now labelled frame: no new label
+        r = client.post(url, json={"frame": 20, "x": 0.2, "y": 0.8})
+        assert r.json() == {"index": 1, "labelled_as": None}
+        # no ring to take as the game ball, or labelling off: refused
+        assert client.post(url, json={"frame": 150, "x": 0.5, "y": 0.5}).status_code == 422
+        assert client.post(url, json={"frame": 21, "x": 0.5, "y": 0.5, "label_set": None}).status_code == 422
+        client.put(f"/api/ball/others/{GAME}/20/1", json={"verdict": "not"})
+        others = client.get(f"/api/games/{GAME}/ball/raw").json()["others"]
+    assert others == [{"frame": 20, "index": 0, "x": 0.5, "y": 0.5, "r": 0.02}]
+    assert len(ball_others.balls(ball_others.load(settings), GAME, 20)) == 1

@@ -56,6 +56,8 @@
       <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
       <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)<br>
       Fixing the ball (ring on): <kbd>K</kbd> then click the ball = it's here · <kbd>Shift</kbd>+<kbd>K</kbd> = that ring is wrong, no ball to see ·
+      <kbd>X</kbd> other balls: click each spare / next-field ball (cyan), click again to remove, <kbd>X</kbd>/<kbd>Esc</kbd> to stop
+      (for training; a click on a detection takes its exact spot and size) ·
       <kbd>D</kbd> debug layer: every ball detection as a circle with its confidence (dim below 0.25), magenta dot = a ball you placed,
       red × = a detection your fix suppressed, dashed box = the area the detector searches (balls outside it are never found).
       A grey circle with no ring = seen but dropped by the filter; nothing = never detected.<br>
@@ -481,10 +483,11 @@ function pointerToFrame(e) {
   };
 }
 overlay.addEventListener("pointerdown", (e) => {
+  if (otherMode) { otherClick(snapToDetection(pointerToFrame(e))); return; }
   if (fixingBall) {
-    const p = pointerToFrame(e);
+    const p = snapToDetection(pointerToFrame(e));
     stopBallFix();
-    fixBall("ball", p.x, p.y);
+    fixBall("ball", p.x, p.y, p.r);
     return;
   }
   if (!placing) return;
@@ -521,6 +524,7 @@ function toggleBall() {
   try { localStorage.setItem("showBall", showBall ? "1" : "0"); } catch {}
   showBallButton();
   loadBall();
+  loadRaw();
 }
 function showBallButton() {
   $("ballBtn").classList.toggle("on", showBall);
@@ -539,6 +543,7 @@ $("fixTo").addEventListener("change", (e) => {
 let fixingBall = false;
 function startBallFix() {
   if (!showBall) return flash("press B to show the ball first", true);
+  if (otherMode) toggleOtherMode(false);
   v.pause();
   fixingBall = true;
   stage.classList.add("placing");
@@ -548,18 +553,73 @@ function stopBallFix() {
   fixingBall = false;
   stage.classList.remove("placing");
 }
-async function fixBall(action, x = null, y = null) {
+async function fixBall(action, x = null, y = null, r = null) {
   if (!showBall || !ball) return flash("press B to show the ball first", true);
   v.pause();
   const frame = Math.round(v.currentTime * fps);
   const body = { frame, action, label_set: $("fixTo").value || null };
-  if (action === "ball") Object.assign(body, { x, y });
+  if (action === "ball") Object.assign(body, { x, y }, r ? { r } : {});
   const b = await api("POST", `/api/games/${encodeURIComponent(game.id)}/ball/fix`, body);
   ball = { gameId: game.id, ...b };
   raw = null;  // the fix adds a placed ball / suppressed points to the debug layer
   loadRaw();
   const where = { train: " · added to the training set", bench: " · added to the benchmark set" }[b.labelled_as] || "";
   flash((action === "ball" ? "ball placed" : "ring removed") + `, path redone${where}`);
+}
+// Other balls (spares, the next field) while watching: X, then click each one; click one
+// again to remove it. They go with the frame's label, so training boxes them as balls
+// rather than learning them as background. An unlabelled frame is labelled first, with
+// the ring as the game ball. The path itself doesn't change.
+let otherMode = false;
+function toggleOtherMode(on = !otherMode) {
+  if (on && !showBall) return flash("press B to show the ball first", true);
+  if (on && !$("fixTo").value) return flash("labelling is off (next to the ⚽ button), so other balls wouldn't be used", true);
+  if (on) stopBallFix();
+  otherMode = on;
+  stage.classList.toggle("placing", on);
+  if (!on) return;
+  v.pause();
+  loadRaw(true);
+  flash("other balls: click each one (click again to remove) · X or Esc when done");
+}
+v.addEventListener("play", () => toggleOtherMode(false));
+function snapToDetection(p) {
+  // a click on (or next to) a detection takes its centre and size
+  if (!raw || raw.gameId !== game?.id) return p;
+  const f = Math.round(v.currentTime * fps), r = videoRect();
+  let best = null, bestD = Infinity;
+  for (let i = firstAtOrAfter(raw.frame, f); i < raw.frame.length && raw.frame[i] === f; i++) {
+    const d = Math.hypot((raw.x[i] - p.x) * r.w, (raw.y[i] - p.y) * r.h);
+    if (d < Math.max(12, raw.r[i] * r.h * 1.6) && d < bestD) { best = i; bestD = d; }
+  }
+  return best == null ? p : { x: raw.x[best], y: raw.y[best], r: Math.min(0.1, raw.r[best]) || null };
+}
+async function otherClick(p) {
+  const f = Math.round(v.currentTime * fps), r = videoRect();
+  const near = raw?.others?.find((o) => o.frame === f && Math.hypot((o.x - p.x) * r.w, (o.y - p.y) * r.h) < 14);
+  if (near) {  // entries are never deleted, just marked "not a ball"
+    await api("PUT", `/api/ball/others/${encodeURIComponent(game.id)}/${f}/${near.index}`, { verdict: "not" });
+    raw.others = raw.others.filter((o) => o !== near);
+    return flash("other ball removed");
+  }
+  const body = { frame: f, x: p.x, y: p.y, label_set: $("fixTo").value };
+  if (p.r) body.r = p.r;
+  const b = await api("POST", `/api/games/${encodeURIComponent(game.id)}/ball/other`, body);
+  if (raw?.gameId === game.id) raw.others.push({ frame: f, index: b.index, x: p.x, y: p.y, r: p.r || null });
+  const where = { train: " · frame added to the training set", bench: " · frame added to the benchmark set" }[b.labelled_as] || "";
+  flash(`other ball marked${where}`);
+}
+function drawOthers(ctx) {
+  // other balls marked in this frame: cyan rings (with B, D or X on)
+  if (!(showBall || showDebug || otherMode) || !raw?.others || raw.gameId !== game?.id) return;
+  const f = Math.round(v.currentTime * fps), r = videoRect();
+  ctx.save();
+  ctx.strokeStyle = "#4de1ff"; ctx.lineWidth = 2; ctx.setLineDash([2, 3]);
+  for (const o of raw.others) {
+    if (o.frame !== f) continue;
+    ctx.beginPath(); ctx.arc(r.x + o.x * r.w, r.y + o.y * r.h, Math.max(8, (o.r || 0) * r.h * 2.2), 0, 2 * Math.PI); ctx.stroke();
+  }
+  ctx.restore();
 }
 function ballAt(f) {
   // index of frame f in ball.frame (sorted), or -1
@@ -598,8 +658,8 @@ $("ballBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleBa
 // the hand fixes. Shows whether a missing ring means "never detected" or "the filter dropped it".
 let showDebug = false, raw = null;  // raw: {gameId, frame, x, y, r, conf, fix_balls, suppressed}
 try { showDebug = localStorage.getItem("showDebug") === "1"; } catch {}
-async function loadRaw() {
-  if (!showDebug || !game || raw?.gameId === game.id) return;
+async function loadRaw(force = false) {
+  if (!(showDebug || showBall || force) || !game || raw?.gameId === game.id) return;
   const id = game.id;
   const r = await getJson(`/api/games/${encodeURIComponent(id)}/ball/raw`);
   if (game?.id === id) raw = { gameId: id, ...r };
@@ -665,6 +725,7 @@ function drawOverlay() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   drawRaw(ctx);
+  drawOthers(ctx);
   drawBall(ctx);
   let co = null;
   if (placing) {
@@ -733,6 +794,7 @@ document.addEventListener("keydown", (e) => {
   if (!game || e.ctrlKey || e.metaKey || e.altKey) return;
   if (placing && e.key === "Escape") { e.preventDefault(); cancelCallout(); return; }
   if (fixingBall && e.key === "Escape") { e.preventDefault(); stopBallFix(); return; }
+  if (otherMode && e.key === "Escape") { e.preventDefault(); toggleOtherMode(false); return; }
 
   // Digits by physical key, since Shift+1 types "!" on most layouts.
   if (e.code.startsWith("Digit")) {
@@ -750,6 +812,7 @@ document.addEventListener("keydown", (e) => {
     b: () => toggleBall(),
     d: () => toggleDebug(),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
+    x: () => toggleOtherMode(),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),
