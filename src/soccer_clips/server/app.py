@@ -456,6 +456,26 @@ def create_app(store: Store | None = None) -> FastAPI:
         """The game-ball path: parallel arrays, positions as fractions of the frame (empty if not tracked)."""
         return ball_json(load(game_id))
 
+    @app.get("/api/games/{game_id}/ball/raw")
+    def game_ball_raw(game_id: str) -> dict:
+        """
+        Every ball detection (the debug layer): parallel arrays sorted by frame, positions as
+        fractions of the frame, plus the hand fixes (placed balls, suppressed detections).
+        """
+        from soccer_clips.track import ball_game
+
+        game = load(game_id)
+        raw = ball_game.load_raw(store, game)
+        d = raw["dets"][np.argsort(raw["dets"][:, 0], kind="stable")]
+        W, H = game.width, game.height
+        fixes = ball_game.load_fixes(store, game)
+        return {"ranges": raw["ranges"].tolist(), "frame": d[:, 0].astype(int).tolist(),
+                "x": np.round((d[:, 1] + d[:, 3]) / 2 / W, 4).tolist(),
+                "y": np.round((d[:, 2] + d[:, 4]) / 2 / H, 4).tolist(),
+                "r": np.round(np.maximum(d[:, 3] - d[:, 1], d[:, 4] - d[:, 2]) / 2 / H, 4).tolist(),
+                "conf": np.round(d[:, 5], 2).tolist(),
+                "fix_balls": fixes["balls"], "suppressed": fixes["suppress"]}
+
     @app.post("/api/games/{game_id}/ball/fix")
     def game_ball_fix(game_id: str, body: BallFixIn) -> dict:
         """Correct the ball path while watching; returns the updated path."""

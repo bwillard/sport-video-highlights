@@ -144,3 +144,13 @@ def test_auto_set(settings):
     # a frame already in a set stays there
     ball_labels.add_tasks(store, "train", [ball_labels.BallTask(game_id=GAME, frame=150)])
     assert ball_labels.auto_set(store, GAME, 150) == "train"
+
+
+def test_raw_detections_api(settings):
+    store, game = _game_with_wrong_path(settings)
+    ball_game.fix(store, game, 30, "ball", x=0.75, y=0.75)
+    with TestClient(create_app(store)) as client:
+        r = client.get(f"/api/games/{GAME}/ball/raw").json()
+    assert r["frame"] == sorted(r["frame"]) and len(r["frame"]) == 60
+    assert abs(r["x"][0] - 43 / 320) < 1e-3 and abs(r["y"][0] - 53 / 180) < 1e-3 and r["conf"][0] == 0.5
+    assert r["fix_balls"][0]["frame"] == 30 and any(p["frame"] == 30 for p in r["suppressed"])

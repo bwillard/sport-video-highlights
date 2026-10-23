@@ -24,6 +24,8 @@
   <span class="stat">rate <b id="rate">1</b>×</span>
   <button id="sound" title="M">🔇 sound off</button>
   <button id="ballBtn" title="B: show the game ball">⚽ ball</button>
+  <button id="debugBtn" title="D: show every ball detection (debug)">🔍 raw</button>
+  <span class="stat" id="debugStat" hidden></span>
   <span class="stat" id="ballStat" hidden></span>
   <select id="fixTo" hidden title="Ball fixes (K) also become labelled frames: most go to training, one moment in five to the benchmark">
     <option value="auto">fixes → label too</option>
@@ -54,6 +56,9 @@
       <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
       <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)<br>
       Fixing the ball (ring on): <kbd>K</kbd> then click the ball = it's here · <kbd>Shift</kbd>+<kbd>K</kbd> = that ring is wrong, no ball to see ·
+      <kbd>D</kbd> debug layer: every ball detection as a circle with its confidence (dim below 0.25), magenta dot = a ball you placed,
+      red × = a detection your fix suppressed, dashed box = the area the detector searches (balls outside it are never found).
+      A grey circle with no ring = seen but dropped by the filter; nothing = never detected.<br>
       the path is redone around the fix, and (unless switched off next to the ⚽ button) the frame becomes a labelled
       frame: most go to training, one 30-second moment in five to the benchmark
     </p>
@@ -551,6 +556,8 @@ async function fixBall(action, x = null, y = null) {
   if (action === "ball") Object.assign(body, { x, y });
   const b = await api("POST", `/api/games/${encodeURIComponent(game.id)}/ball/fix`, body);
   ball = { gameId: game.id, ...b };
+  raw = null;  // the fix adds a placed ball / suppressed points to the debug layer
+  loadRaw();
   const where = { train: " · added to the training set", bench: " · added to the benchmark set" }[b.labelled_as] || "";
   flash((action === "ball" ? "ball placed" : "ring removed") + `, path redone${where}`);
 }
@@ -586,6 +593,68 @@ function drawBall(ctx) {
   ctx.restore();
 }
 $("ballBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleBall(); });
+
+// Debug layer: every ball detection the detector made (not just the chosen game ball), and
+// the hand fixes. Shows whether a missing ring means "never detected" or "the filter dropped it".
+let showDebug = false, raw = null;  // raw: {gameId, frame, x, y, r, conf, fix_balls, suppressed}
+try { showDebug = localStorage.getItem("showDebug") === "1"; } catch {}
+async function loadRaw() {
+  if (!showDebug || !game || raw?.gameId === game.id) return;
+  const id = game.id;
+  const r = await getJson(`/api/games/${encodeURIComponent(id)}/ball/raw`);
+  if (game?.id === id) raw = { gameId: id, ...r };
+}
+function toggleDebug() {
+  showDebug = !showDebug;
+  try { localStorage.setItem("showDebug", showDebug ? "1" : "0"); } catch {}
+  showDebugButton();
+  loadRaw();
+}
+function showDebugButton() {
+  $("debugBtn").classList.toggle("on", showDebug);
+  $("debugStat").hidden = !showDebug;
+}
+function firstAtOrAfter(a, f) {  // first index with a[i] >= f in sorted a
+  let lo = 0, hi = a.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (a[mid] < f) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+function drawRaw(ctx) {
+  if (!showDebug) return;
+  if (!raw || raw.gameId !== game?.id) { $("debugStat").textContent = "raw: loading…"; return; }
+  const f = Math.round(v.currentTime * fps), r = videoRect();
+  const tracked = raw.ranges.some(([s, e]) => f >= s && f < e);
+  const i0 = firstAtOrAfter(raw.frame, f), i1 = firstAtOrAfter(raw.frame, f + 1);
+  $("debugStat").textContent = !tracked ? "raw: not tracked here" : `raw: ${i1 - i0} detection${i1 - i0 === 1 ? "" : "s"}`;
+  ctx.save();
+  // the detector only looks inside the centre crop (the middle 2/3, as the ball model was trained)
+  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1; ctx.setLineDash([6, 6]);
+  ctx.strokeRect(r.x + r.w / 6, r.y + r.h / 6, r.w * 2 / 3, r.h * 2 / 3);
+  ctx.setLineDash([]);
+  ctx.font = "11px system-ui, sans-serif";
+  for (let i = i0; i < i1; i++) {
+    const cx = r.x + raw.x[i] * r.w, cy = r.y + raw.y[i] * r.h, rad = Math.max(6, raw.r[i] * r.h * 1.6);
+    const strong = raw.conf[i] >= 0.25;
+    ctx.strokeStyle = ctx.fillStyle = strong ? "rgba(235,235,235,0.95)" : "rgba(170,170,170,0.6)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI); ctx.stroke();
+    ctx.fillText(raw.conf[i].toFixed(2), cx + rad + 2, cy + rad + 4);
+  }
+  for (const p of raw.suppressed) {
+    if (p.frame !== f) continue;
+    const cx = r.x + p.x * r.w, cy = r.y + p.y * r.h;
+    ctx.strokeStyle = "#ff5c5c"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cx - 6, cy - 6); ctx.lineTo(cx + 6, cy + 6); ctx.moveTo(cx + 6, cy - 6); ctx.lineTo(cx - 6, cy + 6); ctx.stroke();
+  }
+  for (const b of raw.fix_balls) {
+    if (b.frame !== f) continue;
+    ctx.fillStyle = "#ff4dff";
+    ctx.beginPath(); ctx.arc(r.x + b.x * r.w, r.y + b.y * r.h, 3.5, 0, 2 * Math.PI); ctx.fill();
+  }
+  ctx.restore();
+}
+$("debugBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleDebug(); });
+showDebugButton();
 showBallButton();
 
 function drawOverlay() {
@@ -595,6 +664,7 @@ function drawOverlay() {
   const ctx = overlay.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  drawRaw(ctx);
   drawBall(ctx);
   let co = null;
   if (placing) {
@@ -678,6 +748,7 @@ document.addEventListener("keydown", (e) => {
     " ": () => (v.paused ? v.play() : v.pause()),
     m: () => toggleMute(),
     b: () => toggleBall(),
+    d: () => toggleDebug(),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
@@ -796,6 +867,8 @@ async function loadGame(id, startT = 0, clipId = null) {
   pollJobs();
   ball = null;
   loadBall();
+  raw = null;
+  loadRaw();
 }
 
 function applyHash() {
