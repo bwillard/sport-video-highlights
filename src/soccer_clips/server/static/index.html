@@ -13,6 +13,19 @@
   #stage { position: relative; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #stage.placing #overlay { pointer-events: auto; cursor: crosshair; }
+  /* One fixed-height line, so the video never moves when a stat changes length (a narrow
+     window scrolls the bar sideways). Messages show over the video's corner instead. */
+  .bar { flex-wrap: nowrap; height: 44px; overflow-x: auto; overflow-y: hidden; gap: 10px; white-space: nowrap;
+         scrollbar-width: none; }
+  .bar::-webkit-scrollbar { display: none; }
+  .bar > * { flex-shrink: 0; }
+  #game { max-width: 15em; }
+  #flash { position: absolute; top: 8px; right: 8px; max-width: 70%; margin: 0; padding: 4px 10px; border-radius: 5px;
+           background: rgba(0, 0, 0, 0.72); color: var(--text); pointer-events: none; z-index: 2; }
+  #flash:empty { display: none; }
+  #ballStat { display: inline-block; min-width: 10.5em; }
+  #debugStat { display: inline-block; min-width: 8.5em; }
+  #markin { display: inline-block; min-width: 4em; }
 </style>
 </head>
 <body>
@@ -33,7 +46,6 @@
   </select>
   <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
   <span class="stat" title="Kickoff times, for the match clock and reel captions: H sets the 1st half, Shift+H the 2nd (H late in the game asks which)">kickoff <b id="kickoffs">–</b></span>
-  <span id="flash"></span>
   <a href="/label-ball" title="Label the ball in sampled frames: the training and benchmark data for the ball detector">Ball labels</a>
   <a href="/reel" title="Build highlight reels from tagged clips, across games">Reels →</a>
 </div>
@@ -42,6 +54,7 @@
     <div id="stage">
       <video id="v" preload="auto"></video>
       <canvas id="overlay"></canvas>
+      <span id="flash"></span>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <p class="help">
