@@ -315,6 +315,14 @@ def _apply_fixes(d: np.ndarray, fixes: dict, game: Game, s: int, e: int) -> np.n
     return np.vstack([d[~drop], np.array(added, float).reshape(-1, 6)])
 
 
+def usable_dets(store: Store, game: Game, raw: dict) -> np.ndarray:
+    """The game's ball detections, less those on fixed objects (world.find_fixed), if marked."""
+    from soccer_clips.track import world
+
+    blocked = world.load_blocked(store, game, len(raw["dets"]))
+    return raw["dets"] if blocked is None else raw["dets"][~blocked]
+
+
 def retrack(store: Store, game: Game, p: ball_track.Params | None = None,
             window: tuple[int, int] | None = None) -> int:
     """
@@ -327,6 +335,7 @@ def retrack(store: Store, game: Game, p: ball_track.Params | None = None,
     order = np.argsort(raw["motion_frames"])
     mframes, motion = raw["motion_frames"][order], raw["motion"][order]
     out, done = [], []
+    dets = usable_dets(store, game, raw)
     for s, e in raw["ranges"].tolist():
         if window:
             s, e = max(s, window[0]), min(e, window[1])
@@ -337,7 +346,7 @@ def retrack(store: Store, game: Game, p: ball_track.Params | None = None,
         if not len(steps):
             continue
         steps[0] = np.eye(2, 3)
-        d = raw["dets"][(raw["dets"][:, 0] >= s) & (raw["dets"][:, 0] < e)]
+        d = dets[(dets[:, 0] >= s) & (dets[:, 0] < e)]
         d = _apply_fixes(d, fixes, game, s, e)
         boxes = np.column_stack([d[:, 0] - s, np.full(len(d), BALL), np.full(len(d), -1), d[:, 1:6]])
         path = ball_track.track(boxes, steps, p)
@@ -384,13 +393,14 @@ def evaluate(store: Store, p: ball_track.Params | None = None, fixes: bool = Fal
         order = np.argsort(raw["motion_frames"])
         mframes, motion = raw["motion_frames"][order], raw["motion"][order]
         hand = load_fixes(store, game) if fixes else {"balls": [], "suppress": []}
+        dets = usable_dets(store, game, raw)
         for s, e in raw["ranges"].tolist():
             todo = [f for f in mine if s <= f < e]
             if not todo:
                 continue
             steps = motion[(mframes >= s) & (mframes < e)].copy()
             steps[0] = np.eye(2, 3)
-            d = _apply_fixes(raw["dets"][(raw["dets"][:, 0] >= s) & (raw["dets"][:, 0] < e)], hand, game, s, e)
+            d = _apply_fixes(dets[(dets[:, 0] >= s) & (dets[:, 0] < e)], hand, game, s, e)
             boxes = np.column_stack([d[:, 0] - s, np.full(len(d), BALL), np.full(len(d), -1), d[:, 1:6]])
             path = ball_track.track(boxes, steps, p)
             for f in todo:

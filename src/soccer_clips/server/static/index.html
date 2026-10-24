@@ -38,7 +38,7 @@
   <span class="stat" title="Playback speed: [ and ] change it by 0.5×">rate <b id="rate">1</b>×</span>
   <button id="sound" title="Sound on/off (M). Starts off.">🔇 sound off</button>
   <button id="ballBtn" title="Show the game ball (B): a yellow ring follows it where the game has been ball-tracked.&#10;Solid ring = detected in that frame; dashed = filled in across a short gap.&#10;With it on: K fixes the ball, K then O marks other balls.">⚽ ball</button>
-  <button id="debugBtn" title="Debug layer (D): every ball the detector found, not just the game ball.&#10;White circle + confidence (dim below 0.25) = a detection. Grey circle with no yellow ring = seen but dropped by the filter; no circle = never detected.&#10;Dashed box = where the detector looks (balls outside it are never found). Magenta dot = a ball you placed; red × = a detection a fix suppressed.">🔍 raw</button>
+  <button id="debugBtn" title="Debug layer (D): every ball the detector found, not just the game ball.&#10;White circle + confidence (dim below 0.25) = a detection. Grey circle with no yellow ring = seen but dropped by the filter; no circle = never detected.&#10;Dashed box = where the detector looks (balls outside it are never found). Magenta dot = a ball you placed; red × = a detection a fix suppressed; orange &quot;fixed&quot; = on something that never moves all game, so never taken for the ball.">🔍 raw</button>
   <span class="stat" id="debugStat" hidden title="Ball detections in this frame (before the filter picks the game ball)"></span>
   <span class="stat" id="ballStat" hidden title="The game ball in this frame:&#10;seen = detected; filled in = between detections, a short gap bridged;&#10;not seen = no game ball chosen (hidden, out of shot, or missed);&#10;not tracked here = this part of the game hasn't been through ball tracking"></span>
   <select id="fixTo" hidden title="What happens to frames you fix (K) or mark other balls on (K then O):&#10;label too = each also becomes a labelled ball frame for training the detector. Most go to the training set; one 30-second moment in five (and anything near a benchmark clip) goes to the benchmark set, used to score models.&#10;don't label = only the ball path is corrected.">
@@ -73,7 +73,8 @@
       <kbd>K</kbd> <kbd>O</kbd> other balls: click each spare / next-field ball (cyan), click again to remove, <kbd>O</kbd>/<kbd>Esc</kbd> to stop
       (for training; a click on a detection takes its exact spot and size) ·
       <kbd>D</kbd> debug layer: every ball detection as a circle with its confidence (dim below 0.25), magenta dot = a ball you placed,
-      red × = a detection your fix suppressed, dashed box = the area the detector searches (balls outside it are never found).
+      red × = a detection your fix suppressed, orange "fixed" = on something that never moves all game (a flag, chair, bag: never the ball),
+      dashed box = the area the detector searches (balls outside it are never found).
       A grey circle with no ring = seen but dropped by the filter; nothing = never detected.<br>
       the path is redone around the fix, and (unless switched off next to the ⚽ button) the frame becomes a labelled
       frame: most go to training, one 30-second moment in five to the benchmark
@@ -676,7 +677,7 @@ async function loadRaw(force = false) {
   if (!(showDebug || showBall || force) || !game || raw?.gameId === game.id) return;
   const id = game.id;
   const r = await getJson(`/api/games/${encodeURIComponent(id)}/ball/raw`);
-  if (game?.id === id) raw = { gameId: id, ...r };
+  if (game?.id === id) raw = { gameId: id, ...r, fixedSet: new Set(r.fixed || []) };
 }
 function toggleDebug() {
   showDebug = !showDebug;
@@ -708,11 +709,11 @@ function drawRaw(ctx) {
   ctx.font = "11px system-ui, sans-serif";
   for (let i = i0; i < i1; i++) {
     const cx = r.x + raw.x[i] * r.w, cy = r.y + raw.y[i] * r.h, rad = Math.max(6, raw.r[i] * r.h * 1.6);
-    const strong = raw.conf[i] >= 0.25;
-    ctx.strokeStyle = ctx.fillStyle = strong ? "rgba(235,235,235,0.95)" : "rgba(170,170,170,0.6)";
+    const fixed = raw.fixedSet.has(i), strong = raw.conf[i] >= 0.25;
+    ctx.strokeStyle = ctx.fillStyle = fixed ? "rgba(255,159,64,0.9)" : strong ? "rgba(235,235,235,0.95)" : "rgba(170,170,170,0.6)";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI); ctx.stroke();
-    ctx.fillText(raw.conf[i].toFixed(2), cx + rad + 2, cy + rad + 4);
+    ctx.fillText(raw.conf[i].toFixed(2) + (fixed ? " fixed" : ""), cx + rad + 2, cy + rad + 4);
   }
   for (const p of raw.suppressed) {
     if (p.frame !== f) continue;

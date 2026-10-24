@@ -469,9 +469,13 @@ def create_app(store: Store | None = None) -> FastAPI:
         """
         from soccer_clips.track import ball_game
 
+        from soccer_clips.track import world
+
         game = load(game_id)
         raw = ball_game.load_raw(store, game)
-        d = raw["dets"][np.argsort(raw["dets"][:, 0], kind="stable")]
+        order = np.argsort(raw["dets"][:, 0], kind="stable")
+        d = raw["dets"][order]
+        blocked = world.load_blocked(store, game, len(raw["dets"]))
         W, H = game.width, game.height
         fixes = ball_game.load_fixes(store, game)
         prefix = f"{game_id}:"  # ball_others.key
@@ -483,7 +487,8 @@ def create_app(store: Store | None = None) -> FastAPI:
                 "y": np.round((d[:, 2] + d[:, 4]) / 2 / H, 4).tolist(),
                 "r": np.round(np.maximum(d[:, 3] - d[:, 1], d[:, 4] - d[:, 2]) / 2 / H, 4).tolist(),
                 "conf": np.round(d[:, 5], 2).tolist(),
-                "fix_balls": fixes["balls"], "suppressed": fixes["suppress"], "others": others}
+                "fix_balls": fixes["balls"], "suppressed": fixes["suppress"], "others": others,
+                "fixed": [] if blocked is None else np.nonzero(blocked[order])[0].tolist()}  # indexes, on fixed objects
 
     @app.post("/api/games/{game_id}/ball/fix")
     def game_ball_fix(game_id: str, body: BallFixIn) -> dict:

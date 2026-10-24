@@ -98,6 +98,18 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
 
                 for c in load_set(store.settings).clips:
                     print(ball_track.draw(store, results, v, c.name))
+    elif args.ball_command == "fixed-objects":
+        from soccer_clips.track import ball_game, world
+
+        ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
+        for gid in ids:
+            game = store.load_game(gid)
+            if not (ball_game.tracks_dir(store, game) / "ball_raw.npz").exists():
+                print(f"{gid}: no ball detections yet, skipped")
+                continue
+            n = world.find_fixed(store, game)
+            ball_game.retrack(store, game)
+            print(f"{gid}: {n} detections on fixed objects blocked; path redone", flush=True)
     elif args.ball_command == "eval-games":
         from soccer_clips.track import ball_game
 
@@ -263,6 +275,9 @@ def main() -> None:
     tg.add_argument("--model", default="ball_yolo26x", help="ball model in models/")
     tg.add_argument("--retrack", action="store_true", help="redo the path from saved detections (no detecting)")
     tg.add_argument("--workers", type=int, default=1, help="detect chunks of long ranges in parallel processes")
+    fo = ball_sub.add_parser("fixed-objects", help="find things that never move (flags, chairs, bags) and block "
+                             "their detections from being the ball (~10 min a game, CPU), then redo the path")
+    fo.add_argument("game", help="game id, or 'all'")
     ev = ball_sub.add_parser("eval-games", help="score whole-game ball paths at the labelled frames in the games")
     ev.add_argument("--fixes", action="store_true", help="with hand fixes (circular where fixed frames are labels)")
     ball_sub.add_parser("export", help="turn train-set labels into a YOLO dataset (labels/dataset/)")
