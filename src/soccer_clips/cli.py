@@ -23,12 +23,72 @@ def cmd_list(store: Store, args: argparse.Namespace) -> None:
 
 
 def cmd_serve(store: Store, args: argparse.Namespace) -> None:
+    s = store.settings
+    host, port = args.host or s.host, args.port or s.port
+    if not args.no_reload:
+        return _serve_reloading(host, port)
     import uvicorn
 
     from soccer_clips.server.app import create_app
 
-    s = store.settings
-    uvicorn.run(create_app(store), host=args.host or s.host, port=args.port or s.port)
+    uvicorn.run(create_app(store), host=host, port=port)
+
+
+def _serve_reloading(host: str, port: int) -> None:
+    """
+    Run the server in a child process and restart it when the code changes, so fixes made in
+    the tagger always use the current ball filter. Exports and reel renders live in the
+    server's memory, so a restart waits until none is queued or running.
+    """
+    import subprocess
+    import sys
+    import urllib.request
+    from pathlib import Path
+
+    from watchfiles import watch
+
+    log = logging.getLogger("serve")
+    src = Path(__file__).parent
+    cmd = [sys.executable, "-m", "soccer_clips.cli", "serve", "--no-reload", "--host", host, "--port", str(port)]
+    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}/api/jobs"
+
+    def busy() -> bool:
+        try:
+            with urllib.request.urlopen(url, timeout=3) as r:
+                return any(j["status"] in ("queued", "running") for j in json.load(r))
+        except Exception:
+            return False  # not up (starting, or crashed): nothing to lose
+
+    def start() -> subprocess.Popen:
+        return subprocess.Popen(cmd)
+
+    def stop(child: subprocess.Popen) -> None:
+        child.terminate()
+        try:
+            child.wait(15)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+
+    child, pending, said = start(), False, False
+    log.info("watching %s for code changes (restarts wait for exports/renders to finish; --no-reload to turn off)", src)
+    try:
+        for changes in watch(src, watch_filter=lambda _change, path: path.endswith(".py"),
+                             rust_timeout=5000, yield_on_timeout=True):
+            if changes:
+                pending = True
+            if not pending:
+                continue
+            if busy():
+                if not said:
+                    log.info("code changed: restarting when the running exports/renders finish")
+                    said = True
+                continue
+            log.info("code changed: restarting the server")
+            stop(child)
+            child, pending, said = start(), False, False
+    finally:
+        stop(child)
 
 
 def cmd_bench(store: Store, args: argparse.Namespace) -> None:
@@ -236,6 +296,7 @@ def main() -> None:
     serve = sub.add_parser("serve", help="run the web server (scans on startup)")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
+    serve.add_argument("--no-reload", action="store_true", help="don't restart when the code changes")
     bench = sub.add_parser("bench", help="tracking benchmark clips (list them with no subcommand)")
     bench_sub = bench.add_subparsers(dest="bench_command")
     add = bench_sub.add_parser("add", help="add a tagged clip to the set (same name replaces it)")

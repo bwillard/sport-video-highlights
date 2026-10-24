@@ -16,7 +16,7 @@ Tag clips from full-game Veo videos, highlight a player, and build highlight ree
  - Drop new Veo downloads into `$SOCCER_FULL_DIR/<year>/`. The filename (minus `.mp4`) becomes the game id; it should end in `YYYY-MM-DD`.
  - `soccer-clips scan` registers new videos (also runs when the server starts).
  - `soccer-clips list` lists registered games.
- - `soccer-clips serve` runs the web server on `SOCCER_HOST:SOCCER_PORT` from `.env`. Restart it after code changes: the pages reload from disk, but the server keeps running the code it started with.
+ - `soccer-clips serve` runs the web server on `SOCCER_HOST:SOCCER_PORT` from `.env`. It restarts itself when the code changes (so fixes made in the tagger always use the current ball filter), waiting until no export or reel render is running, since those live in the server's memory; `--no-reload` turns that off. The pages are read from disk, so a browser reload picks up page changes.
  - Open `http://<server>:<port>/` to tag clips; the keyboard shortcuts are listed under the video. Tags and their 1–9 hotkeys are in `$SOCCER_GAMES_DIR/tags.json` (created with defaults on first run; edit by hand). `F` tags the player number in `SOCCER_DEFAULT_PLAYER` (`.env`), `P` adds any other number, `T` marks a team play; the "who" filter picks a player or team plays for exporting or reels.
  - Exported clips go to `$SOCCER_CLIPS_DIR/<year>/<game_id>/<clip_id>.mp4`.
 
