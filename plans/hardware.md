@@ -1,6 +1,6 @@
 # Hardware for ML (tracking, ball, identity)
 
-**Status:** Undecided (2026-10-18). CPU and cloud-GPU (L4) benchmarks done (tables below). The CPU handles players overnight but not the ball (~18 h/game). The variants that work best (YOLO11m at full resolution for players, YOLO11m on the centre crop for the ball) would take days per game on the CPU and ~1–3 h on an L4-class GPU.
+**Status:** Decided (2026-10-19): rent RunPod GPUs per job, each launch with your approval, with your OK for each kind of upload (bench clips, training data, then the game videos on a network volume). Fine-tuning and whole-game ball detection run there (about $0.50 a training run, $1.30 a game on a 5090); the filter, fixed-object finding and labelling run on this CPU. Adding a local GPU is still the option if the local-only rule should come back. Earlier status (2026-10-18): undecided, after the CPU and L4 benchmarks below.
 **Why it matters:** Phases 3.2–4 run detection on every frame of whole games, need higher resolution for the ball, and involve a lot of trial and error (settings, re-runs, training a ball model). Turnaround time decides how fast that goes.
 
 ## The box today

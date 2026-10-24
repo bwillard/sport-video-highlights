@@ -1,6 +1,6 @@
 # Phase 3 — Track & Highlight Players
 
-**Status:** 3.1 built (2026-10-15): freeze-frame callout set with `C` in the tagger, rendered as a spotlight + ring + arrow freeze in reels. YOLO snap not done (optional). Re-scoped 2026-10-18 from "a marker on her in one clip" to "track every player through the whole game, then highlight any of them": 3.2–3.5 not started.
+**Status:** 3.1 built (2026-10-15): freeze-frame callout set with `C` in the tagger, rendered as a spotlight + ring + arrow freeze in reels. YOLO snap not done (optional). Re-scoped 2026-10-18 from "a marker on her in one clip" to "track every player through the whole game, then highlight any of them": 3.2–3.5 not started. The game ball is tracked and drawn in the tagger already (Phase 4.1, `B`), which is a first version of the canvas overlay 3.3 needs: synced to the video per frame, solid/dashed for seen/filled.
 **Goal:** Make it obvious who to watch, for any player on the team, with as few clicks as possible, on a 4-core CPU. Naming the players and tracking the ball is [Phase 4](phase4_identify.md); this phase builds the tracking data and everything that draws from it.
 
 ## Constraints that shape this phase

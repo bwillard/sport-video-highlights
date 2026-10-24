@@ -1,7 +1,7 @@
 # Phase 4 — Identify Players & Track the Ball
 
-**Status:** Not started. Re-scoped 2026-10-18 from "auto-find her" to "name every player on our team and track the ball", to power two features: highlighting any chosen player ([Phase 3.3/3.4](phase3_highlight.md)) and finding clips where a player is near the ball (4.4).
-**Depends on:** the Phase 3.2 whole-game tracking job (tracklets per game).
+**Status (2026-10-24):** 4.1 ball tracking built and in use: every game has a whole-game ball track (fine-tuned YOLO26x detections from RunPod, then the temporal filter and fixed-object blocking here), shown and corrected in the tagger. On the labelled game frames: found 66%, wrong 10%, missed 24%. 4.2–4.4 not started. Re-scoped 2026-10-18 from "auto-find her" to "name every player on our team and track the ball", to power two features: highlighting any chosen player ([Phase 3.3/3.4](phase3_highlight.md)) and finding clips where a player is near the ball (4.4).
+**Depends on:** 4.2–4.4 need the Phase 3.2 whole-game player tracking (tracklets per game); 4.1 turned out not to (the ball runs its own pass).
 
 ## What this phase produces
 For each game, on top of Phase 3.2's tracklets:
@@ -24,17 +24,23 @@ The ball is hard to *find* (5–15 px, motion blur, hidden by legs, look-alikes:
 5. **Possession hint:** when the ball is hidden but was last seen at a player's feet, it's probably still with that player; good enough for "near the ball".
 
 **Tasks**
-- [ ] Measure stock `sports ball` recall/precision on hand-checked frames (part of the Phase 3.2 benchmark)
-- [ ] Centre-crop high-res pass; compare
+- [x] Measure stock `sports ball` recall/precision on hand-checked frames (2026-10-19: best stock 57% found, YOLO11m on the centre crop)
+- [x] Centre-crop high-res pass; compare (the 1280×720 native-resolution centre crop is what the ball model runs on)
 - [x] Ball labelling page (2026-10-18): `/label-ball`, sets `bench` (149 frames over the bench clips, for scoring) and `train` (random game frames away from the bench clips); `soccer-clips ball sample/score`. Labels in `labels/ball.jsonl`.
 - [x] Label the bench set and score the variants (`soccer-clips ball score --results results-l4`): done 2026-10-19, see Findings
 - [x] Guess mode for labelling (2026-10-19): `soccer-clips ball guess train` stores YOLO11m-centre's best guess per frame; Enter accepts it. Never shown for bench.
 - [x] Train set: 500 frames (seed 1), ~100 per game, half from tagged clips, none within 10s of a bench clip (2026-10-19)
 - [x] Label the train set (2026-10-19): 318 visible, 70 hidden, 71 none, 41 can't tell; of 237 model guesses, 169 accepted and 68 wrong (spare balls, heads, etc.: useful hard negatives)
 - [x] Training pipeline (2026-10-19): `soccer-clips ball export/train/eval`. Export: 1280×720 native crops (centre + one random crop around the ball), boxes from your sizes or a fitted size-vs-height line, the ball kept as COCO class 32 so the pretrained head carries over; 700 train / 39 val images from separate frames. Eval on the bench frame images reproduces the clip-based score (stock YOLO11m centre: 57% / 80%).
-- [ ] Fine-tune a ball model (YOLO11m first; also try YOLO11l/x and YOLO26 as bases) on a rented GPU, score on the bench labels
-- [x] Temporal filter + gap filling (2026-10-21): `track/camera.py` (camera motion), `track/ball_track.py` (tracklets + DP chain + fill), `soccer-clips ball track`. Whole-game output to `ball.npz` comes with the tracking job (3.2).
-- [ ] Ball overlay in the tagger to check it by eye
+- [x] Fine-tune a ball model on a rented GPU, score on the bench labels (2026-10-19/21: YOLO26x, run 2 with other balls boxed: 76% of visible game balls, 92% of detections real)
+- [x] Temporal filter + gap filling (2026-10-21): `track/camera.py` (camera motion), `track/ball_track.py` (tracklets + DP chain + fill), `soccer-clips ball track`.
+- [x] Whole-game ball tracks (2026-10-22/23): `soccer-clips gpu run ball-games` (RunPod, videos on the network volume) into each game's `tracks/ball_raw.npz` + `ball.npz`
+- [x] Ball overlay in the tagger to check it by eye (2026-10-22): `B`; debug layer of every detection `D` (2026-10-23)
+- [x] Fixes while watching (2026-10-22/23): `K` / `Shift+K` / `K` then `O`; each fix also a labelled frame, auto-assigned to train or bench
+- [x] Whole-game filter fixes and yardstick (2026-10-23): stillness over short spans, set pieces only when watched, `soccer-clips ball eval-games`
+- [x] Fixed objects blocked (2026-10-23/24): `track/world.py`, `soccer-clips ball fixed-objects`
+- [ ] Fine-tune again once enough fixes have become labels; re-run ball-games with the new model (needs a go for the GPU run)
+- [ ] Possession hint (5 above): not done; may come with 4.4
 
 ## 4.2 — Team split
 Cluster torso colours (k-means on the upper half of each box, in a colour space that handles shade, e.g. Lab) per game into our team / opponents / referees. Cheap, and it removes most candidates before identification. Home/away kits differ, so the clusters are per game, with one click to say "this cluster is us".
