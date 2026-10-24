@@ -44,3 +44,8 @@ def test_blocked_detections_skipped(settings):
     assert not len(ball_game.load_path(store, game)["frame"])  # nothing left to be the ball
     with TestClient(create_app(store)) as client:
         assert len(client.get(f"/api/games/{GAME}/ball/raw").json()["fixed"]) == len(blocked)
+
+
+def test_keyframe_frames_are_their_first_samples():
+    w = {"frames": np.array([0, 10, 20, 30, 40]), "key": np.array([0, 0, 1, -1, 1])}
+    assert world._keyframe_frames(w) == {0: 0, 1: 20}

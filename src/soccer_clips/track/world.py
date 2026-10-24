@@ -358,6 +358,9 @@ def find_fixed(store: Store, game: Game, log=print) -> int:
         log(f"{game.id}: registering frames against keyframes...")
         w = register(store, game, raw["ranges"].tolist(), log=log)
         ball_game.save_npz(path(store, game), **w)
+    if not bool(w.get("dense", False)):
+        w = densify(store, game, w, log=log)
+        ball_game.save_npz(path(store, game), **w)
     d = raw["dets"]
     f = d[:, 0].astype(int)
     key, kx, ky = place(w, raw["motion_frames"], raw["motion"], f, (d[:, 1] + d[:, 3]) / 2, (d[:, 2] + d[:, 4]) / 2)
@@ -375,3 +378,71 @@ def load_blocked(store: Store, game: Game, n_dets: int) -> np.ndarray | None:
         return None
     with np.load(p) as z:
         return z["blocked"] if int(z["n_dets"]) == n_dets else None
+
+
+DENSE_CANDIDATES = 12  # per keyframe, try linking to this many of the most similar other keyframes
+DENSE_INLIERS = 60
+
+
+def _keyframe_frames(world: dict) -> dict[int, int]:
+    """The sampled game frame each keyframe was made from (its first sample, where H is the identity)."""
+    out: dict[int, int] = {}
+    for f, k in zip(world["frames"].tolist(), world["key"].tolist()):
+        if k >= 0 and k not in out:
+            out[k] = f
+    return out
+
+
+def _grab(store: Store, game: Game, frame: int) -> np.ndarray | None:
+    """One frame, grey, at SCALE (an exact seek)."""
+    from soccer_clips import ffmpeg
+
+    w, h = int(game.width * SCALE), int(game.height * SCALE)
+    fps = game.fps_num / game.fps_den
+    seek_s, _ = ffmpeg.cut_window(game, frame / fps, (frame + 1) / fps)
+    out = subprocess.run([store.settings.ffmpeg, "-v", "error", "-ss", f"{seek_s:.6f}", "-i", str(store.original_path(game)),
+                          "-frames:v", "1", "-vf", f"scale={w}:{h},format=gray", "-f", "rawvideo", "-"],
+                         capture_output=True, check=True).stdout
+    return np.frombuffer(out, np.uint8).reshape(h, w) if len(out) == w * h else None
+
+
+def densify(store: Store, game: Game, world: dict, log=print) -> dict:
+    """
+    Link keyframes that show the same place but were never linked (registration only links a
+    keyframe to the one the camera came from): match each keyframe to its most similar others
+    directly and add a link wherever the match is good. Then a spot is looked up in every view
+    of it one accurate hop away (fc-1 51:04: a still ball's views were 2-3 links apart).
+    """
+    orb = cv2.ORB_create(nfeatures=1500, fastThreshold=12)
+    match = _Matcher()
+    w, h = int(game.width * SCALE), int(game.height * SCALE)
+    mask = np.full((h, w), 255, np.uint8)
+    mask[int(LOGO[1] * SCALE):, int(LOGO[0] * SCALE):] = 0
+    feats = {}
+    for k, f in sorted(_keyframe_frames(world).items()):
+        img = _grab(store, game, f)
+        if img is None:
+            continue
+        kp, des = orb.detectAndCompute(img, mask)
+        pts = np.array([p.pt for p in kp], np.float32) / SCALE if kp else np.empty((0, 2), np.float32)
+        feats[k] = (pts, des, _thumb(img))
+    keys = sorted(feats)
+    thumbs = np.array([feats[k][2] for k in keys])
+    have = {(int(a), int(b)) for a, b in world["links"]} | {(int(b), int(a)) for a, b in world["links"]}
+    links, link_H = list(map(tuple, world["links"].tolist())), list(world["link_H"])
+    added = 0
+    for i, a in enumerate(keys):
+        sims = thumbs @ thumbs[i]
+        for j in np.argsort(-sims)[1:DENSE_CANDIDATES + 1]:
+            b = keys[int(j)]
+            if (a, b) in have:
+                continue
+            H, n = match.homography(feats[a][0], feats[a][1], feats[b][0], feats[b][1])
+            have |= {(a, b), (b, a)}
+            if H is not None and n >= DENSE_INLIERS:
+                links.append((a, b))
+                link_H.append(H)
+                added += 1
+    log(f"  {game.id}: {added} keyframe links added to {len(world['links'])}")
+    return {**world, "links": np.array(links, np.int32).reshape(-1, 2), "link_H": np.array(link_H).reshape(-1, 3, 3),
+            "dense": np.bool_(True)}
