@@ -231,6 +231,8 @@ For a chosen player, find the stretches of a game where they're involved with th
   - A detection is placed as (keyframe, position in it); for each spot: seconds something was detected there / seconds the spot was inside the detector's search area. Fixed objects ~1.0 (PRSC flag 374 s, hill item 144 s, chair 101 s); the game ball at labelled frames at most 0.18 in five games (fc-1: 3 of 95 at ~1.0, a ball lying out of play 113 s and one among the bench spares). Blocked: share >= 0.6 over >= 60 s.
   - Blocks 1-40% of a game's detections (PRSC 40%, fc-1 30%: lots of spare balls, bags, chairs). Whole-game labels (598 visible): found 64.7% -> 66.1%, wrong 13.7% -> 10.7%, ball claimed when none 33.7% -> 31.6%; no game found less (fc-1 wrong 23% -> 12%, PRSC 43% -> 35%).
 
+- **2026-10-24 — Faint fixed objects.** PRSC 22:12: a mark up the hill the detector sees only weakly (0.1-0.3), so only 153 of the 351 s its spot was searched. Also blocked now: share >= 0.25 over >= 150 s (the game ball's busiest spot at any label: 117 s). Real-ball detections blocked unchanged (3 of 443); whole-game wrong 10.9% -> 10.6%, PRSC wrong 18 -> 16 of 51. Also: a tagger server started before a filter change keeps the old filter for every fix made in it (it re-runs the path around each fix): restart it after changes.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

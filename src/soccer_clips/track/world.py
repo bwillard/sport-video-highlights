@@ -311,6 +311,8 @@ def spot_share(world: dict, key: np.ndarray, kx: np.ndarray, ky: np.ndarray, f: 
 FIXED_SHARE = 0.6  # detected at least this share of the time the spot is searched...
 FIXED_SECONDS = 60  # ...over at least this many seconds: a fixed object (PRSC: flag, chair, hill item ~1.0;
 # the game ball at labelled frames at most 0.18)
+FAINT_SHARE, FAINT_SECONDS = 0.25, 150  # or a faint one the detector only sometimes sees, over longer (PRSC
+# 22:12, a mark up the hill: 153 of 351 s). The busiest spot of the game ball at any label: 117 s.
 
 
 def fixed_path(store: Store, game: Game) -> Path:
@@ -337,7 +339,8 @@ def find_fixed(store: Store, game: Game, log=print) -> int:
     f = d[:, 0].astype(int)
     key, kx, ky = place(w, raw["motion_frames"], raw["motion"], f, (d[:, 1] + d[:, 3]) / 2, (d[:, 2] + d[:, 4]) / 2)
     detected, searched = spot_share(w, key, kx, ky, f, game.fps_num / game.fps_den)
-    blocked = (detected >= FIXED_SECONDS) & (detected >= FIXED_SHARE * searched) & (searched > 0)
+    blocked = (((detected >= FIXED_SECONDS) & (detected >= FIXED_SHARE * searched))
+               | ((detected >= FAINT_SECONDS) & (detected >= FAINT_SHARE * searched))) & (searched > 0)
     ball_game.save_npz(fixed_path(store, game), blocked=blocked, detected=detected, searched=searched,
                        n_dets=np.int64(len(d)))
     return int(blocked.sum())
