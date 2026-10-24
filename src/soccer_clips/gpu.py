@@ -517,6 +517,55 @@ done
                exclude=["*.part.*"])
 
 
+def people_games_job(store: Store, game_ids: list[str], mode: str, models: list[str], workers: int = 4) -> Job:
+    """
+    Person boxes for games (track/people.py), one detection pass per model, from the game videos
+    on the volume. Ranges already detected (people_raw_<model>.npz here) are sent and skipped.
+    Brings back each game's tracks/ folder; tracking itself runs here afterwards.
+    """
+    from soccer_clips.track import people
+    from soccer_clips.track.benchmark import models_dir
+
+    root = data_root(store)
+    uploads, big = [], []
+    for name in models:  # stock weights: sent when we have them, else the pod downloads them
+        w = models_dir(store) / f"{name}.pt"
+        if w.exists():
+            big.append(str(w.relative_to(root)))
+    for gid in game_ids:
+        game = store.load_game(gid)
+        uploads.append(str((store.game_dir(game.year, game.id) / "game.json").relative_to(root)))
+        for name in models:
+            raw = people.raw_path(store, game, name)
+            if raw.exists():
+                uploads.append(str(raw.relative_to(root)))
+        big.append(str(store.original_path(game).relative_to(root)))
+    quiet = '2>&1 | (grep --line-buffered -vE "━|^\\s*$" || true)'
+    script = f"""
+for m in {" ".join(models)}; do
+  for g in {" ".join(game_ids)}; do
+    soccer-clips people detect $g --mode {mode} --model $m --workers {workers} {quiet} || echo "FAILED: $m $g"
+  done
+done
+"""
+    return Job(name=f"people-games-{mode}", uploads=uploads, volume_files=big, script=script,
+               downloads=["games/*/*/tracks/people_raw_*.npz"], exclude=["*.part.*"])
+
+
+def install_people_raw(store: Store, results: Path, log=print) -> int:
+    """Copy people_raw_*.npz files brought back by people_games_job into the local games folders."""
+    import shutil
+
+    n = 0
+    for f in sorted((results / "games").glob("*/*/tracks/people_raw_*.npz")):
+        dest = data_root(store) / f.relative_to(results)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(f, dest)
+        n += 1
+        log(f"installed {dest.relative_to(data_root(store))}")
+    return n
+
+
 def volume_fill_job(store: Store) -> Job:
     """Every game video and the ball model, for the network volume (its volume_files are what matters)."""
     from soccer_clips.track.benchmark import models_dir

@@ -1,6 +1,6 @@
 # Phase 3 — Track & Highlight Players
 
-**Status:** 3.1 built (2026-10-15): freeze-frame callout set with `C` in the tagger, rendered as a spotlight + ring + arrow freeze in reels. YOLO snap not done (optional). Re-scoped 2026-10-18 from "a marker on her in one clip" to "track every player through the whole game, then highlight any of them": 3.2–3.5 not started. The game ball is tracked and drawn in the tagger already (Phase 4.1, `B`), which is a first version of the canvas overlay 3.3 needs: synced to the video per frame, solid/dashed for seen/filled.
+**Status:** 3.1 built (2026-10-15): freeze-frame callout set with `C` in the tagger, rendered as a spotlight + ring + arrow freeze in reels. YOLO snap not done (optional). Re-scoped 2026-10-18 from "a marker on her in one clip" to "track every player through the whole game, then highlight any of them". 3.2 started 2026-10-24 (code built, see "As built" under 3.2); 3.3–3.5 not started. The game ball is tracked and drawn in the tagger already (Phase 4.1, `B`), which is a first version of the canvas overlay 3.3 needs: synced to the video per frame, solid/dashed for seen/filled.
 **Goal:** Make it obvious who to watch, for any player on the team, with as few clicks as possible, on a 4-core CPU. Naming the players and tracking the ball is [Phase 4](phase4_identify.md); this phase builds the tracking data and everything that draws from it.
 
 ## Constraints that shape this phase
@@ -63,10 +63,21 @@ Detect and track every person (and the ball, see [Phase 4.1](phase4_identify.md#
 ```
 `tracklets.json` goes through `store.py` like every other JSON file; the `.npz` files are written once by the job (temp file + rename) and only read afterwards.
 
+**As built (2026-10-24): option B, detect on a GPU, track here** (`track/people.py`)
+- **Detect** (RunPod, once per model): stock YOLO on the full frame at 1920, conf ≥ 0.1, batch 4, in parallel chunks; saved to `tracks/people_raw_<model>.npz` (`ranges`, `dets`: frame, x1, y1, x2, y2, conf in pixels) after each chunk, so a stopped run resumes. Modes: `callouts` (clips with a callout ±2 s, for the bench), `clips`, `all`.
+- **Track** (this CPU, ~2 ms a frame): ultralytics' BoT-SORT on the saved boxes, with our camera step into each frame (from `ball_raw.npz`) applied to its predictions in place of its own image-based motion step; no re-ID. ByteTrack (no camera motion) is the baseline. Output `tracks/people_<model>.npz`: frame, track, x1, y1, x2, y2 (fractions), conf, ranges; track ids unique per game.
+- **Yardstick:** `people eval` checks each callout on a clip tagged with one player: box under it (or nearest centre within the ring), the share of the clip its track covers, and the run around the callout with gaps ≤ 1 s. Also tracks per minute and boxes per frame. Coverage can't tell a track that stayed on her from one that switched to a neighbour.
+- This replaces the earlier single-pass plan (`model.track()` on the pod), which would need a paid run for every tracker change, and BoT-SORT's own motion step was single-threaded and the bottleneck on a GPU.
+
 **Tasks**
 - [x] Benchmark clip set: 7 clips (87s) from all 5 games in `bench/clips.json`, cut with `soccer-clips bench cut` (2026-10-18)
 - [x] Benchmark YOLO11n/s × imgsz 640/1280 (+ centre crop) on the benchmark clips, for people *and* the ball: `soccer-clips bench run`, results in `bench/results/` (2026-10-18; see Findings)
-- [ ] Whole-game tracking job (background worker, resumable, progress in the UI)
+- [x] Detection job (2026-10-24): `soccer-clips people detect <game> --mode callouts|clips|all --model M`, GPU job `people-games`; resumable, parallel chunks
+- [x] Tracking from saved boxes (2026-10-24): `soccer-clips people track`, BoT-SORT + our camera steps
+- [x] Yardstick (2026-10-24): `soccer-clips people eval` at the callouts
+- [ ] Bench run on RunPod: callout stretches × YOLO11m / YOLO26m / l / x; pick a detector and tracker settings
+- [ ] Whole-game detection with the chosen model
+- [ ] Pitch filter (drop sideline spectators) — after looking at real tracks; team split (4.2) may do most of it
 - [ ] Gap interpolation + smoothing
 - [ ] Track store (`run.json`, `boxes.npz`, `tracklets.json`) + API returning boxes for a time window and player/tracklet
 
@@ -138,6 +149,7 @@ Use the smoothed track to drive a crop window:
 | YOLO11s @1280, fps on CPU | 2.1 (detect 464 ms); ONNX Runtime 2.6 |
 | Full 75-min game (135k frames), hours on CPU | n640: 4.3 every frame, 1.4 every 3rd; n1280: 7.8 / 2.6; s1280: 18 / 6 |
 | YOLO11m @1920 (full frame), fps on L4 GPU | 19.1 (~2 h per game); her track coverage 17–100%, median 100% |
+| Tracking from saved boxes, CPU | ~2 ms/frame (BoT-SORT + our camera steps, 3200G) |
 | Avg correction clicks / clip | |
 
 ## Findings

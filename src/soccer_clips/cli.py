@@ -225,6 +225,46 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
             print(f"{s['name']:8} {s['labelled']}/{s['total']} labelled")
 
 
+def cmd_people(store: Store, args: argparse.Namespace) -> None:
+    from soccer_clips.track import people
+
+    def ids(game: str) -> list[str]:
+        return [g.id for g in store.list_games()] if game == "all" else [game]
+
+    log = lambda m: print(m, flush=True)  # noqa: E731
+    if args.people_command == "detect":
+        for gid in ids(args.game):
+            n = people.detect_game(store, gid, mode=args.mode, model_name=args.model, workers=args.workers, log=log)
+            print(f"{gid}: {args.model} detected {n} new frame(s)", flush=True)
+        return
+    p = people.Params(tracker=args.tracker, track_buffer=args.buffer)
+    if args.people_command == "track":
+        for gid in ids(args.game):
+            game = store.load_game(gid)
+            if not people.raw_path(store, game, args.model).exists():
+                print(f"{gid}: no {args.model} boxes yet, skipped")
+                continue
+            rows = people.track_game(store, game, args.model, p, log=log)
+            print(f"{gid}: {len(rows)} boxes in {len(set(rows[:, 1].tolist()))} tracklets", flush=True)
+    elif args.people_command == "eval":
+        print("model      tracker    callouts  found  coverage (median / mean)  run s  tracks/min  people/frame")
+        out = {}
+        for model in args.models:
+            r = people.evaluate(store, model, p, players={args.player} if args.player else None, log=log)
+            out[model] = r
+            s = r["summary"]
+            if not s["callouts"]:
+                print(f"{model:10} no callouts inside detected ranges")
+                continue
+            print(f"{model:10} {args.tracker:10} {s['callouts']:8}  {s['found']:5.0%}  {s['coverage_median']:8.0%} / "
+                  f"{s['coverage_mean']:4.0%}         {s['run_s_median']:5}  {s['tracks_per_min']:10}  "
+                  f"{s['people_per_frame']:12}")
+        if args.json:
+            from pathlib import Path
+
+            Path(args.json).write_text(json.dumps(out, indent=2))
+
+
 def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
     from soccer_clips import gpu
 
@@ -235,8 +275,13 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         from soccer_clips.track.benchmark import models_dir
 
         if args.job == "ball-games":
+            if args.mode == "callouts":
+                raise SystemExit("ball-games takes --mode clips or all")
             ids = args.games or [g.id for g in store.list_games()]
             job = gpu.ball_games_job(store, ids, mode=args.mode, log=lambda m: print(m, flush=True))
+        elif args.job == "people-games":
+            ids = args.games or [g.id for g in store.list_games()]
+            job = gpu.people_games_job(store, ids, mode=args.mode, models=args.models, workers=args.workers)
         else:
             job = gpu.ball_train_job(store, stock=args.stock, train_bases=args.train, epochs=args.epochs,
                                      batch=args.batch)
@@ -249,6 +294,8 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         finally:  # install whatever came back, even from a run that failed part-way
             if args.job == "ball-games" and (runner.dir / "results").exists():
                 gpu.install_ball_tracks(store, runner.dir / "results", log=print)
+            if args.job == "people-games" and (runner.dir / "results").exists():
+                gpu.install_people_raw(store, runner.dir / "results", log=print)
         for w in sorted((results / "models").glob("ball_*.pt")):
             shutil.copy(w, models_dir(store) / w.name)
             print(f"model: {models_dir(store) / w.name}")
@@ -353,14 +400,38 @@ def main() -> None:
     ev.add_argument("--json", help="also write the scores to this file")
     score = ball_sub.add_parser("score", help="score benchmark ball detections against the bench labels")
     score.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
+    pp = sub.add_parser("people", help="person boxes and tracklets per game (Phase 3.2)")
+    pp_sub = pp.add_subparsers(dest="people_command", required=True)
+    det = pp_sub.add_parser("detect", help="detect people in a game's ranges (GPU; resumable)")
+    det.add_argument("game", help="game id, or 'all'")
+    det.add_argument("--mode", choices=["callouts", "clips", "all"], default="callouts",
+                     help="clips with a callout, every tagged clip, or the whole game (each +2s either side)")
+    det.add_argument("--model", default="yolo11m", help="stock detector, e.g. yolo11m, yolo26l")
+    det.add_argument("--workers", type=int, default=1, help="detect chunks of long ranges in parallel processes")
+    for name, help_ in [("track", "turn saved boxes into tracklets (CPU), saved as tracks/people_<model>.npz"),
+                        ("eval", "score tracklets at the callouts (how much of each clip her track covers)")]:
+        sp = pp_sub.add_parser(name, help=help_)
+        if name == "track":
+            sp.add_argument("game", help="game id, or 'all'")
+            sp.add_argument("--model", default="yolo11m", help="whose saved boxes")
+        else:
+            sp.add_argument("models", nargs="*", default=["yolo11m"], help="whose saved boxes (default yolo11m)")
+            sp.add_argument("--player", type=int, help="only callouts on clips tagged with this number")
+            sp.add_argument("--json", help="also write per-callout results to this file")
+        sp.add_argument("--tracker", choices=["botsort", "bytetrack"], default="botsort")
+        sp.add_argument("--buffer", type=int, default=30, help="frames a lost track is kept to be found again")
     g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")
     g_sub = g.add_subparsers(dest="gpu_command")
     run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")
-    run_gpu.add_argument("job", choices=["ball-train", "ball-games"],
-                         help="ball-train: fine-tune the ball model; ball-games: game-ball paths for games")
-    run_gpu.add_argument("--mode", choices=["clips", "all"], default="clips",
-                         help="ball-games: tagged clips only (uploads just those stretches) or whole games")
-    run_gpu.add_argument("--games", nargs="+", help="ball-games: game ids (default: all games)")
+    run_gpu.add_argument("job", choices=["ball-train", "ball-games", "people-games"],
+                         help="ball-train: fine-tune the ball model; ball-games: game-ball paths for games; "
+                         "people-games: person boxes for games")
+    run_gpu.add_argument("--mode", choices=["callouts", "clips", "all"], default="clips",
+                         help="ball-games / people-games: tagged clips only (ball-games uploads just those "
+                         "stretches) or whole games; people-games also takes callouts (clips with a callout)")
+    run_gpu.add_argument("--games", nargs="+", help="ball-games / people-games: game ids (default: all games)")
+    run_gpu.add_argument("--models", nargs="+", default=["yolo11m"], help="people-games: detectors, one pass each")
+    run_gpu.add_argument("--workers", type=int, default=4, help="people-games: detection processes per game")
     run_gpu.add_argument("--stock", nargs="*", default=[], help="stock bases to score first (the best other one is also fine-tuned)")
     run_gpu.add_argument("--train", nargs="+", default=["yolo26x"], help="bases to fine-tune")
     run_gpu.add_argument("--epochs", type=int, default=60)
@@ -385,7 +456,8 @@ def main() -> None:
     args = parser.parse_args()
 
     store = Store(get_settings())
-    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "gpu": cmd_gpu}[args.command](store, args)
+    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people,
+     "gpu": cmd_gpu}[args.command](store, args)
 
 
 if __name__ == "__main__":
