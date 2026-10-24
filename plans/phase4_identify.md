@@ -233,6 +233,8 @@ For a chosen player, find the stretches of a game where they're involved with th
 
 - **2026-10-24 — Faint fixed objects.** PRSC 22:12: a mark up the hill the detector sees only weakly (0.1-0.3), so only 153 of the 351 s its spot was searched. Also blocked now: share >= 0.25 over >= 150 s (the game ball's busiest spot at any label: 117 s). Real-ball detections blocked unchanged (3 of 443); whole-game wrong 10.9% -> 10.6%, PRSC wrong 18 -> 16 of 51. Also: a tagger server started before a filter change keeps the old filter for every fix made in it (it re-runs the path around each fix): restart it after changes.
 
+- **2026-10-24 — Bigger spots for fixed objects.** fc-1 56:10: a ball lying still all game wasn't blocked: as the camera panned it was placed in several keyframes, and within one keyframe its positions wobbled by ~30 px near the edge of the view (a Veo view is two lenses stitched, so one homography per frame is only approximate). At 15 px cells it split into pieces under a minute. Cells are now 35 px: that ball, the PRSC flag, chair, hill item and the faint hill mark all score ~1.0 (the faint-object tier is no longer needed and was dropped: with bigger cells it caught the real ball in a busy midfield spot at 0.30). Following links 3 hops instead of 1 was worse (errors add up). Real-ball detections at labels blocked: 5 of 449, all fc-1, at least three on that still ball (labels to check: 43:59, 56:14, 66:20). Whole-game labels about unchanged (found 65%, wrong 11%).
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

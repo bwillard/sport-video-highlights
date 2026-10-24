@@ -218,14 +218,54 @@ def load(store: Store, game: Game) -> dict | None:
         return {k: z[k] for k in z.files}
 
 
-CELL = 15.0  # keyframe pixels: detections at a spot are counted over this cell and its neighbours
+CELL = 35.0  # keyframe pixels: detections at a spot are counted over this cell and its neighbours. A Veo
+# view isn't an exact pinhole camera (two lenses stitched), so a still object's placements wobble by
+# ~30 px near a view's edge; at 15 px a ball lying still all game (fc-1 56:10) and a faint mark (PRSC
+# 22:12) were split into pieces too short or too sparse to count.
+MAX_HOPS = 1  # also look a spot up in keyframes this many links away (3 hops: errors add up, worse)
+FRAME = (1920, 1080)  # keyframe pixels are frame pixels
+
+
+def _views(world: dict, max_hops: int | None = None) -> dict[int, list[tuple[int, np.ndarray]]]:
+    """For each keyframe: (keyframe, H from its pixels to that one's) for itself and every keyframe
+    up to max_hops (default MAX_HOPS) links away, by the shortest chain of links."""
+    max_hops = MAX_HOPS if max_hops is None else max_hops
+    linked: dict[int, list[tuple[int, np.ndarray]]] = {}
+    for (a, b), H in zip(world["links"], world["link_H"]):
+        linked.setdefault(int(a), []).append((int(b), H))
+        linked.setdefault(int(b), []).append((int(a), np.linalg.inv(H)))
+    out = {}
+    for k in np.unique(world["key"][world["key"] >= 0]).tolist():
+        seen = {k: np.eye(3)}
+        frontier = [k]
+        for _ in range(max_hops):
+            nxt = []
+            for a in frontier:
+                for b, H in linked.get(a, []):
+                    if b not in seen:
+                        seen[b] = H @ seen[a]
+                        nxt.append(b)
+            frontier = nxt
+        out[k] = list(seen.items())
+    return out
+
+
+def _mapped(views: list[tuple[int, np.ndarray]], x: float, y: float):
+    """(keyframe, x, y) for the point in each view that shows it (inside that keyframe's picture)."""
+    for k, H in views:
+        p = H @ np.array([x, y, 1.0])
+        if p[2] <= 0:
+            continue
+        px, py = p[0] / p[2], p[1] / p[2]
+        if 0 <= px < FRAME[0] and 0 <= py < FRAME[1]:
+            yield k, px, py
 
 
 def spot_seconds(world: dict, key: np.ndarray, kx: np.ndarray, ky: np.ndarray, f: np.ndarray, fps: float) -> np.ndarray:
     """
     For each placed detection, in how many distinct seconds of the game something was detected
-    at the same spot: its cell and the 8 around it, in its keyframe and in linked keyframes
-    (its position mapped across). A fixed object racks up hundreds; the game ball moves on.
+    at the same spot: its cell and the 8 around it, in its keyframe and in keyframes up to
+    MAX_HOPS links away that show the same place (its position mapped across). A fixed object racks up hundreds; the game ball moves on.
     """
     sec = (f // round(fps)).astype(np.int64)
     ok = key >= 0
@@ -233,10 +273,7 @@ def spot_seconds(world: dict, key: np.ndarray, kx: np.ndarray, ky: np.ndarray, f
     ix, iy = np.floor(kx / CELL), np.floor(ky / CELL)
     for k, a, b, s in zip(key[ok], ix[ok].astype(int), iy[ok].astype(int), sec[ok]):
         cells.setdefault((int(k), int(a), int(b)), set()).add(int(s))
-    linked: dict[int, list[tuple[int, np.ndarray]]] = {}
-    for (a, b), H in zip(world["links"], world["link_H"]):
-        linked.setdefault(int(a), []).append((int(b), H))
-        linked.setdefault(int(b), []).append((int(a), np.linalg.inv(H)))
+    views = _views(world)
     cache: dict[tuple[int, int, int], int] = {}
 
     def around(k: int, a: int, b: int, out: set) -> None:
@@ -249,12 +286,8 @@ def spot_seconds(world: dict, key: np.ndarray, kx: np.ndarray, ky: np.ndarray, f
         c = (int(key[i]), int(ix[i]), int(iy[i]))
         if c not in cache:
             seen: set[int] = set()
-            around(*c, seen)
-            centre = [[(c[1] + 0.5) * CELL, (c[2] + 0.5) * CELL]]
-            for k2, H in linked.get(c[0], []):
-                (x2, y2), = _project(H, centre)
-                if np.isfinite(x2) and np.isfinite(y2):
-                    around(k2, int(np.floor(x2 / CELL)), int(np.floor(y2 / CELL)), seen)
+            for k2, x2, y2 in _mapped(views.get(c[0], [(c[0], np.eye(3))]), (c[1] + 0.5) * CELL, (c[2] + 0.5) * CELL):
+                around(k2, int(np.floor(x2 / CELL)), int(np.floor(y2 / CELL)), seen)
             cache[c] = len(seen)
         n[i] = cache[c]
     return n
@@ -280,26 +313,18 @@ def spot_share(world: dict, key: np.ndarray, kx: np.ndarray, ky: np.ndarray, f: 
     by_key: dict[int, np.ndarray] = {}
     for k in np.unique(world["key"][world["key"] >= 0]):
         by_key[int(k)] = np.nonzero((world["key"] == k) & good)[0]
-    linked: dict[int, list[tuple[int, np.ndarray]]] = {}
-    for (a, b), H in zip(world["links"], world["link_H"]):
-        linked.setdefault(int(a), []).append((int(b), H))
-        linked.setdefault(int(b), []).append((int(a), np.linalg.inv(H)))
+    views = _views(world)
     x0, y0, x1, y1 = SEARCH
     cache: dict[tuple[int, int, int], int] = {}
     for i in np.nonzero((key >= 0) & (detected >= min_seconds))[0]:
         c = (int(key[i]), int(np.floor(kx[i] / CELL)), int(np.floor(ky[i] / CELL)))
         if c not in cache:
-            centre = np.array([(c[1] + 0.5) * CELL, (c[2] + 0.5) * CELL, 1.0])
-            views = [(c[0], centre)]
-            for k2, H in linked.get(c[0], []):
-                p = H @ centre
-                views.append((k2, p / p[2]))
             secs: set[int] = set()
-            for k, p in views:
+            for k, px, py in _mapped(views.get(c[0], [(c[0], np.eye(3))]), (c[1] + 0.5) * CELL, (c[2] + 0.5) * CELL):
                 j = by_key.get(k)
                 if j is None or not len(j):
                     continue
-                q = inv[j] @ p  # into each sample frame that matched this keyframe
+                q = inv[j] @ np.array([px, py, 1.0])  # into each sample frame that matched this keyframe
                 fx, fy = q[:, 0] / q[:, 2], q[:, 1] / q[:, 2]
                 inside = (fx >= x0) & (fx < x1) & (fy >= y0) & (fy < y1)
                 secs.update(sec[j[inside]].tolist())
@@ -309,10 +334,8 @@ def spot_share(world: dict, key: np.ndarray, kx: np.ndarray, ky: np.ndarray, f: 
 
 
 FIXED_SHARE = 0.6  # detected at least this share of the time the spot is searched...
-FIXED_SECONDS = 60  # ...over at least this many seconds: a fixed object (PRSC: flag, chair, hill item ~1.0;
-# the game ball at labelled frames at most 0.18)
-FAINT_SHARE, FAINT_SECONDS = 0.25, 150  # or a faint one the detector only sometimes sees, over longer (PRSC
-# 22:12, a mark up the hill: 153 of 351 s). The busiest spot of the game ball at any label: 117 s.
+FIXED_SECONDS = 60  # ...over at least this many seconds: a fixed object (PRSC flag, chair, hill item, faint
+# hill mark, fc-1's ball lying still: all ~1.0; the game ball in play at labelled frames at most 0.34)
 
 
 def fixed_path(store: Store, game: Game) -> Path:
@@ -339,8 +362,7 @@ def find_fixed(store: Store, game: Game, log=print) -> int:
     f = d[:, 0].astype(int)
     key, kx, ky = place(w, raw["motion_frames"], raw["motion"], f, (d[:, 1] + d[:, 3]) / 2, (d[:, 2] + d[:, 4]) / 2)
     detected, searched = spot_share(w, key, kx, ky, f, game.fps_num / game.fps_den)
-    blocked = (((detected >= FIXED_SECONDS) & (detected >= FIXED_SHARE * searched))
-               | ((detected >= FAINT_SECONDS) & (detected >= FAINT_SHARE * searched))) & (searched > 0)
+    blocked = (detected >= FIXED_SECONDS) & (detected >= FIXED_SHARE * searched) & (searched > 0)
     ball_game.save_npz(fixed_path(store, game), blocked=blocked, detected=detected, searched=searched,
                        n_dets=np.int64(len(d)))
     return int(blocked.sum())
