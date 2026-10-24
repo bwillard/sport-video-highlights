@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<defs><clipPath id="c"><circle cx="32" cy="32" r="29.5"/></clipPath></defs>
+<circle cx="32" cy="32" r="29.5" fill="#fff"/>
+<g clip-path="url(#c)">
+<g fill="#111"><polygon points="32.0,22.0 41.5,28.9 37.9,40.1 26.1,40.1 22.5,28.9"/><polygon points="32.0,13.0 24.4,7.5 27.3,-1.5 36.7,-1.5 39.6,7.5"/><polygon points="50.1,26.1 53.0,17.2 62.4,17.2 65.3,26.1 57.7,31.7"/><polygon points="43.2,47.4 52.6,47.4 55.5,56.3 47.9,61.8 40.3,56.3"/><polygon points="20.8,47.4 23.7,56.3 16.1,61.8 8.5,56.3 11.4,47.4"/><polygon points="13.9,26.1 6.3,31.7 -1.3,26.1 1.6,17.2 11.0,17.2"/></g>
+<g stroke="#111" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><line x1="32.0" y1="22.0" x2="32.0" y2="12.5"/><line x1="41.5" y1="28.9" x2="50.5" y2="26.0"/><line x1="37.9" y1="40.1" x2="43.5" y2="47.8"/><line x1="26.1" y1="40.1" x2="20.5" y2="47.8"/><line x1="22.5" y1="28.9" x2="13.5" y2="26.0"/></g>
+</g>
+<circle cx="32" cy="32" r="29.5" fill="none" stroke="#111" stroke-width="3"/>
+</svg>

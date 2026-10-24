@@ -530,6 +530,10 @@ def create_app(store: Store | None = None) -> FastAPI:
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> FileResponse:  # browsers ask for it even with the <link> on every page
+        return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
+
     @app.get("/reel")
     def reel_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "reel.html")
