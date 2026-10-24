@@ -225,6 +225,8 @@ For a chosen player, find the stretches of a game where they're involved with th
 
   PRSC 22–24 min without fixes: 10 of the 18 hand-placed balls matched (was 1); with the fixes, 0 of 513 frames after the last fix on the flag (was all). `detections()` scanned every detection per frame; one sort makes whole-game retracks ~15 s instead of minutes.
 
+- **2026-10-23 — Shorter stillness span.** From 30:05 in PRSC the path sat 25 s on a white chair far to the side: during fast pans the camera estimate slips enough that over 1 s it seemed to move more than 30 px (60% still, under the 75% bar). Slip grows with the span, so stillness is now judged over 1/3 s (≤ 20 px): the chair moves a median 7 px per 1/3 s, the game ball 50. Path off the chair (0 of 737 frames, was all), still off the flag; game labels within noise (found 65.8% → 65.5%, wrong 13.2% → 12.7%, now 591 labelled frames); bench unchanged.
+
 ## Benchmarks / findings
 | Game | Ball recall | Ball false pos/min | Identity precision | Identity recall | Review answers | Notes |
 |---|---|---|---|---|---|---|

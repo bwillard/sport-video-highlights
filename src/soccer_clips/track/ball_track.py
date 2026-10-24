@@ -61,12 +61,14 @@ class Params:
     parked_penalty: float = 1.0  # times its detection score: 1 = never used (it can't beat start_cost)
     # Stillness is also judged over short spans, since over a minute the camera estimate drifts
     # (a still object far away can seem to wander 100+ px across pans): a tracklet is parked
-    # too if it moves at most the parked spread per still_lag frames for most of its life (a
+    # too if it moves at most still_px per still_lag frames for most of its life (a
     # still object's tracklet also has pan slips and the odd hop onto a passing ball). Whole
     # tracklets only: a ball held at a player's feet for a few seconds, then played on, stays
     # the game ball; tracklets are cut only at kicks (split_kicks).
-    still_lag: int = 30
-    still_px: float = 30.0  # moves at most this (or 2 radii) per still_lag: 25-40 all did about as well
+    still_lag: int = 10
+    still_px: float = 20.0  # moves at most this (or 2 radii) per still_lag. Camera slip grows with the span,
+    # so a short one: over 1 s (30 px) a far-off chair during fast pans still looked like it moved
+    # (PRSC 30:05); 25-40 px over 1 s and 20 px over 1/3 s scored alike on the game labels.
     still_share: float = 0.75
     fill_max_gap: int = 30  # interpolate gaps up to this many frames (1 s)
     # A parked ball the path leaves by being kicked (or arrives at as it comes to rest) is the
