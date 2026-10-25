@@ -75,7 +75,7 @@ Detect and track every person (and the ball, see [Phase 4.1](phase4_identify.md#
 - [x] Detection job (2026-10-24): `soccer-clips people detect <game> --mode callouts|clips|all --model M`, GPU job `people-games`; resumable, parallel chunks
 - [x] Tracking from saved boxes (2026-10-24): `soccer-clips people track`, BoT-SORT + our camera steps
 - [x] Yardstick (2026-10-24): `soccer-clips people eval` at the callouts
-- [ ] Bench run on RunPod: callout stretches × YOLO11m / YOLO26m / l / x; pick a detector and tracker settings
+- [x] Bench run on RunPod (2026-10-24): callout stretches × YOLO11m / YOLO26m / l / x → YOLO11m, default tracker settings (see Findings)
 - [ ] Whole-game detection with the chosen model
 - [ ] Pitch filter (drop sideline spectators) — after looking at real tracks; team split (4.2) may do most of it
 - [ ] Gap interpolation + smoothing
@@ -149,10 +149,12 @@ Use the smoothed track to drive a crop window:
 | YOLO11s @1280, fps on CPU | 2.1 (detect 464 ms); ONNX Runtime 2.6 |
 | Full 75-min game (135k frames), hours on CPU | n640: 4.3 every frame, 1.4 every 3rd; n1280: 7.8 / 2.6; s1280: 18 / 6 |
 | YOLO11m @1920 (full frame), fps on L4 GPU | 19.1 (~2 h per game); her track coverage 17–100%, median 100% |
-| Tracking from saved boxes, CPU | ~2 ms/frame (BoT-SORT + our camera steps, 3200G) |
+| Tracking from saved boxes, CPU | ~2–4 ms/frame (BoT-SORT + our camera steps, 3200G; ~45 boxes/frame) |
+| Callout bench (83 callouts on #38, 2026-10-24) | box under her 99–100% for all four models; her track's share of the clip: mean 68% / median 75% (YOLO11m), 68% / 85% (26l), 65% / 68% (26m), 65% / 71% (26x) |
 | Avg correction clicks / clip | |
 
 ## Findings
+- **2026-10-24** — Detector bench on the callout stretches (`people eval`, BoT-SORT + our camera steps): detection isn't the limit, all four models put a box under 99–100% of 83 callouts. Coverage of her track is a tie between models callout by callout (26l vs 11m: better on 21, worse on 22, the rest within 5 points), so YOLO11m, the cheapest, is the whole-game model. YOLO26m/x report ~15% more boxes and ~20% more tracks. A 90-frame lost-track buffer changes nothing. 16 of 83 callouts have her track covering < 25% of the clip, typically broken ~3 s in, at the same size as the good ones: crowds/occlusion, so the gains are in joining tracklets (4.3) and correction clicks (3.3), not the detector.
 - **2026-10-18** — First benchmark (`bench/results/`, 7 clips, 2,605 frames, Ryzen 3 3200G). Speeds in the table above. Detection is almost all of the time; decode is 2 ms/frame and BoT-SORT 12–20 ms/frame, so on a GPU the tracker (its camera-motion step) would become the limit at ~50–80 fps unless it runs on a smaller image. ONNX Runtime is only ~15% faster than PyTorch on this CPU.
   - **Finding her:** at the callout frame, the box under the click was found in 5/5 clips at 1280 (either model), 4/5 with s640, 3/5 with n640. Small, distant players need 1280 (or the s model).
   - **Keeping her:** track IDs break a lot. 40–190 track IDs per clip for ~15–25 people in view, and the track at her callout covered anywhere from 1% to 100% of its clip (typically 10–50%). Joining tracklets (correction clicks in 3.3, linking in Phase 4.3) is the main work, as expected.
