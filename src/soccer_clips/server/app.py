@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal, get_args
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -122,6 +122,14 @@ class BallFixIn(RequestBody):
 class OtherBallFixIn(OtherBallIn):
     frame: int = Field(ge=0)
     label_set: Literal["auto", "train", "bench"] | None = "auto"  # if the frame isn't labelled yet
+
+
+class PickIn(RequestBody):
+    frame: int = Field(ge=0)
+    player: int = Field(ge=0)
+    kind: Literal["is", "not"]
+    x: float | None = Field(default=None, ge=0, le=1)  # "not" without a position: the marker's own box
+    y: float | None = Field(default=None, ge=0, le=1)
 
 
 class VerdictIn(RequestBody):
@@ -515,6 +523,64 @@ def create_app(store: Store | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(422, str(e))
         return {"index": index, "labelled_as": used}
+
+    # ---- tracked players (Phase 3.2 / 3.3) ----
+
+    PEOPLE_MAX_FRAMES = 1800  # one request covers at most a minute
+
+    def people_labels(game: Game) -> dict:
+        from soccer_clips.track import people
+
+        t = people.tracks(store, game)
+        picks = people.load_picks(store, game)
+        return {"picks": picks, "segments": people.segments(t, picks) if t else []}
+
+    @app.get("/api/games/{game_id}/people")
+    def game_people(game_id: str) -> dict:
+        """Where the game has player tracks (ranges of game frames), and the labelled stretches."""
+        from soccer_clips.track import people
+
+        game = load(game_id)
+        t = people.tracks(store, game)
+        return {"ranges": t.ranges if t else [], **people_labels(game)}
+
+    @app.get("/api/games/{game_id}/people/boxes")
+    def game_people_boxes(game_id: str, start: int, end: int) -> Response:
+        """
+        Every tracked box in game frames [start, end), as little-endian float32 rows of frame,
+        track, x1, y1, x2, y2 (fractions of the frame), sorted by frame. Binary because a minute
+        is ~50k boxes.
+        """
+        from soccer_clips.track import people
+
+        if not 0 <= start <= end or end - start > PEOPLE_MAX_FRAMES:
+            raise HTTPException(422, f"ask for up to {PEOPLE_MAX_FRAMES} frames")
+        t = people.tracks(store, load(game_id))
+        if t is None:
+            return Response(b"", media_type="application/octet-stream")
+        a, b = t.window(start, end)
+        rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b]]).astype("<f4")
+        return Response(rows.tobytes(), media_type="application/octet-stream")
+
+    @app.post("/api/games/{game_id}/people/picks")
+    def game_people_pick(game_id: str, body: PickIn) -> dict:
+        """'This is #N' / 'the marker is on the wrong person from here'; returns the labels."""
+        from soccer_clips.track import people
+
+        game = load(game_id)
+        try:
+            pick = people.add_pick(store, game, body.frame, body.player, body.kind, body.x, body.y)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"pick": pick, **people_labels(game)}
+
+    @app.delete("/api/games/{game_id}/people/picks/last")
+    def game_people_undo(game_id: str) -> dict:
+        """Take back the last pick; returns it (null if there were none) and the labels."""
+        from soccer_clips.track import people
+
+        game = load(game_id)
+        return {"undone": people.undo_pick(store, game), **people_labels(game)}
 
     @app.get("/review-balls")
     def review_balls_page() -> FileResponse:

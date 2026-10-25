@@ -1,6 +1,6 @@
 # Phase 3 — Track & Highlight Players
 
-**Status:** 3.1 built (2026-10-15): freeze-frame callout set with `C` in the tagger, rendered as a spotlight + ring + arrow freeze in reels. YOLO snap not done (optional). Re-scoped 2026-10-18 from "a marker on her in one clip" to "track every player through the whole game, then highlight any of them". 3.2 started 2026-10-24 (code built, see "As built" under 3.2); 3.3–3.5 not started. The game ball is tracked and drawn in the tagger already (Phase 4.1, `B`), which is a first version of the canvas overlay 3.3 needs: synced to the video per frame, solid/dashed for seen/filled.
+**Status:** 3.1 built (2026-10-15): freeze-frame callout set with `C` in the tagger, rendered as a spotlight + ring + arrow freeze in reels. YOLO snap not done (optional). Re-scoped 2026-10-18 from "a marker on her in one clip" to "track every player through the whole game, then highlight any of them". 3.2 done 2026-10-25 (whole-game tracklets for every game); 3.3 first slice built 2026-10-25 (follow a player in the tagger, label by clicking); 3.4–3.5 not started. The game ball is tracked and drawn in the tagger already (Phase 4.1, `B`), which is a first version of the canvas overlay 3.3 needs: synced to the video per frame, solid/dashed for seen/filled.
 **Goal:** Make it obvious who to watch, for any player on the team, with as few clicks as possible, on a 4-core CPU. Naming the players and tracking the ball is [Phase 4](phase4_identify.md); this phase builds the tracking data and everything that draws from it.
 
 ## Constraints that shape this phase
@@ -92,11 +92,20 @@ Draw a marker that follows the chosen player while the video plays, in the tagge
 - **Gaps:** when the player has no box (off screen or lost), the marker fades out; it doesn't jump. Short gaps are already interpolated in 3.2.
 - **Corrections:** when the marker drops or jumps to someone else, pause and click the right player → that tracklet is labelled as this player from that frame on (this also gives Phase 4.3 labelled examples). A timeline strip shows where the player is present, missing, or uncertain.
 
+**As built (2026-10-25), first slice in the tagger**
+- `V` (👥 players) draws a thin box on every tracked person and an orange ring under the feet of the followed player, with "#38" above; a picker next to it chooses who (the default player and every number tagged on a clip in the game). The stat says "#38 here" / "not labelled here" / "not tracked here"; an orange strip under the timeline shows where they're labelled.
+- Boxes come from `GET /api/games/{id}/people/boxes?start=&end=` in 15 s chunks (450 frames, ~350 KB of float32 rows: frame, track, x1, y1, x2, y2), fetched around the playhead plus the next chunk; the server keeps one game's tracklets in memory (~1.2 s to load a game, then ~35 ms a chunk). Drawn from the same requestAnimationFrame loop as the ball ring.
+- `L` then click = "that's #N": labels the whole tracklet under the click. `Shift+L` = "the ring is on the wrong person from here" (the marker's tracklet is unlabelled from this frame on). `U` takes back the last one.
+- **Picks are clicks, not track ids** (`tracks/people_picks.json`: frame, x, y, player, kind, and the track id at the time as a hint), matched to the tracklet under them each time, so they survive re-tracking. A tracklet is split at the picks on it; each piece takes the label of the pick that starts it, and the piece before the first pick takes that pick's label.
+- Checked in headless Chrome on fc-1 at the 14:01 callout: one click labelled 80 s of her (one tracklet, 14:00.9–15:21), and the ring stayed on her through a camera pan.
+
 **Tasks**
-- [ ] Canvas overlay driven by `requestVideoFrameCallback`, with interpolation and fade-out on gaps
-- [ ] Click-to-pick a tracklet; player picker once tracklets are named
-- [ ] Correction clicks (relabel a tracklet from a frame on) + present/missing timeline strip
+- [x] Canvas overlay with the followed player's ring (requestAnimationFrame, like the ball ring)
+- [x] Click-to-pick a tracklet; follow picker by number
+- [x] Correction (Shift+L: wrong person from here) + undo + timeline strip of where they're labelled
+- [ ] Interpolation across short gaps between tracklets, and fade-out instead of vanishing
 - [ ] Same overlay on the reel page (reel time → game time via the segment map)
+- [ ] Measure correction clicks per clip on a real game
 
 **Ball overlay (2026-10-22):** the same canvas-over-video idea is built for the game ball: `B` in the tagger draws a ring on the tracked ball (`/api/games/{id}/ball`), as a first step towards 3.3's player marker.
 

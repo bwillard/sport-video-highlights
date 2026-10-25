@@ -27,6 +27,7 @@
   #ballStat { display: inline-block; min-width: 10.5em; }
   #debugStat { display: inline-block; min-width: 8.5em; }
   #markin { display: inline-block; min-width: 4em; }
+  #peopleStat { display: inline-block; min-width: 11em; }
 </style>
 </head>
 <body>
@@ -45,6 +46,9 @@
     <option value="auto">fixes → label too</option>
     <option value="">fixes → don't label</option>
   </select>
+  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.">👥 players</button>
+  <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
+  <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
   <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
   <span class="stat" title="Kickoff times, for the match clock and reel captions: H sets the 1st half, Shift+H the 2nd (H late in the game asks which)">kickoff <b id="kickoffs">–</b></span>
   <a href="/label-ball" title="Label the ball in sampled frames: the training and benchmark data for the ball detector">Ball labels</a>
@@ -76,6 +80,10 @@
       red × = a detection your fix suppressed, orange "fixed" = on something that never moves all game (a flag, chair, bag: never the ball),
       dashed box = the area the detector searches (balls outside it are never found).
       A grey circle with no ring = seen but dropped by the filter; nothing = never detected.<br>
+      Players: <kbd>V</kbd> show tracked players (thin boxes; orange ring = the player picked next to 👥) ·
+      <kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person) ·
+      <kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one.
+      The orange strip under the timeline = where they're labelled<br>
       the path is redone around the fix, and (unless switched off next to the ⚽ button) the frame becomes a labelled
       frame: most go to training, one 30-second moment in five to the benchmark
     </p>
@@ -282,6 +290,7 @@ function exportStatus(c) {
 // ---------- rendering ----------
 function render() {
   fillWhoFilter();
+  fillFollowWho();
   const list = visibleClips();
   $("count").textContent = `${list.length}/${clips.length} clips`;
   $("exportShown").textContent = `Export shown (${list.length})`;
@@ -413,6 +422,13 @@ function drawTimeline() {
     }
   }
   ctx.globalAlpha = 1;
+  if (showPeople && people?.gameId === game.id) {  // where the followed player is labelled
+    ctx.fillStyle = "#ff9f40";
+    const spf = 1 / fps;
+    for (const sg of people.segments) {
+      if (sg.player === followWho) ctx.fillRect(x(sg.start * spf), h - 4, Math.max(1, x((sg.end - sg.start) * spf)), 4);
+    }
+  }
   ctx.font = "11px system-ui, sans-serif";
   ctx.textBaseline = "top";
   for (const [k, name] of [[game.kickoff_1h_s, "1H"], [game.kickoff_2h_s, "2H"]]) {
@@ -498,6 +514,7 @@ function pointerToFrame(e) {
   };
 }
 overlay.addEventListener("pointerdown", (e) => {
+  if (picking) { stopPicking(); pickPlayer("is", pointerToFrame(e)); return; }
   if (otherMode) { otherClick(snapToDetection(pointerToFrame(e))); return; }
   if (fixingBall) {
     const p = snapToDetection(pointerToFrame(e));
@@ -729,6 +746,147 @@ function drawRaw(ctx) {
   ctx.restore();
 }
 $("debugBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleDebug(); });
+
+// ---------- tracked players (Phase 3.3) ----------
+// Every tracked box comes from the server in chunks of game frames (binary float32 rows of
+// frame, track, x1, y1, x2, y2), loaded around the playhead as it moves. The followed player
+// is whichever tracklet stretches the picks label with their number (people.segments).
+const CHUNK = 450;  // frames per request (15 s)
+let showPeople = false, people = null;  // people: {gameId, ranges, picks, segments}
+let followWho = null, picking = false;
+const boxChunks = new Map();  // chunk index -> Float32Array, or "loading"
+try { showPeople = localStorage.getItem("showPeople") === "1"; } catch {}
+
+async function loadPeople() {
+  if (!showPeople || !game || people?.gameId === game.id) return;
+  const id = game.id;
+  const p = await getJson(`/api/games/${encodeURIComponent(id)}/people`);
+  if (game?.id === id) people = { gameId: id, ...p };
+}
+function setLabels(r) {
+  if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
+}
+function togglePeople() {
+  showPeople = !showPeople;
+  try { localStorage.setItem("showPeople", showPeople ? "1" : "0"); } catch {}
+  showPeopleButton();
+  loadPeople();
+}
+function showPeopleButton() {
+  $("peopleBtn").classList.toggle("on", showPeople);
+  $("peopleStat").hidden = $("followWho").hidden = !showPeople;
+}
+function fillFollowWho() {
+  // the default player plus every number tagged on a clip in this game
+  const nums = new Set(clips.flatMap((c) => c.players));
+  if (defaultPlayer != null) nums.add(defaultPlayer);
+  let keep = followWho;
+  try { keep ??= +localStorage.getItem("followWho") || null; } catch {}
+  const pick = $("followWho");
+  pick.length = 0;
+  for (const n of [...nums].sort((a, b) => a - b)) pick.append(new Option(`follow #${n}`, n));
+  if (!nums.size) pick.append(new Option("follow: add a player number to a clip first", ""));
+  followWho = nums.has(keep) ? keep : nums.has(defaultPlayer) ? defaultPlayer : nums.size ? +pick.options[0].value : null;
+  pick.value = followWho ?? "";
+}
+$("followWho").addEventListener("change", (e) => {
+  followWho = +e.target.value || null;
+  try { localStorage.setItem("followWho", followWho ?? ""); } catch {}
+  e.target.blur();
+});
+function chunkRows(ci) {
+  // the chunk's rows, fetching it (and dropping far-away ones) if needed; null while loading
+  const c = boxChunks.get(ci);
+  if (c instanceof Float32Array) return c;
+  if (c === "loading" || ci < 0) return null;
+  boxChunks.set(ci, "loading");
+  const id = game.id;
+  fetch(`/api/games/${encodeURIComponent(id)}/people/boxes?start=${ci * CHUNK}&end=${(ci + 1) * CHUNK}`)
+    .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+    .then((buf) => { if (game?.id === id) boxChunks.set(ci, new Float32Array(buf)); })
+    .catch(() => boxChunks.delete(ci));
+  for (const k of boxChunks.keys()) if (k < ci - 2 || k > ci + 3) boxChunks.delete(k);
+  return null;
+}
+function boxesAt(f) {
+  // [i0, i1, rows] for frame f (rows have 6 values each), or null while loading
+  const ci = Math.floor(f / CHUNK), rows = chunkRows(ci);
+  chunkRows(ci + 1);  // the next chunk, ahead of playback
+  if (!rows) return null;
+  let lo = 0, hi = rows.length / 6;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (rows[mid * 6] < f) lo = mid + 1; else hi = mid; }
+  let i1 = lo;
+  while (i1 < rows.length / 6 && rows[i1 * 6] === f) i1++;
+  return [lo, i1, rows];
+}
+function followedTracks(f) {
+  return new Set(people.segments.filter((sg) => sg.player === followWho && f >= sg.start && f < sg.end).map((sg) => sg.track));
+}
+function drawPeople(ctx) {
+  if (!showPeople) return;
+  if (!people || people.gameId !== game?.id) { $("peopleStat").textContent = "players: loading…"; return; }
+  const f = Math.round(v.currentTime * fps), who = followWho == null ? "" : `#${followWho}`;
+  if (!people.ranges.some(([s, e]) => f >= s && f < e)) {
+    $("peopleStat").textContent = people.ranges.length ? "players: not tracked here" : "players: not tracked in this game";
+    return;
+  }
+  const at = boxesAt(f);
+  if (!at) { $("peopleStat").textContent = "players: loading…"; return; }
+  const [i0, i1, rows] = at, mine = followedTracks(f), r = videoRect();
+  let here = false;
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(255,255,255,0.28)";
+  for (let i = i0; i < i1; i++) {
+    const o = i * 6;
+    ctx.strokeRect(r.x + rows[o + 2] * r.w, r.y + rows[o + 3] * r.h, (rows[o + 4] - rows[o + 2]) * r.w, (rows[o + 5] - rows[o + 3]) * r.h);
+  }
+  for (let i = i0; i < i1; i++) {
+    const o = i * 6;
+    if (!mine.has(rows[o + 1])) continue;
+    here = true;
+    const x1 = r.x + rows[o + 2] * r.w, x2 = r.x + rows[o + 4] * r.w, y1 = r.y + rows[o + 3] * r.h, y2 = r.y + rows[o + 5] * r.h;
+    const cx = (x1 + x2) / 2, rx = Math.max(10, (x2 - x1) * 0.75), ry = Math.max(4, rx * 0.35);
+    ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.beginPath(); ctx.ellipse(cx, y2, rx, ry, 0, 0, 2 * Math.PI); ctx.stroke();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = "#ff9f40";
+    ctx.beginPath(); ctx.ellipse(cx, y2, rx, ry, 0, 0, 2 * Math.PI); ctx.stroke();
+    ctx.font = "bold 12px system-ui, sans-serif"; ctx.fillStyle = "#ff9f40"; ctx.textAlign = "center";
+    ctx.fillText(who, cx, y1 - 4);
+  }
+  ctx.restore();
+  $("peopleStat").textContent = `players: ${who || "nobody followed"} ${here ? "here" : "not labelled here"}`;
+}
+function startPicking() {
+  if (!showPeople) return flash("press V to show the players first", true);
+  if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
+  v.pause();
+  picking = true;
+  stage.classList.add("placing");
+  flash(`click on #${followWho} (Esc cancels)`);
+}
+function stopPicking() {
+  picking = false;
+  stage.classList.remove("placing");
+}
+v.addEventListener("play", stopPicking);
+async function pickPlayer(kind, p = null) {
+  if (!showPeople || !people) return flash("press V to show the players first", true);
+  if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
+  v.pause();
+  const body = { frame: Math.round(v.currentTime * fps), player: followWho, kind, ...(p || {}) };
+  const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);
+  setLabels(r);
+  flash(kind === "is" ? `that's #${followWho}: tracklet labelled` : `#${followWho}'s ring removed from here on`);
+}
+async function undoPick() {
+  if (!showPeople || !people) return flash("press V to show the players first", true);
+  const r = await api("DELETE", `/api/games/${encodeURIComponent(game.id)}/people/picks/last`);
+  setLabels(r);
+  flash(r.undone ? `took back the last player label (#${r.undone.player} at ${fmt(r.undone.frame / fps)})` : "no player labels to take back");
+}
+$("peopleBtn").addEventListener("click", (e) => { e.currentTarget.blur(); togglePeople(); });
+showPeopleButton();
 showDebugButton();
 showBallButton();
 
@@ -739,6 +897,7 @@ function drawOverlay() {
   const ctx = overlay.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  drawPeople(ctx);
   drawRaw(ctx);
   drawOthers(ctx);
   drawBall(ctx);
@@ -810,6 +969,7 @@ document.addEventListener("keydown", (e) => {
   if (placing && e.key === "Escape") { e.preventDefault(); cancelCallout(); return; }
   if (fixingBall && e.key === "Escape") { e.preventDefault(); stopBallFix(); return; }
   if (otherMode && e.key === "Escape") { e.preventDefault(); toggleOtherMode(false); return; }
+  if (picking && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
   // O while fixing the ball switches to other balls (as on the labelling page); otherwise it's the out point
   if ((fixingBall || otherMode) && e.key.toLowerCase() === "o" && !e.shiftKey) {
     e.preventDefault(); toggleOtherMode(); return;
@@ -831,6 +991,9 @@ document.addEventListener("keydown", (e) => {
     b: () => toggleBall(),
     d: () => toggleDebug(),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
+    v: () => togglePeople(),
+    l: () => (e.shiftKey ? pickPlayer("not") : startPicking()),
+    u: () => undoPick(),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),
@@ -950,6 +1113,9 @@ async function loadGame(id, startT = 0, clipId = null) {
   loadBall();
   raw = null;
   loadRaw();
+  people = null;
+  boxChunks.clear();
+  loadPeople();
 }
 
 function applyHash() {

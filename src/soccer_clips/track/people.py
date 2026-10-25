@@ -300,6 +300,151 @@ def load_tracks(store: Store, game: Game, model: str = DEFAULT_MODEL) -> tuple[n
         return rows, z["ranges"]
 
 
+# ---- following a player (Phase 3.3) ----
+# Clicks while watching say "this is #38" (kind "is") or "the marker is on the wrong person
+# from here" (kind "not"). They're kept as clicks (frame and position), not track ids, in
+# tracks/people_picks.json, so they still apply after the game is tracked again: each time,
+# a click is matched to the tracklet whose box it falls in. A tracklet's frames are split at
+# the clicks on it; each piece takes the label of the click that starts it, and the piece
+# before the first click takes that click's label too.
+
+class Tracks:
+    """A game's saved tracklets in memory, sorted by frame (positions as fractions of the frame)."""
+
+    def __init__(self, p: Path):
+        with np.load(p) as z:
+            order = np.argsort(z["frame"], kind="stable")
+            self.frame = z["frame"][order]
+            self.track = z["track"][order]
+            self.box = np.column_stack([z["x1"], z["y1"], z["x2"], z["y2"]])[order].astype(np.float32)
+            self.ranges = z["ranges"].tolist()
+        ids, first = np.unique(self.track, return_index=True)  # rows are in frame order: first = start
+        last = len(self.track) - 1 - np.unique(self.track[::-1], return_index=True)[1]
+        self.first = dict(zip(ids.tolist(), self.frame[first].tolist()))
+        self.last = dict(zip(ids.tolist(), self.frame[last].tolist()))
+
+    def window(self, start: int, end: int) -> tuple[int, int]:
+        """Row slice for frames [start, end)."""
+        return int(np.searchsorted(self.frame, start)), int(np.searchsorted(self.frame, end))
+
+    def at(self, frame: int, x: float, y: float, prefer: int | None = None, slack: float = 0.01) -> int | None:
+        """
+        Track id of the box containing (x, y) at `frame`, or None. Of several: `prefer` if it's one
+        of them (the track a click was recorded on, while the game hasn't been re-tracked), else the
+        smallest box.
+        """
+        a, b = self.window(frame, frame + 1)
+        bx = self.box[a:b]
+        inside = ((bx[:, 0] - slack <= x) & (x <= bx[:, 2] + slack) & (bx[:, 1] - slack <= y) & (y <= bx[:, 3] + slack))
+        if not inside.any():
+            return None
+        i = np.flatnonzero(inside)
+        if prefer is not None and prefer in self.track[a + i]:
+            return prefer
+        area = (bx[i, 2] - bx[i, 0]) * (bx[i, 3] - bx[i, 1])
+        return int(self.track[a + i[np.argmin(area)]])
+
+
+_cache: dict = {}
+
+
+def tracks(store: Store, game: Game, model: str = DEFAULT_MODEL) -> Tracks | None:
+    """The game's saved tracklets, kept in memory (one game at a time; reloaded when re-tracked)."""
+    p = path(store, game, model)
+    if not p.exists():
+        return None
+    key = (str(p), p.stat().st_mtime)
+    if key not in _cache:
+        _cache.clear()
+        _cache[key] = Tracks(p)
+    return _cache[key]
+
+
+def _picks_path(store: Store, game: Game) -> Path:
+    return tracks_dir(store, game) / "people_picks.json"
+
+
+def load_picks(store: Store, game: Game) -> list[dict]:
+    import json
+
+    p = _picks_path(store, game)
+    return json.loads(p.read_text())["picks"] if p.exists() else []
+
+
+def _save_picks(store: Store, game: Game, picks: list[dict]) -> None:
+    import json
+
+    from soccer_clips.store import atomic_write_text
+
+    atomic_write_text(_picks_path(store, game), json.dumps({"picks": picks}, indent=1) + "\n")
+
+
+def segments(t: Tracks, picks: list[dict]) -> list[dict]:
+    """Labelled stretches of tracklets from the picks: {track, start, end (exclusive), player}."""
+    by_track: dict[int, list[dict]] = {}
+    for p in picks:
+        tid = t.at(p["frame"], p["x"], p["y"], prefer=p.get("track"))
+        if tid is not None:
+            by_track.setdefault(tid, []).append(p)
+    out = []
+    for tid, ps in by_track.items():
+        ps = sorted(ps, key=lambda p: p["frame"])  # a later click on the same frame wins (stable sort)
+        edges = [t.first[tid]] + [p["frame"] for p in ps[1:]] + [t.last[tid] + 1]
+        for (a, b), p in zip(zip(edges, edges[1:]), ps):
+            if b > a and p["kind"] == "is":
+                out.append({"track": tid, "start": a, "end": b, "player": p["player"]})
+    return sorted(out, key=lambda s: s["start"])
+
+
+def follows(t: Tracks, picks: list[dict], player: int, frame: int) -> int | None:
+    """Track id labelled as `player` at `frame` (the marker), or None."""
+    for s in segments(t, picks):
+        if s["player"] == player and s["start"] <= frame < s["end"]:
+            a, b = t.window(frame, frame + 1)
+            if s["track"] in t.track[a:b]:
+                return s["track"]
+    return None
+
+
+def add_pick(store: Store, game: Game, frame: int, player: int, kind: str, x: float | None = None,
+             y: float | None = None, model: str = DEFAULT_MODEL) -> dict:
+    """
+    Record a click while watching. "is": the player under (x, y) is `player`. "not": the
+    marker for `player` is on the wrong person from this frame on; without (x, y) the
+    marker's own box is used. Raises ValueError if there's no tracked box there.
+    """
+    t = tracks(store, game, model)
+    if t is None:
+        raise ValueError("this game hasn't been through player tracking")
+    picks = load_picks(store, game)
+    if x is None or y is None:
+        if kind != "not":
+            raise ValueError("click on the player")
+        tid = follows(t, picks, player, frame)
+        if tid is None:
+            raise ValueError(f"no marker for #{player} here")
+        a, b = t.window(frame, frame + 1)
+        x1, y1, x2, y2 = t.box[a + int(np.flatnonzero(t.track[a:b] == tid)[0])]
+        x, y = float((x1 + x2) / 2), float((y1 + y2) / 2)
+        tid = t.at(frame, x, y, prefer=tid)
+    else:
+        tid = t.at(frame, x, y)
+    if tid is None:
+        raise ValueError("no tracked player there")
+    pick = {"frame": frame, "x": round(x, 4), "y": round(y, 4), "player": player, "kind": kind, "track": tid}
+    _save_picks(store, game, picks + [pick])
+    return pick
+
+
+def undo_pick(store: Store, game: Game) -> dict | None:
+    """Remove the last pick; returns it."""
+    picks = load_picks(store, game)
+    if not picks:
+        return None
+    _save_picks(store, game, picks[:-1])
+    return picks[-1]
+
+
 # ---- yardstick ----
 
 GAP_S = 1.0  # a run around the callout can have gaps up to this long

@@ -114,3 +114,65 @@ def test_people_job_uploads_only_what_it_needs(store):
     f.write_bytes(b"x")
     assert gpu.install_people_raw(store, results, log=lambda m: None) == 1
     assert people.raw_path(store, game, "yolo11m").read_bytes() == b"x"
+
+
+def two_players(store):
+    """Tracklets for two players standing apart for 100 frames: left (x 0.1-0.2), right (x 0.6-0.7)."""
+    game = store.load_game(GAME)
+    dets = [(f, 32, 60, 64, 120, 0.9) for f in range(100)] + [(f, 192, 60, 224, 120, 0.9) for f in range(100)]
+    ball_game.save_npz(people.raw_path(store, game, "yolo11m"), ranges=np.array([[0, 100]]),
+                       dets=np.array(dets, np.float32))
+    ball_game.save_npz(ball_game.tracks_dir(store, game) / "ball_raw.npz", ranges=np.array([[0, 100]]),
+                       dets=np.empty((0, 6)), motion_frames=np.arange(100), motion=np.repeat(np.eye(2, 3)[None], 100, 0))
+    people.track_game(store, game, "yolo11m")
+    return game
+
+
+def test_picks_label_tracklets_from_clicks(store):
+    game = two_players(store)
+    t = people.tracks(store, game)
+    left = t.at(50, 0.15, 0.5)
+    assert left is not None and t.at(50, 0.65, 0.5) not in (None, left) and t.at(50, 0.4, 0.5) is None
+    with pytest.raises(ValueError, match="no tracked player"):
+        people.add_pick(store, game, 50, 38, "is", 0.4, 0.5)
+    people.add_pick(store, game, 50, 38, "is", 0.15, 0.5)
+    (s,) = people.segments(t, people.load_picks(store, game))
+    assert s == {"track": left, "start": t.first[left], "end": t.last[left] + 1, "player": 38}
+    assert people.follows(t, people.load_picks(store, game), 38, 80) == left
+    # the marker drifts onto someone else at 70: "not" from there, no click needed
+    people.add_pick(store, game, 70, 38, "not")
+    picks = people.load_picks(store, game)
+    assert [(s["start"], s["end"]) for s in people.segments(t, picks)] == [(t.first[left], 70)]
+    assert people.follows(t, picks, 38, 80) is None and people.follows(t, picks, 38, 60) == left
+    with pytest.raises(ValueError, match="no marker"):
+        people.add_pick(store, game, 80, 38, "not")
+    assert people.undo_pick(store, game)["kind"] == "not"
+    assert people.follows(t, people.load_picks(store, game), 38, 80) == left
+    # clicks survive re-tracking: they're matched to whatever tracklet is under them now
+    people.track_game(store, game, "yolo11m", people.Params(track_buffer=10))
+    t2 = people.tracks(store, game)
+    assert t2 is not t and len(people.segments(t2, people.load_picks(store, game))) == 1
+
+
+def test_people_api(store):
+    from fastapi.testclient import TestClient
+
+    from soccer_clips.server.app import create_app
+
+    with TestClient(create_app(store)) as client:
+        url = f"/api/games/{GAME}/people"
+        assert client.get(url).json() == {"ranges": [], "picks": [], "segments": []}
+        assert client.post(f"{url}/picks", json={"frame": 5, "player": 38, "kind": "is", "x": 0.15, "y": 0.5}
+                           ).status_code == 422  # not tracked yet
+        two_players(store)
+        assert client.get(url).json()["ranges"] == [[0, 100]]
+        rows = np.frombuffer(client.get(f"{url}/boxes", params={"start": 10, "end": 20}).content, "<f4").reshape(-1, 6)
+        assert len(rows) == 20 and set(rows[:, 0]) == set(range(10, 20))
+        assert np.allclose(rows[rows[:, 2] < 0.5][0, 2:], [0.1, 60 / 180, 0.2, 120 / 180], atol=1e-4)
+        assert client.get(f"{url}/boxes", params={"start": 0, "end": 5000}).status_code == 422
+        r = client.post(f"{url}/picks", json={"frame": 50, "player": 38, "kind": "is", "x": 0.15, "y": 0.5}).json()
+        assert r["pick"]["player"] == 38 and len(r["segments"]) == 1
+        assert client.post(f"{url}/picks", json={"frame": 50, "player": 7, "kind": "is", "x": 0.4, "y": 0.5}
+                           ).json()["detail"] == "no tracked player there"
+        r = client.delete(f"{url}/picks/last").json()
+        assert r["undone"]["frame"] == 50 and r["segments"] == []
