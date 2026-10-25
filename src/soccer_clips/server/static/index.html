@@ -50,7 +50,7 @@
   <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
   <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
   <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
-  <span class="stat" title="Kickoff times, for the match clock and reel captions: H sets the 1st half, Shift+H the 2nd (H late in the game asks which)">kickoff <b id="kickoffs">–</b></span>
+  <span class="stat" title="Game time: when each half starts and ends. H / Shift+H set the 1st / 2nd half kickoff (H late in the game asks which); J / Shift+J the end of the 1st / 2nd half. Used for the match clock, reel captions, and cutting the video to game time (the Game time box on the right).">game <b id="kickoffs">–</b></span>
   <a href="/label-ball" title="Label the ball in sampled frames: the training and benchmark data for the ball detector">Ball labels</a>
   <a href="/reel" title="Build highlight reels from tagged clips, across games">Reels →</a>
 </div>
@@ -70,7 +70,8 @@
       <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>+</kbd>/<kbd>-</kbd> 😊/🙁 · <kbd>F</kbd> default player · <kbd>P</kbd> add a player number · <kbd>T</kbd> team play ·
       <kbd>N</kbd> note · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next clip · <kbd>R</kbd> replay clip ·
       <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
-      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff (H late in the game asks which)<br>
+      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff (H late in the game asks which) ·
+      <kbd>J</kbd>/<kbd>Shift</kbd>+<kbd>J</kbd> end of the 1st/2nd half (non-game time is shaded on the timeline)<br>
       <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
       <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)<br>
       Fixing the ball (ring on): <kbd>K</kbd> then click the ball = it's here · <kbd>Shift</kbd>+<kbd>K</kbd> = that ring is wrong, no ball to see ·
@@ -113,6 +114,15 @@
       <select id="reelPick" aria-label="reel to add to" title="Reel to add clips to, or start a new one"><option value="">new reel…</option></select>
       <button id="addToReel" title="Add every clip shown (after filters) to the chosen reel, in game order. Clips already in it are skipped.">Add shown to reel</button>
       <a id="openReel" hidden></a>
+    </div>
+    <div class="box" id="gametime">
+      <div class="row"><b>Game time</b> <span class="stat" id="gtTimes"></span></div>
+      <div class="row">
+        <button id="gtSuggest" title="Suggest when each half starts and ends, from the player tracks (fewer players on the pitch, everyone standing about, or only a distant crowd = not in play). Kickoffs you've set are kept. Check them before cutting: jump to each with the links, fix with H / J.">suggest times</button>
+        <button id="gtCut" title="Cut the video to game time: each half plus 10 s either side, copied from the original without re-encoding (the original stays in full/; the cut copy goes in cut/). Everything for this game (clips, labels, ball and player tracks, reels' jump-back) moves onto the new timeline; anything in non-game time is dropped. A backup is made first, so it can be undone.">cut video to game time…</button>
+        <button id="gtRestore" hidden title="Undo the cut: put back everything as it was before (from the backup); the original video is used again.">undo cut</button>
+      </div>
+      <div class="row stat" id="gtStatus"></div>
     </div>
     <div class="box" id="detail"></div>
   </aside>
@@ -311,6 +321,86 @@ function render() {
   if (game && document.activeElement !== $("desc")) $("desc").value = game.description || "";
   $("kickoffs").textContent = [game?.kickoff_1h_s, game?.kickoff_2h_s]
     .map((k, i) => (k == null ? null : `${i + 1}H ${fmt(k)}`)).filter(Boolean).join(" · ") || "– (press H)";
+  renderGameTime();
+}
+
+// ---------- game time ----------
+// The two halves (kickoff_1h_s..end_1h_s, kickoff_2h_s..end_2h_s): set with H / J, suggested from
+// the tracks, and used to cut the video down to game time (gametime.py).
+const GT_KEYS = [["kickoff_1h_s", "1H start"], ["end_1h_s", "1H end"], ["kickoff_2h_s", "2H start"], ["end_2h_s", "2H end"]];
+let cutJob = null;
+function renderGameTime() {
+  if (!game) return;
+  $("gtTimes").innerHTML = GT_KEYS.map(([k, name]) => game[k] == null ? `${name} –`
+    : `<a href="#" data-t="${game[k]}" title="jump there">${name} ${fmt(game[k])}</a>`).join(" · ");
+  const cut = game.cut;
+  $("gtCut").hidden = !!cut;
+  $("gtSuggest").hidden = !!cut;
+  $("gtRestore").hidden = !cut;
+  if (cut) {
+    const kept = cut.segments.reduce((n, sg) => n + sg.orig_end - sg.orig_start, 0) / fps / 60;
+    $("gtStatus").textContent = cutJob ? $("gtStatus").textContent
+      : `cut to game time: ${kept.toFixed(1)} of ${(cut.original_duration_s / 60).toFixed(1)} min kept`;
+  } else if (!cutJob) {
+    $("gtStatus").textContent = GT_KEYS.every(([k]) => game[k] != null) ? "" : "set all four times to cut the video";
+  }
+}
+$("gtTimes").addEventListener("click", (e) => {
+  const t = e.target.dataset?.t;
+  if (t != null) { e.preventDefault(); seekTo(+t); }
+});
+$("gtSuggest").addEventListener("click", async (e) => {
+  e.target.blur();
+  const sg = await getJson(`${gameUrl()}/gametime/suggest`);
+  const want = { kickoff_1h_s: sg.start_1h_s, end_1h_s: sg.end_1h_s, kickoff_2h_s: sg.start_2h_s, end_2h_s: sg.end_2h_s };
+  const lines = GT_KEYS.map(([k, name]) => `${name}: ${want[k] == null ? "not found" : fmt(want[k])}` +
+    (game[k] != null && want[k] != null && Math.abs(game[k] - want[k]) > 1 ? `  (now ${fmt(game[k])})` : ""));
+  const notes = sg.notes.length ? `\n\nNotes: ${sg.notes.join("; ")}` : "";
+  if (!confirm(`Suggested game time:\n\n${lines.join("\n")}${notes}\n\nOK to use these (times not found are left as they are). Check each with the links, and fix with H / J.`)) return;
+  const patch = Object.fromEntries(Object.entries(want).filter(([, val]) => val != null));
+  game = await api("PATCH", gameUrl(), patch);
+  clips = game.clips.sort((a, b) => a.start_s - b.start_s);
+  flash("game time suggested: check each time with the links in the Game time box");
+  render();
+});
+$("gtCut").addEventListener("click", async (e) => {
+  e.target.blur();
+  if (!GT_KEYS.every(([k]) => game[k] != null)) return flash("set all four times first (H / Shift+H, J / Shift+J)", true);
+  const total = (game.end_1h_s - game.kickoff_1h_s) + (game.end_2h_s - game.kickoff_2h_s);
+  if (!confirm(`Cut this game's video to game time?\n\n1st half ${fmt(game.kickoff_1h_s)}–${fmt(game.end_1h_s)}, ` +
+    `2nd half ${fmt(game.kickoff_2h_s)}–${fmt(game.end_2h_s)} (about ${(total / 60).toFixed(0)} of ` +
+    `${(game.duration_s / 60).toFixed(0)} min, plus 10 s either side).\n\nThe original video is kept; a cut copy is made and ` +
+    `everything for this game moves onto it. Clips, labels and tracks in non-game time are dropped. A backup is made ` +
+    `first, so "undo cut" can put it all back.`)) return;
+  v.pause();
+  const job = await api("POST", `${gameUrl()}/gametime/cut`);
+  cutJob = job.id;
+  $("gtStatus").textContent = "cutting… (about a minute)";
+  pollCut(game.id);
+});
+async function pollCut(id) {
+  const job = await getJson(`/api/jobs/${cutJob}`);
+  if (job.status === "queued" || job.status === "running") return setTimeout(() => pollCut(id), 2000);
+  cutJob = null;
+  if (job.status === "failed") { $("gtStatus").textContent = ""; return flash(`cut failed: ${job.error}`, true); }
+  const report = JSON.parse(job.output || "{}");
+  const dropped = Object.entries(report).filter(([k]) => k !== "kept")
+    .map(([k, val]) => `${k}: ${Array.isArray(val) ? val.length : val}`).join(", ");
+  flash(`cut to game time: kept ${report.kept}${dropped ? ` · ${dropped}` : ""}`);
+  if (game?.id === id) reloadGame(id);
+}
+$("gtRestore").addEventListener("click", async (e) => {
+  e.target.blur();
+  if (!confirm("Undo the cut and put back everything as it was before it (labels or clips added since are lost)?")) return;
+  v.pause();
+  await api("POST", `${gameUrl()}/gametime/restore`);
+  flash("cut undone: back on the original video");
+  reloadGame(game.id);
+});
+function reloadGame(id) {
+  // the video and every time in it changed: load the game afresh
+  game = null;
+  loadGame(id, 0);
 }
 
 function renderDetail() {
@@ -422,6 +512,14 @@ function drawTimeline() {
     }
   }
   ctx.globalAlpha = 1;
+  // non-game time (before kickoff, half time, after the final whistle): shaded
+  const gt = [game.kickoff_1h_s, game.end_1h_s, game.kickoff_2h_s, game.end_2h_s];
+  if (gt.every((t) => t != null) && !game.cut) {
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    for (const [a, b] of [[0, gt[0]], [gt[1], gt[2]], [gt[3], game.duration_s]]) {
+      if (b > a) ctx.fillRect(x(a), 14, x(b) - x(a), h - 14);
+    }
+  }
   if (showPeople && people?.gameId === game.id) {  // where the followed player is labelled
     ctx.fillStyle = "#ff9f40";
     const spf = 1 / fps;
@@ -964,6 +1062,14 @@ function kickoffKey(shift) {
   return setKickoff(1);
 }
 
+async function setHalfEnd(half) {
+  const key = half === 1 ? "end_1h_s" : "end_2h_s";
+  game = await api("PATCH", gameUrl(), { [key]: v.currentTime });
+  clips = game.clips.sort((a, b) => a.start_s - b.start_s);
+  flash(`end of the ${half === 1 ? "1st" : "2nd"} half set to ${fmt(v.currentTime)}`);
+  render();
+}
+
 async function setKickoff(half) {
   const key = half === 1 ? "kickoff_1h_s" : "kickoff_2h_s";
   game = await api("PATCH", gameUrl(), { [key]: v.currentTime });
@@ -1031,6 +1137,7 @@ document.addEventListener("keydown", (e) => {
     Delete: deleteSelected,
     Backspace: deleteSelected,
     h: () => kickoffKey(e.shiftKey),
+    j: () => setHalfEnd(e.shiftKey ? 2 : 1),
     c: () => (e.shiftKey ? patchSelected({ callout: null }) : startCallout()),
     "=": () => setRating("happy"),  // the +/= key, with or without Shift
     "+": () => setRating("happy"),
@@ -1111,7 +1218,7 @@ async function loadGame(id, startT = 0, clipId = null) {
   try { localStorage.setItem("game", id); } catch {}
   // Start fresh: paused at the requested time (0:00 by default) and 1× speed.
   v.pause();
-  v.src = `/video/${encodeURIComponent(id)}`;
+  v.src = `/video/${encodeURIComponent(id)}${game.cut ? "?cut=" + encodeURIComponent(game.cut.made_at) : ""}`;  // a new URL once cut
   v.addEventListener("loadedmetadata", () => { v.currentTime = startT; }, { once: true });
   v.defaultPlaybackRate = v.playbackRate = 1;
   $("rate").textContent = 1;

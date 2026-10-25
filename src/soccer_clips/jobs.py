@@ -21,8 +21,8 @@ JobStatus = Literal["queued", "running", "done", "failed"]
 
 class Job(BaseModel):
     id: str = Field(default_factory=lambda: secrets.token_hex(4))
-    kind: Literal["export", "render"]
-    game_id: str | None = None  # export
+    kind: Literal["export", "render", "cut"]
+    game_id: str | None = None  # export, cut
     clip_id: str | None = None  # export
     fast: bool = False  # export
     reel_id: str | None = None  # render

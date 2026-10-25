@@ -298,6 +298,39 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
             Path(args.json).write_text(json.dumps(out, indent=2))
 
 
+def cmd_gametime(store: Store, args: argparse.Namespace) -> None:
+    from soccer_clips import gametime
+
+    def fmt(t):
+        return "-" if t is None else f"{int(t // 60)}:{int(t % 60):02d}"
+
+    log = lambda m: print(m, flush=True)  # noqa: E731
+    ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
+    for gid in ids:
+        game = store.load_game(gid)
+        if args.gametime_command == "suggest":
+            sg = gametime.suggest(store, game)
+            print(f"{gid}: 1st half {fmt(sg.start_1h_s)}-{fmt(sg.end_1h_s)}, 2nd half {fmt(sg.start_2h_s)}-"
+                  f"{fmt(sg.end_2h_s)}" + (f"  ({'; '.join(sg.notes)})" if sg.notes else ""))
+            if args.apply:
+                with store.edit_game(gid) as g:
+                    for key, val in (("kickoff_1h_s", sg.start_1h_s), ("end_1h_s", sg.end_1h_s),
+                                     ("kickoff_2h_s", sg.start_2h_s), ("end_2h_s", sg.end_2h_s)):
+                        if val is not None:
+                            setattr(g, key, val)
+        elif args.gametime_command == "cut":
+            if game.cut:
+                print(f"{gid}: already cut")
+                continue
+            t = gametime.periods(game)
+            if not args.yes:
+                raise SystemExit(f"{gid}: would keep 1st half {fmt(t[0][0])}-{fmt(t[0][1])} and 2nd half "
+                                 f"{fmt(t[1][0])}-{fmt(t[1][1])}; add --yes to cut")
+            print(f"{gid}: {gametime.cut_game(store, gid, log=log)}")
+        elif args.gametime_command == "restore":
+            gametime.restore(store, gid, log=log)
+
+
 def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
     from soccer_clips import gpu
 
@@ -484,6 +517,16 @@ def main() -> None:
                         help=f"join tracklets across gaps up to this many seconds (0 = off; default {dp.link_gap_s})")
         sp.add_argument("--link-kit", type=float, default=dp.link_kit, help="...if their kits are at most this far apart")
         sp.add_argument("--link-heights", type=float, default=1.0, help="...and the start is this close (box heights)")
+    gt = sub.add_parser("gametime", help="when each half is played; cut videos down to game time")
+    gt_sub = gt.add_subparsers(dest="gametime_command", required=True)
+    sg = gt_sub.add_parser("suggest", help="suggest half start/end times from the player tracks")
+    sg.add_argument("game", help="game id, or 'all'")
+    sg.add_argument("--apply", action="store_true", help="store the suggestions (times not found are left alone)")
+    ct = gt_sub.add_parser("cut", help="cut the video to game time and move the game's data onto it (backed up)")
+    ct.add_argument("game", help="game id, or 'all'")
+    ct.add_argument("--yes", action="store_true", help="go ahead (without it, just says what would be kept)")
+    rs = gt_sub.add_parser("restore", help="undo a cut from its backup")
+    rs.add_argument("game")
     g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")
     g_sub = g.add_subparsers(dest="gpu_command")
     run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")
@@ -520,7 +563,7 @@ def main() -> None:
     args = parser.parse_args()
 
     store = Store(get_settings())
-    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people,
+    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people, "gametime": cmd_gametime,
      "gpu": cmd_gpu}[args.command](store, args)
 
 

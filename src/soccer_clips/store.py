@@ -111,10 +111,20 @@ class Store:
             return _tags_adapter.validate_json(path.read_text())
 
     def original_path(self, game: Game) -> Path:
+        """The video the game's times refer to: the copy cut to game time once there is one
+        (gametime.cut_game), else the original download."""
+        if game.cut:
+            return self.settings.cut_root / game.cut.file
+        return self.full_path(game)
+
+    def full_path(self, game: Game) -> Path:
+        """The original download, never changed (kept even after a cut)."""
         return self.settings.full_dir / game.original
 
     def playback_path(self, game: Game) -> Path:
-        """Keyframe-dense copy if one exists, otherwise the original."""
+        """Keyframe-dense copy if one exists, otherwise the original (or the cut copy)."""
+        if game.cut:
+            return self.original_path(game)
         if game.proxy:
             proxy = self.settings.proxy_dir / game.proxy
             if proxy.exists():

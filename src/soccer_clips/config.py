@@ -42,6 +42,11 @@ class Settings:
     cpu_crf: int = 20  # CPU quality: same scale
     cpu_speed: str = "medium"  # x264 preset: slower = smaller file at the same quality
     bench_dir: Path | None = None  # tracking benchmark clips; None = a "bench" folder next to games_dir
+    cut_dir: Path | None = None  # videos cut to game time; None = a "cut" folder next to games_dir
+
+    @property
+    def cut_root(self) -> Path:
+        return self.cut_dir or self.games_dir.parent / "cut"
 
 
 def _required_dir(name: str) -> Path:
@@ -127,4 +132,5 @@ def get_settings() -> Settings:
         cpu_crf=_int("SOCCER_CPU_CRF", 20, 0, 51),
         cpu_speed=_choice("SOCCER_CPU_SPEED", "medium", X264_SPEEDS),
         bench_dir=Path(os.environ["SOCCER_BENCH_DIR"]) if os.environ.get("SOCCER_BENCH_DIR") else None,
+        cut_dir=Path(os.environ["SOCCER_CUT_DIR"]) if os.environ.get("SOCCER_CUT_DIR") else None,
     )

@@ -4,6 +4,7 @@ video streaming (with HTTP Range so the browser can seek), the tagging page
 and the reel page.
 """
 
+import json
 import logging
 import re
 
@@ -46,6 +47,8 @@ class GamePatch(RequestBody):
     description: str | None = None
     kickoff_1h_s: float | None = None
     kickoff_2h_s: float | None = None
+    end_1h_s: float | None = None
+    end_2h_s: float | None = None
 
 
 class ClipCreate(RequestBody):
@@ -201,6 +204,8 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.patch("/api/games/{game_id}")
     def patch_game(game_id: str, patch: GamePatch) -> Game:
         load(game_id)
+        if jobs.active(kind="cut", game_id=game_id):
+            raise HTTPException(409, "the game is being cut to game time; try again when it's done")
         with store.edit_game(game_id) as game:
             # exclude_unset so an explicit null clears a field (e.g. a kickoff).
             for key, value in patch.model_dump(exclude_unset=True).items():
@@ -277,6 +282,49 @@ def create_app(store: Store | None = None) -> FastAPI:
             jobs.submit(export_job(game_id, cid, body.fast), lambda job: run_export(store, job))
             for cid in body.clip_ids
         ]
+
+    # ---- game time (gametime.py) ----
+
+    @app.get("/api/games/{game_id}/gametime/suggest")
+    def gametime_suggest(game_id: str) -> dict:
+        """Suggested half start/end times from the player tracks (to check in the tagger)."""
+        import dataclasses
+
+        from soccer_clips import gametime
+
+        return dataclasses.asdict(gametime.suggest(store, load(game_id)))
+
+    @app.post("/api/games/{game_id}/gametime/cut", status_code=202)
+    def gametime_cut(game_id: str) -> Job:
+        """Cut the video to game time and move the game's data onto it (a background job)."""
+        from soccer_clips import gametime
+
+        game = load(game_id)
+        if game.cut:
+            raise HTTPException(409, "already cut to game time")
+        try:
+            gametime.periods(game)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        if existing := jobs.active(kind="cut", game_id=game_id):
+            return existing
+
+        def run(job: Job) -> None:
+            report = gametime.cut_game(store, game_id, log=lambda m: logger.info(m))
+            job.output = json.dumps(report)
+
+        return jobs.submit(Job(kind="cut", game_id=game_id), run)
+
+    @app.post("/api/games/{game_id}/gametime/restore")
+    def gametime_restore(game_id: str) -> Game:
+        """Undo a cut: everything back as it was (from the backup made before cutting)."""
+        from soccer_clips import gametime
+
+        try:
+            gametime.restore(store, game_id, log=lambda m: logger.info(m))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return load(game_id)
 
     @app.get("/api/jobs")
     def list_jobs() -> list[Job]:

@@ -81,6 +81,25 @@ class Clip(BaseModel):
         return self
 
 
+class CutSegment(BaseModel):
+    """A stretch of the original video kept in the cut one: original frames [orig_start, orig_end),
+    which are frames [new_start, new_start + orig_end - orig_start) of the cut video."""
+
+    orig_start: int
+    orig_end: int
+    new_start: int
+
+
+class GameCut(BaseModel):
+    """The game video cut down to game time (gametime.cut_game); all the game's times refer to it."""
+
+    file: str  # relative to the cut folder, e.g. "2026/gu11-vs-saa-2026-10-10.mp4"
+    segments: list[CutSegment]
+    original_duration_s: float
+    backup: str | None = None  # folder holding everything as it was before the cut (relative to the data root)
+    made_at: datetime = Field(default_factory=_now)
+
+
 class Game(BaseModel):
     schema_version: int = 1
     id: str  # video filename without .mp4; also the folder name under games_dir/<year>/
@@ -100,6 +119,9 @@ class Game(BaseModel):
     has_audio: bool = True
     kickoff_1h_s: float | None = None
     kickoff_2h_s: float | None = None
+    end_1h_s: float | None = None  # final whistle of the 1st half (game time: kickoff_1h_s..end_1h_s)
+    end_2h_s: float | None = None  # final whistle of the game
+    cut: GameCut | None = None  # set once the video has been cut to game time
     created_at: datetime
     clips: list[Clip] = []
 

@@ -112,3 +112,6 @@ _(fill in as we go)_
 | Originals scrub OK in browser over LAN? | Yes (tested 2026-10-13) — no proxy needed |
 | Proxy encode time (CPU), if needed | |
 | Proxy file size, if needed | |
+
+## Game time and cut videos (2026-10-25)
+Each game stores its two halves (`kickoff_1h_s`, `end_1h_s`, `kickoff_2h_s`, `end_2h_s`). Once checked, the video can be cut to game time (`gametime.py`): pieces copied keyframe to keyframe without re-encoding into `<data root>/cut/<year>/<game>.mp4`, recorded in `game.cut` (file, kept segments as original frame ranges with their new start, original duration, backup folder). From then on `store.original_path(game)` is the cut copy (every reader of the video goes through it) and `store.full_path(game)` the untouched download. All stored times are moved with `gametime.TimeMap`; a backup of the game folder and every global file with frame numbers is made first and `gametime restore` copies it back.
