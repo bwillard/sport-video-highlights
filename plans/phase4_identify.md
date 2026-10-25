@@ -1,6 +1,6 @@
 # Phase 4 — Identify Players & Track the Ball
 
-**Status (2026-10-24):** 4.1 ball tracking built and in use: every game has a whole-game ball track (fine-tuned YOLO26x detections from RunPod, then the temporal filter and fixed-object blocking here), shown and corrected in the tagger. On the labelled game frames: found 66%, wrong 10%, missed 24%. 4.2–4.4 not started. Re-scoped 2026-10-18 from "auto-find her" to "name every player on our team and track the ball", to power two features: highlighting any chosen player ([Phase 3.3/3.4](phase3_highlight.md)) and finding clips where a player is near the ball (4.4).
+**Status (2026-10-24):** 4.1 ball tracking built and in use: every game has a whole-game ball track (fine-tuned YOLO26x detections from RunPod, then the temporal filter and fixed-object blocking here), shown and corrected in the tagger. On the labelled game frames: found 66%, wrong 10%, missed 24%. 4.2 team split built 2026-10-25 (kit colour per box, used in tracking and to name teams); 4.3–4.4 not started. Re-scoped 2026-10-18 from "auto-find her" to "name every player on our team and track the ball", to power two features: highlighting any chosen player ([Phase 3.3/3.4](phase3_highlight.md)) and finding clips where a player is near the ball (4.4).
 **Depends on:** 4.2–4.4 need the Phase 3.2 whole-game player tracking (tracklets per game); 4.1 turned out not to (the ball runs its own pass).
 
 ## What this phase produces
@@ -45,9 +45,20 @@ The ball is hard to *find* (5–15 px, motion blur, hidden by legs, look-alikes:
 ## 4.2 — Team split
 Cluster torso colours (k-means on the upper half of each box, in a colour space that handles shade, e.g. Lab) per game into our team / opponents / referees. Cheap, and it removes most candidates before identification. Home/away kits differ, so the clusters are per game, with one click to say "this cluster is us".
 
+**As built (2026-10-25)** — kit colour also steers the tracker. That's why it was done now: tracks were lost or swapped where she crossed an opponent or the ref (85 of 128 of her labelled stretches ended with another box overlapping hers).
+- **Kit colour per box** (`track/kit.py`, `soccer-clips people kit`): every detected box's torso (middle half of the width, 18–50% of the height) as a 19-bin colour histogram (8 hues × bright/dark, plus dark/grey/light), leaving out pixels near that moment's grass colour; square-rooted (Hellinger), uint8, in `tracks/people_kit_<model>.npz` row for row with the raw boxes. Decoded at half size; ~6–9 min a game on the 4 cores (35.5M boxes, 39 min for all six). One box's kit is noisy (her against herself at other moments: median distance 0.39), so the steps below use running or 1-second means.
+- **In the tracker** (`Params.kit_gate`, 0.45): a track can't take a box whose kit is further than the gate from the track's running kit, in both of BoT-SORT's matching passes (the second, for weak boxes, is where crossings happen). Ultralytics' own re-ID only ever lowers costs, never blocks, so it's our own cost function.
+- **Cut on a kit change** (`split_kit`, 0.35): a tracklet whose mean kit before and after some frame differs by more than this is cut there.
+- **Join across gaps** (`link_gap_s` 1 s, `link_kit` 0.2, `link_heights` 1): a tracklet that starts within 1 s of another ending, near where that one would be by then (camera motion cancelled), in the same kit, continues it. Closest first, one-to-one. The kit threshold drives the trade-off: looser joins more (longer holds) but also joins teammates (more conflicts).
+- **Teams**: tracklet kits (mean over the tracklet) clustered per game (spherical k-means, 6 clusters, weighted by length), saved with the tracklets; `soccer-clips people teams` redoes it in seconds. Named on the fly: "ours" = every cluster with ≥ 15% of the default player's labelled points (one kit often splits into a light and a shaded cluster), "opponents" = the biggest other one, the rest "other" (refs, keepers, spectators). The tagger colours boxes by it (white / blue / grey dashed). On fc-1 the yellow ref and the teal keeper come out "other"; a dark-clothed adult by the far goal came out "ours". With 4 clusters the ref was absorbed into ours, hence 6.
+- **Yardstick from the labels** (`soccer-clips people eval-labels`): known points = her "is" picks + #38 callouts (215); hold = how long the tracklet under each lasts; conflicts = a tracklet under one point passes another of her points without covering it (swapped or wrongly joined); swaps left = "not" picks (29) still on a tracklet that was hers earlier.
+
 **Tasks**
-- [ ] Torso colour clustering per tracklet, per game
-- [ ] "Which one is us" confirm in the UI
+- [x] Torso colour per box (2026-10-25)
+- [x] Kit gate, cut and join in tracking, tuned on the labels (2026-10-25)
+- [x] Torso colour clustering per tracklet, per game; "ours" from the labels (2026-10-25)
+- [ ] "Which one is us" confirm in the UI (only needed for games without labels; there the two biggest clusters are "team")
+- [ ] Use teams to drop spectators / refs from the follow and near-the-ball features
 
 ## 4.3 — Player identity
 Turn many short, anonymous tracklets of our team into named players.
@@ -108,6 +119,18 @@ For a chosen player, find the stretches of a game where they're involved with th
 - Acceptable full-game processing time (overnight is fine?).
 
 ## Findings
+- **2026-10-25** — Kit colour in tracking, tuned against the #38 labels (215 known points, 29 swaps; `people eval-labels`). Tracking cached per gate, cut/join scored on top:
+
+  | Setting | Hold median / mean (s) | Conflicts | Swaps left |
+  |---|---|---|---|
+  | none (before) | 18.2 / 26.4 | 60 | 15/29 |
+  | gate 0.45 | 16.1 / 25.2 | 34 | 6/29 |
+  | gate + cut 0.35 | 14.4 / 21.7 | 27 | 5/29 |
+  | gate + cut + join (kit 0.15) | 17.4 / 25.1 | 36 | 5/29 |
+  | **gate + cut + join (kit 0.2), chosen** | **23.2 / 30.1** | **45** | **5/29** |
+  | gate + cut + join (kit 0.3) | 28.0 / 36.4 | 50 | 5/29 |
+
+  The gate alone halves conflicts and swaps; joining buys back length at some cost in conflicts (joins onto teammates in the same kit, which only appearance re-ID can tell apart). Join distance (0.5 vs 1 box height) hardly matters. Saved tracks with the chosen settings: hold 23.1 / 30.1 s, 45 conflicts, 5/29 swaps. Callout coverage went from 75% / 68% to 71% / 63% (median / mean; the old figure counted swapped tracks as coverage). Re-tracking all six games takes 29 min with 4 processes.
 - **2026-10-18** — Stock YOLO11 `sports ball` on the 7 bench clips (Phase 3.2 benchmark; details in `bench/results/*/summary.json`):
   - **Resolution matters most.** Share of frames with a ball detection at conf ≥ 0.25, excluding elite-shot (a spare ball sits by the camera): n640 0–2%; s640 0–23%; n1280 5–46%; s1280 2–38%; s1280 on the centre 1280×720 crop at native resolution 1–53% (best on 5 of 6 clips). The crowded corner (ebu-corner) is the worst for every 1280 variant (1–24%).
   - **Detections are mostly real.** Checked by eye on random crops from s1280-centre: ~35/40 real at conf ≥ 0.25, ~32/42 real at 0.1–0.25. False hits: corner flags, bags, a white cleat, blonde ponytails/heads, a water bottle, a spare ball on the sideline (stationary, so a temporal filter can drop it). Weak detections are worth keeping for the temporal filter.
