@@ -288,6 +288,18 @@ def track_game(store: Store, game: Game, model: str = DEFAULT_MODEL, p: Params |
     return rows
 
 
+def load_tracks(store: Store, game: Game, model: str = DEFAULT_MODEL) -> tuple[np.ndarray, np.ndarray] | None:
+    """Saved tracklets as (rows of game frame, track, x1, y1, x2, y2, conf in pixels, ranges), or None."""
+    p = path(store, game, model)
+    if not p.exists():
+        return None
+    with np.load(p) as z:
+        W, H = game.width, game.height
+        rows = np.column_stack([z["frame"], z["track"], z["x1"] * W, z["y1"] * H, z["x2"] * W, z["y2"] * H,
+                                z["conf"]]).astype(np.float64)
+        return rows, z["ranges"]
+
+
 # ---- yardstick ----
 
 GAP_S = 1.0  # a run around the callout can have gaps up to this long
@@ -329,19 +341,25 @@ def callout_check(rows: np.ndarray, game: Game, clip: Clip) -> dict:
 
 
 def evaluate(store: Store, model: str = DEFAULT_MODEL, p: Params | None = None, players: set[int] | None = None,
-             log=print) -> dict:
+             saved: bool = False, log=print) -> dict:
     """
-    Track every game with saved boxes for `model` (not saved) and check each callout on a clip
-    tagged with exactly one player (of `players`, if given) inside the detected ranges.
-    Returns per-callout results and a summary.
+    Track every game with saved boxes for `model` (not saved), or with `saved` use the saved
+    tracklets as they are, and check each callout on a clip tagged with exactly one player (of
+    `players`, if given) inside the covered ranges. Returns per-callout results and a summary.
     """
     checks, frames, tracks, boxes = [], 0, 0, 0
     for game in store.list_games():
-        raw = load_raw(store, game, model)
-        if not len(raw["ranges"]):
-            continue
-        rows = track_game(store, game, model, p, save=False, log=log)
-        ranges = raw["ranges"].tolist()
+        if saved:
+            got = load_tracks(store, game, model)
+            if got is None:
+                continue
+            rows, ranges = got[0], got[1].tolist()
+        else:
+            raw = load_raw(store, game, model)
+            if not len(raw["ranges"]):
+                continue
+            rows = track_game(store, game, model, p, save=False, log=log)
+            ranges = raw["ranges"].tolist()
         frames += sum(e - s for s, e in ranges)
         tracks += len(np.unique(rows[:, 1]))
         boxes += len(rows)

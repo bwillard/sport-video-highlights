@@ -250,13 +250,14 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
         print("model      tracker    callouts  found  coverage (median / mean)  run s  tracks/min  people/frame")
         out = {}
         for model in args.models:
-            r = people.evaluate(store, model, p, players={args.player} if args.player else None, log=log)
+            r = people.evaluate(store, model, p, players={args.player} if args.player else None, saved=args.saved,
+                                log=log)
             out[model] = r
             s = r["summary"]
             if not s["callouts"]:
                 print(f"{model:10} no callouts inside detected ranges")
                 continue
-            print(f"{model:10} {args.tracker:10} {s['callouts']:8}  {s['found']:5.0%}  {s['coverage_median']:8.0%} / "
+            print(f"{model:10} {'saved' if args.saved else args.tracker:10} {s['callouts']:8}  {s['found']:5.0%}  {s['coverage_median']:8.0%} / "
                   f"{s['coverage_mean']:4.0%}         {s['run_s_median']:5}  {s['tracks_per_min']:10}  "
                   f"{s['people_per_frame']:12}")
         if args.json:
@@ -418,6 +419,8 @@ def main() -> None:
             sp.add_argument("models", nargs="*", default=["yolo11m"], help="whose saved boxes (default yolo11m)")
             sp.add_argument("--player", type=int, help="only callouts on clips tagged with this number")
             sp.add_argument("--json", help="also write per-callout results to this file")
+            sp.add_argument("--saved", action="store_true",
+                            help="score the saved tracklets (people track) instead of tracking again")
         sp.add_argument("--tracker", choices=["botsort", "bytetrack"], default="botsort")
         sp.add_argument("--buffer", type=int, default=30, help="frames a lost track is kept to be found again")
     g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")

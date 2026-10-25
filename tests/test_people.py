@@ -69,6 +69,7 @@ def test_track_game_and_callout_yardstick(store):
     with np.load(people.path(store, game, "yolo11m")) as z:
         assert z["x1"].max() <= 1 and z["ranges"].tolist() == [[0, 100]]
     r = people.evaluate(store, "yolo11m")
+    assert people.evaluate(store, "yolo11m", saved=True) == r  # the saved tracklets score the same
     (c,) = r["callouts"]  # c2 has no callout
     clip_frames = game.frame_at(2.0) - game.frame_at(1.0)
     assert c["found"] and c["player"] == 38

@@ -76,7 +76,7 @@ Detect and track every person (and the ball, see [Phase 4.1](phase4_identify.md#
 - [x] Tracking from saved boxes (2026-10-24): `soccer-clips people track`, BoT-SORT + our camera steps
 - [x] Yardstick (2026-10-24): `soccer-clips people eval` at the callouts
 - [x] Bench run on RunPod (2026-10-24): callout stretches × YOLO11m / YOLO26m / l / x → YOLO11m, default tracker settings (see Findings)
-- [ ] Whole-game detection with the chosen model
+- [x] Whole-game detection with YOLO11m (2026-10-25: six games, $6.12) and tracking here (52 min)
 - [ ] Pitch filter (drop sideline spectators) — after looking at real tracks; team split (4.2) may do most of it
 - [ ] Gap interpolation + smoothing
 - [ ] Track store (`run.json`, `boxes.npz`, `tracklets.json`) + API returning boxes for a time window and player/tracklet
@@ -151,6 +151,7 @@ Use the smoothed track to drive a crop window:
 | YOLO11m @1920 (full frame), fps on L4 GPU | 19.1 (~2 h per game); her track coverage 17–100%, median 100% |
 | Tracking from saved boxes, CPU | ~2–4 ms/frame (BoT-SORT + our camera steps, 3200G; ~45 boxes/frame) |
 | Callout bench (83 callouts on #38, 2026-10-24) | box under her 99–100% for all four models; her track's share of the clip: mean 68% / median 75% (YOLO11m), 68% / 85% (26l), 65% / 68% (26m), 65% / 71% (26x) |
+| Whole games, YOLO11m (2026-10-25) | ~69 frames/s on an A100 with 4 workers; 21–25k tracklets a game, ~6 s each; ~310 new tracklets a minute |
 | Avg correction clicks / clip | |
 
 ## Findings
