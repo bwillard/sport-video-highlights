@@ -382,7 +382,10 @@ async function pollCut(id) {
   const job = await getJson(`/api/jobs/${cutJob}`);
   if (job.status === "queued" || job.status === "running") return setTimeout(() => pollCut(id), 2000);
   cutJob = null;
-  if (job.status === "failed") { $("gtStatus").textContent = ""; return flash(`cut failed: ${job.error}`, true); }
+  if (job.status === "failed") {  // nothing was changed: the cut stops before touching any data if a check fails
+    $("gtStatus").textContent = `cut failed, nothing was changed: ${job.error}`;
+    return flash(`cut failed (nothing was changed): ${job.error}`, true);
+  }
   const report = JSON.parse(job.output || "{}");
   const dropped = Object.entries(report).filter(([k]) => k !== "kept")
     .map(([k, val]) => `${k}: ${Array.isArray(val) ? val.length : val}`).join(", ");

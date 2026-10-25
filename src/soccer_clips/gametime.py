@@ -285,14 +285,17 @@ def cut_video(store: Store, game: Game, segments: list[CutSegment], out: Path, l
     try:
         for i, s in enumerate(segments):
             part = out.with_name(f"{out.stem}.part{i}.mp4")
+            parts.append(part)  # (so it's removed if anything below fails)
+            want = s.orig_end - s.orig_start
+            # the video by exact frame count (a duration can round to one frame more, as on elite-strikers,
+            # 2026-10-25); the audio by duration
             subprocess.run([store.settings.ffmpeg, "-v", "error", "-y", "-ss", f"{(s.orig_start + 0.5) / fps:.6f}",
-                            "-i", str(store.full_path(game)), "-t", f"{(s.orig_end - s.orig_start - 0.5) / fps:.6f}",
+                            "-i", str(store.full_path(game)), "-frames:v", str(want), "-t", f"{want / fps:.6f}",
                             "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-avoid_negative_ts", "make_zero",
                             str(part)], check=True)
             n = _count_frames(store, part)
-            if n != s.orig_end - s.orig_start:
-                raise RuntimeError(f"piece {i} has {n} frames, expected {s.orig_end - s.orig_start}")
-            parts.append(part)
+            if n != want:
+                raise RuntimeError(f"piece {i} has {n} frames, expected {want}")
             log(f"{game.id}: piece {i + 1}/{len(segments)} cut ({n} frames)")
         listing = out.with_name(out.stem + ".parts.txt")
         listing.write_text("".join(f"file '{p.name}'\n" for p in parts))
