@@ -237,15 +237,47 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
             n = people.detect_game(store, gid, mode=args.mode, model_name=args.model, workers=args.workers, log=log)
             print(f"{gid}: {args.model} detected {n} new frame(s)", flush=True)
         return
-    p = people.Params(tracker=args.tracker, track_buffer=args.buffer)
-    if args.people_command == "track":
+    if args.people_command == "kit":
+        from soccer_clips.track import kit
+
         for gid in ids(args.game):
             game = store.load_game(gid)
             if not people.raw_path(store, game, args.model).exists():
                 print(f"{gid}: no {args.model} boxes yet, skipped")
                 continue
-            rows = people.track_game(store, game, args.model, p, log=log)
-            print(f"{gid}: {len(rows)} boxes in {len(set(rows[:, 1].tolist()))} tracklets", flush=True)
+            n = kit.compute(store, game, args.model, workers=args.workers, log=log)
+            print(f"{gid}: kit colours for {n} boxes", flush=True)
+        return
+    if args.people_command == "teams":
+        for gid in ids(args.game):
+            game = store.load_game(gid)
+            n = people.recluster(store, game, args.model)
+            roles = people.team_roles(people.tracks(store, game, args.model), people.load_picks(store, game), game,
+                                      store.settings.default_player)
+            print(f"{gid}: {n} kit clusters: " + ", ".join(f"{k} {v}" for k, v in sorted(roles.items())), flush=True)
+        return
+    p = people.Params(tracker=args.tracker, track_buffer=args.buffer, kit_gate=args.kit_gate, split_kit=args.split_kit,
+                      link_gap_s=args.link_gap, link_kit=args.link_kit, link_heights=args.link_heights)
+    if args.people_command == "eval-labels":
+        r = people.evaluate_labels(store, args.model, p, player=args.player, saved=args.saved, games=args.games, log=log)
+        print("game                                      points  found  hold median/mean s  conflicts  swaps left")
+        for gid, g in r["games"].items():
+            hs = sorted(g["holds"])
+            med = hs[len(hs) // 2] if hs else 0
+            print(f"{gid:42} {g['points']:5}  {g['found']:5}  {med:8.1f} / {sum(hs) / max(1, len(hs)):5.1f}"
+                  f"  {g['conflicts']:9}  {g['swaps_left']:3}/{g['wrong']}")
+        print(f"{'all':42} {r['points']:5}  {r['found']:5}  {r['hold_median_s']:8} / {r['hold_mean_s']:5}"
+              f"  {r['conflicts']:9}  {r['swaps_left']:3}/{r['wrong']}")
+        return
+    if args.people_command == "track":
+        todo = []
+        for gid in ids(args.game):
+            if people.raw_path(store, store.load_game(gid), args.model).exists():
+                todo.append(gid)
+            else:
+                print(f"{gid}: no {args.model} boxes yet, skipped")
+        for gid, n, k in people.track_games(store, todo, args.model, p, workers=args.workers):
+            print(f"{gid}: {n} boxes in {k} tracklets", flush=True)
     elif args.people_command == "eval":
         print("model      tracker    callouts  found  coverage (median / mean)  run s  tracks/min  people/frame")
         out = {}
@@ -336,6 +368,12 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         print(f"{len(pods)} soccer-clips pod(s) running or stopped")
 
 
+def people_defaults():
+    from soccer_clips.track.people import Params
+
+    return Params()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="soccer-clips")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -409,12 +447,26 @@ def main() -> None:
                      help="clips with a callout, every tagged clip, or the whole game (each +2s either side)")
     det.add_argument("--model", default="yolo11m", help="stock detector, e.g. yolo11m, yolo26l")
     det.add_argument("--workers", type=int, default=1, help="detect chunks of long ranges in parallel processes")
-    for name, help_ in [("track", "turn saved boxes into tracklets (CPU), saved as tracks/people_<model>.npz"),
+    kt = pp_sub.add_parser("kit", help="kit colour of every saved box, for telling teams apart (CPU, ~20 min a game)")
+    kt.add_argument("game", help="game id, or 'all'")
+    kt.add_argument("--model", default="yolo11m", help="whose saved boxes")
+    kt.add_argument("--workers", type=int, default=4, help="processes (one per CPU core)")
+    tm = pp_sub.add_parser("teams", help="redo the kit clusters of saved tracklets (seconds; no tracking)")
+    tm.add_argument("game", help="game id, or 'all'")
+    tm.add_argument("--model", default="yolo11m", help="whose saved tracklets")
+    for name, help_ in [("eval-labels", "score tracklets against your player labels (L clicks) and callouts"),
+                        ("track", "turn saved boxes into tracklets (CPU), saved as tracks/people_<model>.npz"),
                         ("eval", "score tracklets at the callouts (how much of each clip her track covers)")]:
         sp = pp_sub.add_parser(name, help=help_)
         if name == "track":
             sp.add_argument("game", help="game id, or 'all'")
             sp.add_argument("--model", default="yolo11m", help="whose saved boxes")
+            sp.add_argument("--workers", type=int, default=1, help="games tracked at once (one per CPU core)")
+        elif name == "eval-labels":
+            sp.add_argument("--model", default="yolo11m", help="whose saved boxes")
+            sp.add_argument("--player", type=int, default=38)
+            sp.add_argument("--saved", action="store_true", help="score the saved tracklets instead of tracking again")
+            sp.add_argument("--games", nargs="+", help="only these game ids")
         else:
             sp.add_argument("models", nargs="*", default=["yolo11m"], help="whose saved boxes (default yolo11m)")
             sp.add_argument("--player", type=int, help="only callouts on clips tagged with this number")
@@ -423,6 +475,15 @@ def main() -> None:
                             help="score the saved tracklets (people track) instead of tracking again")
         sp.add_argument("--tracker", choices=["botsort", "bytetrack"], default="botsort")
         sp.add_argument("--buffer", type=int, default=30, help="frames a lost track is kept to be found again")
+        dp = people_defaults()
+        sp.add_argument("--kit-gate", type=float, default=dp.kit_gate,
+                        help=f"never match across kits further apart than this (0-1; 0 = off; default {dp.kit_gate})")
+        sp.add_argument("--split-kit", type=float, default=dp.split_kit,
+                        help=f"cut tracklets where the kit changes by more than this (0 = off; default {dp.split_kit})")
+        sp.add_argument("--link-gap", type=float, default=dp.link_gap_s,
+                        help=f"join tracklets across gaps up to this many seconds (0 = off; default {dp.link_gap_s})")
+        sp.add_argument("--link-kit", type=float, default=dp.link_kit, help="...if their kits are at most this far apart")
+        sp.add_argument("--link-heights", type=float, default=1.0, help="...and the start is this close (box heights)")
     g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")
     g_sub = g.add_subparsers(dest="gpu_command")
     run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")

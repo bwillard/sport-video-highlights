@@ -542,14 +542,15 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         game = load(game_id)
         t = people.tracks(store, game)
-        return {"ranges": t.ranges if t else [], **people_labels(game)}
+        roles = people.team_roles(t, people.load_picks(store, game), game, store.settings.default_player) if t else {}
+        return {"ranges": t.ranges if t else [], "teams": {str(k): v for k, v in roles.items()}, **people_labels(game)}
 
     @app.get("/api/games/{game_id}/people/boxes")
     def game_people_boxes(game_id: str, start: int, end: int) -> Response:
         """
         Every tracked box in game frames [start, end), as little-endian float32 rows of frame,
-        track, x1, y1, x2, y2 (fractions of the frame), sorted by frame. Binary because a minute
-        is ~50k boxes.
+        track, x1, y1, x2, y2 (fractions of the frame), kit cluster (-1 if unknown; named by
+        GET .../people "teams"), sorted by frame. Binary because a minute is ~50k boxes.
         """
         from soccer_clips.track import people
 
@@ -559,7 +560,8 @@ def create_app(store: Store | None = None) -> FastAPI:
         if t is None:
             return Response(b"", media_type="application/octet-stream")
         a, b = t.window(start, end)
-        rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b]]).astype("<f4")
+        team = np.array([t.team.get(k, -1) for k in t.track[a:b].tolist()], np.float32)
+        rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b], team]).astype("<f4")
         return Response(rows.tobytes(), media_type="application/octet-stream")
 
     @app.post("/api/games/{game_id}/people/picks")

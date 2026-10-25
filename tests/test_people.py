@@ -161,14 +161,14 @@ def test_people_api(store):
 
     with TestClient(create_app(store)) as client:
         url = f"/api/games/{GAME}/people"
-        assert client.get(url).json() == {"ranges": [], "picks": [], "segments": []}
+        assert client.get(url).json() == {"ranges": [], "teams": {}, "picks": [], "segments": []}
         assert client.post(f"{url}/picks", json={"frame": 5, "player": 38, "kind": "is", "x": 0.15, "y": 0.5}
                            ).status_code == 422  # not tracked yet
         two_players(store)
         assert client.get(url).json()["ranges"] == [[0, 100]]
-        rows = np.frombuffer(client.get(f"{url}/boxes", params={"start": 10, "end": 20}).content, "<f4").reshape(-1, 6)
-        assert len(rows) == 20 and set(rows[:, 0]) == set(range(10, 20))
-        assert np.allclose(rows[rows[:, 2] < 0.5][0, 2:], [0.1, 60 / 180, 0.2, 120 / 180], atol=1e-4)
+        rows = np.frombuffer(client.get(f"{url}/boxes", params={"start": 10, "end": 20}).content, "<f4").reshape(-1, 7)
+        assert len(rows) == 20 and set(rows[:, 0]) == set(range(10, 20)) and set(rows[:, 6]) == {-1}  # no kit yet
+        assert np.allclose(rows[rows[:, 2] < 0.5][0, 2:6], [0.1, 60 / 180, 0.2, 120 / 180], atol=1e-4)
         assert client.get(f"{url}/boxes", params={"start": 0, "end": 5000}).status_code == 422
         r = client.post(f"{url}/picks", json={"frame": 50, "player": 38, "kind": "is", "x": 0.15, "y": 0.5}).json()
         assert r["pick"]["player"] == 38 and len(r["segments"]) == 1
@@ -176,3 +176,100 @@ def test_people_api(store):
                            ).json()["detail"] == "no tracked player there"
         r = client.delete(f"{url}/picks/last").json()
         assert r["undone"]["frame"] == 50 and r["segments"] == []
+
+
+def crossing(n: int = 60):
+    """Two players run through each other: A left to right in red, B right to left in blue, crossing
+    at frame n/2, where the detector loses B for a few frames. Returns dets, kit feats, still steps."""
+    from soccer_clips.track import kit
+
+    red, blue = np.zeros(kit.NBINS, np.uint8), np.zeros(kit.NBINS, np.uint8)
+    red[0], blue[10] = 255, 255
+    dets, feats = [], []
+    for f in range(n):
+        xa, xb = 100 + 4 * f, 100 + 4 * n - 4 * f
+        dets.append((f, xa, 50, xa + 20, 110, 0.9))
+        feats.append(red)
+        if abs(f - n // 2) > 2:
+            dets.append((f, xb, 52, xb + 20, 112, 0.9))
+            feats.append(blue)
+    return np.array(dets, float), np.array(feats), np.repeat(np.eye(2, 3)[None], n, 0)
+
+
+def test_kit_gate_keeps_tracks_on_their_own_kit():
+    dets, feats, steps = crossing()
+
+    def kits_per_track(rows):
+        return [set(feats[rows[rows[:, 1] == t, 7].astype(int)].argmax(1)) for t in np.unique(rows[:, 1])]
+
+    gated = people.track_boxes(dets, steps, people.Params(kit_gate=0.5), feats)
+    assert all(len(k) == 1 for k in kits_per_track(gated))  # nobody's track takes the other's box
+    assert gated.shape[1] == 8 and np.array_equal(dets[gated[:, 7].astype(int), 0], gated[:, 0])
+
+
+def test_split_on_kit_cuts_a_swapped_tracklet():
+    from soccer_clips.track import kit
+
+    red, blue = np.zeros(kit.NBINS, np.uint8), np.zeros(kit.NBINS, np.uint8)
+    red[0], blue[10] = 255, 255
+    feats = np.array([red] * 40 + [blue] * 40)
+    rows = np.array([(f, 1, 0, 0, 10, 30, 0.9, f) for f in range(80)], float)  # one track: red, then blue
+    out, nxt = people.split_on_kit(rows, feats, 0.5, 2)
+    assert nxt == 3 and set(out[out[:, 0] < 40, 1]) == {1} and set(out[out[:, 0] >= 40, 1]) == {2}
+    same = np.array([red] * 80)
+    assert len(np.unique(people.split_on_kit(rows, same, 0.5, 2)[0][:, 1])) == 1
+
+
+def test_link_joins_a_gap_in_the_same_kit_only():
+    from soccer_clips.track import kit
+
+    red, blue = np.zeros(kit.NBINS, np.uint8), np.zeros(kit.NBINS, np.uint8)
+    red[0], blue[10] = 255, 255
+    # track 1 runs right and stops at frame 29; track 2 starts at 40 where it would be by then (red);
+    # track 3 starts at the same spot in blue
+    rows = [(f, 1, 100 + 2 * f, 50, 120 + 2 * f, 110, 0.9, f) for f in range(30)]
+    rows += [(f, 2, 100 + 2 * f, 50, 120 + 2 * f, 110, 0.9, f) for f in range(40, 70)]
+    rows = np.array(rows, float)
+    p = people.Params(link_gap_s=1.0)
+    steps = np.repeat(np.eye(2, 3)[None], 70, 0)
+    feats = np.array([red] * 70)
+    assert len(np.unique(people.link_tracklets(rows, feats, steps, p, 30.0)[:, 1])) == 1
+    feats[40:] = blue
+    assert len(np.unique(people.link_tracklets(rows, feats, steps, p, 30.0)[:, 1])) == 2
+    feats[40:] = red  # too far away: a 500 px jump in a third of a second
+    far = rows.copy()
+    far[30:, [2, 4]] += 500
+    assert len(np.unique(people.link_tracklets(far, feats, steps, p, 30.0)[:, 1])) == 2
+
+
+def test_label_yardstick(store):
+    game = two_players(store)
+    t = people.tracks(store, game)
+    known = [(10, 0.15, 0.5), (80, 0.15, 0.5)]
+    r = people.check_labels(t, known, [(60, 0.65, 0.5)], 30.0)
+    assert r["found"] == 2 and r["conflicts"] == 0 and r["swaps_left"] == 0
+    assert r["holds"][0] == pytest.approx(100 / 30, abs=0.1)
+    r = people.check_labels(t, known + [(50, 0.65, 0.5)], [(60, 0.15, 0.5)], 30.0)  # a "known" point on the other player
+    assert r["conflicts"] == 3 and r["swaps_left"] == 1  # each tracklet contradicts the points on the other
+
+
+def test_team_clusters_and_roles(store):
+    from soccer_clips.track import kit
+
+    rng = np.random.default_rng(0)
+    colours = np.eye(kit.NBINS, dtype=np.float32)[[0, 10, 4, 16]]  # red (us), blue (them), yellow (ref), dark
+    means = np.vstack([colours[g] + 0.05 * rng.random(kit.NBINS) for g in [0] * 10 + [1] * 10 + [2] * 2 + [3] * 3])
+    means /= np.linalg.norm(means, axis=1, keepdims=True)
+    n = np.full(len(means), 100)
+    n[-1] = 0  # no known kit
+    cluster, centres = kit.cluster_teams(means, n, k=4)
+    assert len(set(cluster[:10])) == 1 and len(set(cluster[10:20])) == 1 and cluster[0] != cluster[10]
+    assert cluster[-1] == -1 and centres.shape == (4, kit.NBINS)
+    # roles: the cluster under the labelled player is ours, the biggest other one opponents
+    game = two_players(store)
+    t = people.tracks(store, game)
+    left, right = t.at(50, 0.15, 0.5), t.at(50, 0.65, 0.5)
+    t.team = {left: 2, right: 5}
+    picks = [{"frame": 50, "x": 0.15, "y": 0.5, "player": 38, "kind": "is"}]
+    assert people.team_roles(t, picks, game, 38) == {2: "ours", 5: "opponents"}
+    assert people.team_roles(t, [], game, 38) == {2: "team", 5: "team"}
