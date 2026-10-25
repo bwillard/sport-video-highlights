@@ -542,25 +542,27 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         game = load(game_id)
         t = people.tracks(store, game)
-        roles = people.team_roles(t, people.load_picks(store, game), game, store.settings.default_player) if t else {}
+        got = people.roles_for(store, game)
+        roles = got[0] if got else {}
         return {"ranges": t.ranges if t else [], "teams": {str(k): v for k, v in roles.items()}, **people_labels(game)}
 
     @app.get("/api/games/{game_id}/people/boxes")
     def game_people_boxes(game_id: str, start: int, end: int) -> Response:
         """
         Every tracked box in game frames [start, end), as little-endian float32 rows of frame,
-        track, x1, y1, x2, y2 (fractions of the frame), kit cluster (-1 if unknown; named by
-        GET .../people "teams"), sorted by frame. Binary because a minute is ~50k boxes.
+        track, x1, y1, x2, y2 (fractions of the frame), team (0 ours, 1 opponents, 2 other, -1
+        unknown; people.box_roles), sorted by frame. Binary because a minute is ~50k boxes.
         """
         from soccer_clips.track import people
 
         if not 0 <= start <= end or end - start > PEOPLE_MAX_FRAMES:
             raise HTTPException(422, f"ask for up to {PEOPLE_MAX_FRAMES} frames")
-        t = people.tracks(store, load(game_id))
+        game = load(game_id)
+        t = people.tracks(store, game)
         if t is None:
             return Response(b"", media_type="application/octet-stream")
         a, b = t.window(start, end)
-        team = np.array([t.team.get(k, -1) for k in t.track[a:b].tolist()], np.float32)
+        team = people.roles_for(store, game)[1][a:b].astype(np.float32)
         rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b], team]).astype("<f4")
         return Response(rows.tobytes(), media_type="application/octet-stream")
 

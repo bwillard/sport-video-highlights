@@ -749,13 +749,13 @@ $("debugBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleD
 
 // ---------- tracked players (Phase 3.3) ----------
 // Every tracked box comes from the server in chunks of game frames (binary float32 rows of
-// frame, track, x1, y1, x2, y2, kit cluster), loaded around the playhead as it moves. The followed player
+// frame, track, x1, y1, x2, y2, team), loaded around the playhead as it moves. The followed player
 // is whichever tracklet stretches the picks label with their number (people.segments).
 const CHUNK = 450;  // frames per request (15 s)
 const STRIDE = 7;  // values per box row
-// boxes by kit cluster role (people.team_roles): ours / opponents / the rest (refs, keepers, spectators)
-const TEAM_STYLE = { ours: ["rgba(255,255,255,0.75)", []], team: ["rgba(255,255,255,0.5)", []],
-                     opponents: ["rgba(90,176,255,0.7)", []], other: ["rgba(170,170,170,0.45)", [3, 3]] };
+// boxes by team (people.box_roles): 0 ours, 1 opponents, 2 the rest (refs, keepers, spectators), -1 unknown
+const TEAM_STYLE = { 0: ["rgba(255,255,255,0.75)", []], 1: ["rgba(90,176,255,0.7)", []],
+                     2: ["rgba(170,170,170,0.45)", [3, 3]] };
 let showPeople = false, people = null;  // people: {gameId, ranges, teams, picks, segments}
 let followWho = null, picking = false;
 const boxChunks = new Map();  // chunk index -> Float32Array, or "loading"
@@ -769,6 +769,7 @@ async function loadPeople() {
 }
 function setLabels(r) {
   if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
+  boxChunks.clear();  // which kit is "ours" comes from the labels, so box teams may have changed
 }
 function togglePeople() {
   showPeople = !showPeople;
@@ -843,7 +844,7 @@ function drawPeople(ctx) {
   ctx.lineWidth = 1;
   for (let i = i0; i < i1; i++) {
     const o = i * STRIDE;
-    const [colour, dash] = TEAM_STYLE[people.teams?.[rows[o + 6]]] || ["rgba(255,255,255,0.28)", []];
+    const [colour, dash] = TEAM_STYLE[rows[o + 6]] || ["rgba(255,255,255,0.28)", []];
     ctx.strokeStyle = colour;
     ctx.setLineDash(dash);
     ctx.strokeRect(r.x + rows[o + 2] * r.w, r.y + rows[o + 3] * r.h, (rows[o + 4] - rows[o + 2]) * r.w, (rows[o + 5] - rows[o + 3]) * r.h);

@@ -183,9 +183,10 @@ class Params:
     match_thresh: float = 0.8
     proximity_thresh: float = 0.5  # botsort: least box overlap to match
     # Kit colour (track/kit.py; needs people_kit_<model>.npz, else these are skipped). Distances are
-    # Hellinger, 0 (same) to 1. Defaults tuned on the #38 labels, 2026-10-25 (see plans/phase4_identify.md).
-    kit_gate: float = 0.45  # botsort: never match a track to a box whose kit is further than this (0 = off)
-    split_kit: float = 0.35  # cut a tracklet where its kit changes by more than this (0 = off)
+    # Hellinger, 0 (same) to 1. Defaults tuned on the #38 labels with the shirt + shorts kit, 2026-10-25
+    # (see plans/phase4_identify.md).
+    kit_gate: float = 0.65  # botsort: never match a track to a box whose kit is further than this (0 = off)
+    split_kit: float = 0.45  # cut a tracklet where its kit changes by more than this (0 = off)
     link_gap_s: float = 1.0  # join a tracklet to one starting up to this long after it ends nearby (0 = off)
     link_kit: float = 0.2  # ...if their kits are at most this far apart
     link_heights: float = 1.0  # ...and the start is within this many box heights (plus LINK_SPEED a second)
@@ -475,7 +476,7 @@ def track_game(store: Store, game: Game, model: str = DEFAULT_MODEL, p: Params |
     rows = np.vstack(out) if out else np.empty((0, 8))
     if save:
         W, H = game.width, game.height
-        teams = _teams(rows[:, 1], rows[:, 7], feats) if feats is not None and len(rows) else {}
+        teams = _teams(rows[:, 1], rows[:, 0], rows[:, 7], feats, raw["dets"]) if feats is not None and len(rows) else {}
         save_npz(path(store, game, model), **teams, frame=rows[:, 0].astype(np.int32), track=rows[:, 1].astype(np.int32),
                  x1=(rows[:, 2] / W).astype(np.float32), y1=(rows[:, 3] / H).astype(np.float32),
                  x2=(rows[:, 4] / W).astype(np.float32), y2=(rows[:, 5] / H).astype(np.float32),
@@ -484,14 +485,21 @@ def track_game(store: Store, game: Game, model: str = DEFAULT_MODEL, p: Params |
     return rows
 
 
-def _teams(track: np.ndarray, det: np.ndarray, feats: np.ndarray) -> dict:
-    """Kit clusters of tracklets (kit.cluster_teams), as the arrays saved with them."""
+def _teams(track: np.ndarray, frame: np.ndarray, det: np.ndarray, feats: np.ndarray, dets: np.ndarray) -> dict:
+    """
+    Kit clusters (kit.cluster_teams, fitted on whole tracklets) and the cluster of every box
+    (kit.box_teams), as the arrays saved with the tracklets. dets: the raw boxes.
+    """
     from soccer_clips.track import kit
 
-    ids, means, n = kit.track_kits(track.astype(int), det.astype(int), feats)
+    det, track = det.astype(int), track.astype(int)
+    heights = dets[det, 4] - dets[det, 2]
+    ids, means, n = kit.track_kits(track, det, feats, heights)
     cluster, centres = kit.cluster_teams(means, n)
+    box_team = kit.box_teams(track, frame.astype(int), det, feats, heights, centres)
     return {"team_track": ids.astype(np.int32), "team_cluster": cluster.astype(np.int8),
-            "team_centres": centres.astype(np.float32)}
+            "team_centres": centres.astype(np.float32), "team": box_team,
+            "team_affinity": kit.affinity(track, box_team, len(centres)).astype(np.float32)}
 
 
 def recluster(store: Store, game: Game, model: str = DEFAULT_MODEL) -> int:
@@ -506,7 +514,7 @@ def recluster(store: Store, game: Game, model: str = DEFAULT_MODEL) -> int:
         arrays = {k: z[k] for k in z.files}
     if "det" not in arrays:
         raise ValueError(f"{game.id}: tracked before kit colours were kept; run people track again")
-    arrays.update(_teams(arrays["track"], arrays["det"], feats))
+    arrays.update(_teams(arrays["track"], arrays["frame"], arrays["det"], feats, load_raw(store, game, model)["dets"]))
     save_npz(p, **arrays)
     return len(arrays["team_centres"])
 
@@ -555,9 +563,13 @@ class Tracks:
     """A game's saved tracklets in memory, sorted by frame (positions as fractions of the frame)."""
 
     def __init__(self, frame: np.ndarray, track: np.ndarray, box: np.ndarray, ranges: list,
-                 team: dict[int, int] | None = None):
-        self.team = team or {}  # track id -> kit cluster (kit.cluster_teams)
+                 team: dict[int, int] | None = None, centres: np.ndarray | None = None,
+                 box_team: np.ndarray | None = None):
+        self.team = team or {}  # track id -> kit cluster of the whole tracklet (kit.cluster_teams)
+        self.centres = centres  # (k, NBINS) cluster kits, unit length
         order = np.argsort(frame, kind="stable")
+        self.box_team = box_team[order] if box_team is not None else None  # cluster of each box (kit.box_teams)
+        self.affinity = None  # (k, k) how much clusters share tracklets (kit.affinity)
         self.frame, self.track = frame[order].astype(np.int32), track[order].astype(np.int32)
         self.box = box[order].astype(np.float32)
         self.ranges = [list(map(int, r)) for r in ranges]
@@ -570,13 +582,28 @@ class Tracks:
     def load(cls, p: Path) -> "Tracks":
         with np.load(p) as z:
             team = dict(zip(z["team_track"].tolist(), z["team_cluster"].tolist())) if "team_track" in z.files else None
-            return cls(z["frame"], z["track"], np.column_stack([z["x1"], z["y1"], z["x2"], z["y2"]]), z["ranges"], team)
+            centres = z["team_centres"] if "team_centres" in z.files else None
+            t = cls(z["frame"], z["track"], np.column_stack([z["x1"], z["y1"], z["x2"], z["y2"]]), z["ranges"],
+                    team, centres, z["team"] if "team" in z.files else None)
+            t.affinity = z["team_affinity"] if "team_affinity" in z.files else None
+            return t
 
     @classmethod
     def from_rows(cls, rows: np.ndarray, game: Game, ranges) -> "Tracks":
         """From track_game's rows (pixels)."""
         W, H = game.width, game.height
         return cls(rows[:, 0], rows[:, 1], rows[:, 2:6] / [W, H, W, H], ranges)
+
+    def teams_of(self, a: int, b: int) -> np.ndarray:
+        """Kit cluster of rows a..b-1 (per box if known, else per tracklet; -1 unknown)."""
+        if self.box_team is not None:
+            return self.box_team[a:b].astype(np.int64)
+        return np.array([self.team.get(k, -1) for k in self.track[a:b].tolist()], np.int64)
+
+    def team_at(self, tid: int, frame: int) -> int:
+        a, b = self.window(frame, frame + 1)
+        i = np.flatnonzero(self.track[a:b] == tid)
+        return int(self.teams_of(a + i[0], a + i[0] + 1)[0]) if len(i) else -1
 
     def box_of(self, tid: int, frame: int) -> np.ndarray | None:
         a, b = self.window(frame, frame + 1)
@@ -705,47 +732,130 @@ def undo_pick(store: Store, game: Game) -> dict | None:
     return picks[-1]
 
 
-OURS_SHARE = 0.15
+OURS_RATE = 0.12  # a cluster is ours if its share of the player's boxes is at least this of the top cluster's
+# (2026-10-25: our clusters held >= 17% of the top one's share on PRSC, >= 97% on fc-1; theirs <= 7%)
+OURS_MIN_BOXES = 200  # labelled boxes needed to go by them (else by the labelled points)
+SAME_KIT = 0.2  # kit.affinity above which two clusters are taken as the same kit
 
 
 def team_roles(t: Tracks, picks: list[dict], game: Game, player: int | None) -> dict[int, str]:
     """
-    Name the kit clusters: "ours" = every cluster with at least OURS_SHARE of `player`'s known
-    points (picks and callouts; one kit often splits into a light and a shaded cluster),
-    "opponents" = the biggest of the rest (by box count), the others "other" (refs, keepers,
-    spectators). Without known points, the two biggest are "team" and the rest "other".
+    Name the kit clusters (each team's kit is usually several, by light; see kit.py):
+    - "ours": clusters where the labelled player's boxes (the stretches their picks label) make up
+      at least OURS_RATE of the share they make up in their top cluster. She's one of ~9 in our kit,
+      so our clusters all hold a steady share of her; the opponents' only a stray swap's worth.
+      With few labelled boxes, the clusters under the labelled points (picks and callouts).
+    - "opponents": the biggest (by boxes) group of other clusters linked by shared tracklets (SAME_KIT).
+    - "other": the rest (refs, keepers, spectators).
+    Without labels: the two biggest such groups are "team".
     """
     if not t.team:
         return {}
-    counts: dict[int, int] = {}
-    ids, n = np.unique(t.track, return_counts=True)
-    for tid, c in zip(ids.tolist(), n.tolist()):
-        k = t.team.get(tid, -1)
-        if k >= 0:
-            counts[k] = counts.get(k, 0) + c
-    votes: dict[int, int] = {}
+    teams = t.teams_of(0, len(t.track))
+    k = int(teams.max()) + 1 if len(teams) and teams.max() >= 0 else 0
+    counts = np.bincount(teams[teams >= 0], minlength=k)
+    roles = {c: "other" for c in range(k) if counts[c]}
+    ours: set[int] = set()
     if player is not None:
-        pts = [(p["frame"], p["x"], p["y"]) for p in picks if p["player"] == player and p["kind"] == "is"]
-        pts += [(game.frame_at(c.callout.t_s), c.callout.x, c.callout.y) for c in game.clips
-                if c.callout and c.players == [player]]
-        for f, x, y in pts:
-            k = t.team.get(t.at(f, x, y), -1) if t.at(f, x, y) is not None else -1
-            if k >= 0:
-                votes[k] = votes.get(k, 0) + 1
-    by_size = sorted(counts, key=counts.get, reverse=True)
-    roles = {k: "other" for k in counts}
-    if votes:
-        total = sum(votes.values())
-        ours = {k for k, v in votes.items() if v >= max(2, OURS_SHARE * total)} or {max(votes, key=votes.get)}
-        for k in ours:
-            roles[k] = "ours"
-        rest = [k for k in by_size if k not in ours]
-        if rest:
-            roles[rest[0]] = "opponents"
-    else:
-        for k in by_size[:2]:
-            roles[k] = "team"
+        her = np.zeros(len(t.track), bool)
+        for sg in segments(t, picks):
+            if sg["player"] == player:
+                a, b = t.window(sg["start"], sg["end"])
+                her[a:b] |= t.track[a:b] == sg["track"]
+        if her.sum() >= OURS_MIN_BOXES:
+            hc = np.bincount(teams[her & (teams >= 0)], minlength=k)
+            rate = hc / np.maximum(counts, 1)
+            ours = {c for c in range(k) if hc[c] and rate[c] >= OURS_RATE * rate.max()}
+        else:
+            pts = [(p["frame"], p["x"], p["y"]) for p in picks if p["player"] == player and p["kind"] == "is"]
+            pts += [(game.frame_at(c.callout.t_s), c.callout.x, c.callout.y) for c in game.clips
+                    if c.callout and c.players == [player]]
+            votes = np.zeros(k)
+            for f, x, y in pts:
+                tid = t.at(f, x, y)
+                c = t.team_at(tid, f) if tid is not None else -1
+                if c >= 0:
+                    votes[c] += 1
+            if votes.sum():
+                ours = {c for c in range(k) if votes[c] >= max(2, 0.15 * votes.sum())} or {int(votes.argmax())}
+
+    # groups of the remaining clusters linked by shared tracklets, biggest first
+    groups, seen = [], set(ours)
+    for c in np.argsort(-counts, kind="stable").tolist():
+        if not counts[c] or c in seen:
+            continue
+        group, todo = {c}, [c]
+        while todo and t.affinity is not None:
+            a = todo.pop()
+            for d in range(k):
+                if d not in group and d not in seen and counts[d] and t.affinity[a, d] >= SAME_KIT:
+                    group.add(d)
+                    todo.append(d)
+        seen |= group
+        groups.append(group)
+    groups.sort(key=lambda g: -sum(counts[c] for c in g))
+    for c in ours:
+        roles[c] = "ours"
+    for g in groups[:1] if ours else groups[:2]:
+        for c in g:
+            roles[c] = "opponents" if ours else "team"
     return roles
+
+
+ROLE_CODES = {"ours": 0, "opponents": 1, "team": 0, "other": 2}
+ROLE_WINDOW = 150  # boxes either side (~5 s) over which a box's team is the majority within its tracklet
+
+
+def box_roles(t: Tracks, roles: dict[int, str], window: int = ROLE_WINDOW) -> np.ndarray:
+    """
+    Team of every box (int8, in t's row order): 0 ours (or "team"), 1 opponents, 2 other, -1
+    unknown. Each box takes the most common team among the boxes of its tracklet within `window`
+    either side, so a kit that looks like the other team's for a moment (a white shirt in blue
+    shade) doesn't flicker, while a tracklet that swapped to someone else for longer changes.
+    """
+    teams = t.teams_of(0, len(t.track))
+    k = max(roles, default=-1) + 1
+    lut = np.array([ROLE_CODES.get(roles.get(c, "other"), 2) for c in range(k)] + [-1], np.int8)
+    role = lut[np.where(teams >= 0, teams, k)]
+    out = np.full(len(role), -1, np.int8)
+    if not len(role):
+        return out
+    order = np.lexsort((t.frame, t.track))
+    r = role[order]
+    onehot = np.zeros((len(r) + 1, 3), np.int32)
+    known = r >= 0
+    onehot[1:][known, r[known]] = 1
+    cs = np.cumsum(onehot, 0)
+    tr = t.track[order]
+    starts = np.r_[0, np.flatnonzero(np.diff(tr)) + 1]
+    seg = np.repeat(np.arange(len(starts)), np.diff(np.r_[starts, len(tr)]))
+    a, b = starts[seg], np.r_[starts[1:], len(tr)][seg]
+    i = np.arange(len(tr))
+    lo, hi = np.maximum(a, i - window), np.minimum(b, i + window + 1)
+    votes = cs[hi] - cs[lo]
+    best = np.argmax(votes, axis=1).astype(np.int8)
+    best[votes.sum(1) == 0] = -1
+    out[order] = best
+    return out
+
+
+_roles_cache: dict = {}
+
+
+def roles_for(store: Store, game: Game, model: str = DEFAULT_MODEL) -> tuple[dict[int, str], np.ndarray] | None:
+    """team_roles and box_roles for the game's saved tracklets, for the default player; cached until
+    the tracklets or the picks change. None if not tracked."""
+    t = tracks(store, game, model)
+    if t is None:
+        return None
+    pp = _picks_path(store, game)
+    key = (str(path(store, game, model)), path(store, game, model).stat().st_mtime,
+           pp.stat().st_mtime if pp.exists() else 0, store.settings.default_player)
+    if key not in _roles_cache:
+        _roles_cache.clear()
+        roles = team_roles(t, load_picks(store, game), game, store.settings.default_player)
+        _roles_cache[key] = (roles, box_roles(t, roles))
+    return _roles_cache[key]
 
 
 # ---- yardstick from your labels ----

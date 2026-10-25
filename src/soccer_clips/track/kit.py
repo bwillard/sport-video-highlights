@@ -1,12 +1,19 @@
 """
 Kit colour of every detected person box (Phase 4.2), for telling teams apart.
 
-Each frame is decoded at half size and every pixel put in one of NBINS colour bins: 8 hues x
-(bright, dark) for coloured pixels, plus dark / grey / light for the rest. Pixels close to
+Each frame is decoded at half size and every pixel put in one of BINS colour bins: 8 hues x
+(tinted, saturated, vivid bright, vivid dark), plus dark / grey / light for the rest. The levels
+keep a white shirt with a blue cast from the sky or shade apart from a real blue kit: on PRSC
+(2026-10-25) the blue pixels of our white kit had median saturation 98 (90% below 172), those
+of their royal blue kit 228 (90% above 174). The bright / dark split keeps royal blue apart
+from navy. Pixels close to
 the grass colour of that frame (its most common colour low in the picture) are left out, so
 a green kit still counts unless it's the exact shade of the field. A box's feature is the
-histogram of its torso (the middle of the box's width, from just below the head to the
-waist), square-rooted so distances between features behave (Hellinger), as uint8.
+histogram of its torso (the middle of the box's width, from just below the head to the waist)
+next to the histogram of its shorts, each square-rooted so distances between features behave
+(Hellinger), as uint8. The shorts matter: a white shirt seen from behind can be mostly its big
+coloured number (PRSC, 2026-10-25: our white kit has big blue numbers, theirs is all blue), but
+white shorts aren't blue ones.
 
 Per game, tracks/people_kit_<model>.npz: feats (m, NBINS) uint8, one row per row of
 people_raw_<model>.npz's dets (same order), all zero where the torso had no usable pixels.
@@ -25,8 +32,14 @@ from soccer_clips.store import Store
 from soccer_clips.track.ball_game import chunks, merge, save_npz, tracks_dir
 
 SCALE = 0.5
-NBINS = 19
-TORSO = (0.25, 0.75, 0.18, 0.5)  # x from, x to, y from, y to: fractions of the box
+BINS = 35  # colour bins per region
+REGIONS = ((0.25, 0.75, 0.2, 0.5), (0.3, 0.7, 0.52, 0.68))  # torso, shorts: x from, x to, y from, y to (of the box)
+NBINS = BINS * len(REGIONS)  # feature length
+TINTED_S, SATURATED_S, VIVID_S, DARK_V = 50, 140, 200, 110  # OpenCV HSV units (0-255)
+# bin names, for looking at features
+BIN_NAMES = [f"{h}{lv}" for h in ("red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta")
+             for lv in ("~", "", "!", "!-")] + ["dark", "grey", "light"]
+FEATURE_NAMES = [f"{part}:{b}" for part in ("shirt", "shorts") for b in BIN_NAMES]
 GRASS_H, GRASS_S, GRASS_V = 10, 60, 60  # how close (OpenCV HSV units) a pixel must be to the grass to be left out
 EXCLUDED = 255
 GRASS_EVERY = 15  # frames between grass colour estimates (it changes slowly, with the light and the view)
@@ -46,14 +59,15 @@ def grass_colour(frame_bgr: np.ndarray) -> tuple[int, int, int]:
 
 
 def bins_of(hsv: np.ndarray, grass: tuple[int, int, int]) -> np.ndarray:
-    """Colour bin (0..NBINS-1) of HSV pixels (..., 3), EXCLUDED for grass."""
+    """Colour bin (0..BINS-1) of HSV pixels (..., 3), EXCLUDED for grass."""
     gh, gs, gv = grass
     h, s, v = (hsv[..., i].astype(np.int16) for i in range(3))
     dh = np.minimum(np.abs(h - gh), 180 - np.abs(h - gh))
     grass = (dh <= GRASS_H) & (np.abs(s - gs) <= GRASS_S) & (np.abs(v - gv) <= GRASS_V)
-    coloured = (s >= 60) & (v >= 50)
+    coloured = (s >= TINTED_S) & (v >= 40)
     hue_bin = ((h + 11) % 180) // 23  # 8 hue bins, red centred on bin 0
-    out = np.where(coloured, hue_bin * 2 + (v < 140), np.where(v < 70, 16, np.where(v < 170, 17, 18)))
+    level = np.where(s < SATURATED_S, 0, np.where(s < VIVID_S, 1, np.where(v >= DARK_V, 2, 3)))
+    out = np.where(coloured, hue_bin * 4 + level, np.where(v < 70, 32, np.where(v < 170, 33, 34)))
     out = out.astype(np.uint8)
     out[grass] = EXCLUDED
     return out
@@ -66,11 +80,16 @@ def bin_map(frame_bgr: np.ndarray) -> np.ndarray:
 
 def box_features(frame_bgr: np.ndarray, boxes: np.ndarray, grass: tuple[int, int, int] | None = None) -> np.ndarray:
     """uint8 features (n, NBINS) for boxes (n, 4: x1, y1, x2, y2 in full-size pixels) on a SCALE-size frame."""
+    grass = grass or grass_colour(frame_bgr)
+    return np.hstack([_region_features(frame_bgr, boxes, r, grass) for r in REGIONS])
+
+
+def _region_features(frame_bgr: np.ndarray, boxes: np.ndarray, region: tuple, grass: tuple[int, int, int]) -> np.ndarray:
     H, W = frame_bgr.shape[:2]
-    out = np.zeros((len(boxes), NBINS), np.uint8)
+    out = np.zeros((len(boxes), BINS), np.uint8)
     if not len(boxes):
         return out
-    fx0, fx1, fy0, fy1 = TORSO
+    fx0, fx1, fy0, fy1 = region
     b = boxes * SCALE
     w, h = b[:, 2] - b[:, 0], b[:, 3] - b[:, 1]
     xa = np.clip(b[:, 0] + fx0 * w, 0, W).astype(int)
@@ -85,10 +104,10 @@ def box_features(frame_bgr: np.ndarray, boxes: np.ndarray, grass: tuple[int, int
     if not crops:
         return out
     px = np.concatenate(crops)[:, None, :]  # all torso pixels as one image column: one colour conversion
-    bins = bins_of(cv2.cvtColor(px, cv2.COLOR_BGR2HSV)[:, 0], grass or grass_colour(frame_bgr))
+    bins = bins_of(cv2.cvtColor(px, cv2.COLOR_BGR2HSV)[:, 0], grass)
     owner = np.concatenate(owner)
     keep = bins != EXCLUDED
-    n = np.bincount(owner[keep] * NBINS + bins[keep], minlength=len(boxes) * NBINS).reshape(len(boxes), NBINS)
+    n = np.bincount(owner[keep] * BINS + bins[keep], minlength=len(boxes) * BINS).reshape(len(boxes), BINS)
     tot = n.sum(1, keepdims=True)
     ok = tot[:, 0] > 0
     out[ok] = np.round(np.sqrt(n[ok] / tot[ok]) * 255)
@@ -160,50 +179,115 @@ def compute(store: Store, game: Game, model: str, workers: int = 4, log=print) -
     return len(feats)
 
 
-TEAM_K = 6  # clusters per game: us and them (each often split into a light and a shaded cluster), refs, keepers, spectators
-TEAM_MIN_FRAMES = 30  # tracklets shorter than this aren't used to find the clusters (they're still assigned)
+# Teams. Each team's kit shows up as several colour clusters, by light: a white kit in sun is
+# white, in shade or from behind (a big blue number) it's blue-tinted; a blue kit in sun is bright
+# blue, in shade dark blue. So: many clusters of colour shares (k-means), each box assigned to one
+# by its kit over the half second around it; clusters that share tracklets (a player running from
+# sun into shade) are the same kit; and the clusters the labelled player's boxes fall in are ours
+# (people.team_roles).
+TEAM_K = 10
+TEAM_MIN_FRAMES = 30  # tracklets with less known kit than this aren't used to fit the clusters
+TEAM_FULL_H = 60  # px: boxes at least this tall count fully; a 30 px one a quarter
+TEAM_WINDOW = 15  # boxes either side, within a tracklet, that a box's kit is judged over (~0.5 s each way)
 
 
-def track_kits(track: np.ndarray, det: np.ndarray, feats: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per tracklet: ids, mean kit (unit length; zero if none known) and frames with a known kit."""
-    f = feats[det].astype(np.float32) / 255
-    known = f.any(1)
+def _shares(feats: np.ndarray, det: np.ndarray, heights: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+    """Colour shares of the boxes (each region sums to 1) and their weights (0 without a known shirt colour)."""
+    p = (feats[det].astype(np.float32) / 255) ** 2
+    w = p[:, :BINS].any(1).astype(np.float32)
+    if heights is not None:
+        w *= np.clip(heights / TEAM_FULL_H, 0.1, 1) ** 2
+    return p, w
+
+
+def track_kits(track: np.ndarray, det: np.ndarray, feats: np.ndarray,
+               heights: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per tracklet: ids, mean colour shares (weighted by box size) and the total weight (~frames)."""
+    p, w = _shares(feats, det, heights)
     ids, inv = np.unique(track, return_inverse=True)
-    sums = np.zeros((len(ids), f.shape[1]), np.float32)
-    np.add.at(sums, inv[known], f[known])
-    n = np.bincount(inv[known], minlength=len(ids))
-    means = sums / (np.linalg.norm(sums, axis=1, keepdims=True) + 1e-9)
-    return ids, means, n
+    sums = np.zeros((len(ids), p.shape[1]), np.float32)
+    np.add.at(sums, inv, p * w[:, None])
+    wt = np.bincount(inv, weights=w, minlength=len(ids))
+    return ids, sums / np.maximum(wt, 1e-9)[:, None], np.round(wt).astype(int)
 
 
 def cluster_teams(means: np.ndarray, n: np.ndarray, k: int = TEAM_K, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
     """
-    Weighted k-means (spherical: kits are unit vectors) of tracklet kits, fitted on tracklets with
-    at least TEAM_MIN_FRAMES known frames, weighted by that count. Returns (cluster of each
-    tracklet, -1 without a known kit; centres).
+    Weighted k-means of tracklet colour shares (plain Euclidean, so the main colours decide),
+    fitted on tracklets with at least TEAM_MIN_FRAMES of known kit, weighted by it. Returns
+    (cluster of each tracklet, -1 without a known kit; centres).
     """
     rng = np.random.default_rng(seed)
     fit = n >= TEAM_MIN_FRAMES
-    X, w = means[fit], n[fit].astype(np.float64)
+    X, w = means[fit].astype(np.float64), n[fit].astype(np.float64)
     if len(X) < k:
-        return np.full(len(means), -1), np.zeros((0, means.shape[1]))
-    # k-means++ start
-    centres = [X[rng.choice(len(X), p=w / w.sum())]]
+        return np.full(len(means), -1), np.zeros((0, means.shape[1]), np.float32)
+
+    def nearest(A, C):
+        return np.argmin((A ** 2).sum(1)[:, None] - 2 * A @ C.T + (C ** 2).sum(1)[None], axis=1)
+
+    C = [X[rng.choice(len(X), p=w / w.sum())]]  # k-means++ start
     for _ in range(1, k):
-        d = 1 - np.max(X @ np.array(centres).T, axis=1)
-        pr = w * np.maximum(d, 0) ** 2
-        centres.append(X[rng.choice(len(X), p=pr / pr.sum())] if pr.sum() else X[rng.integers(len(X))])
-    C = np.array(centres)
-    for _ in range(50):
-        lab = np.argmax(X @ C.T, axis=1)
-        newC = np.array([(X[lab == j] * w[lab == j, None]).sum(0) if (lab == j).any() else C[j] for j in range(k)])
-        newC /= np.linalg.norm(newC, axis=1, keepdims=True) + 1e-9
+        d = np.min(((X[:, None] - np.array(C)[None]) ** 2).sum(2), axis=1)
+        C.append(X[rng.choice(len(X), p=w * d / (w * d).sum())] if (w * d).sum() else X[rng.integers(len(X))])
+    C = np.array(C)
+    for _ in range(60):
+        lab = nearest(X, C)
+        newC = np.array([np.average(X[lab == j], axis=0, weights=w[lab == j]) if (lab == j).any() else C[j]
+                         for j in range(k)])
         if np.allclose(newC, C):
             break
         C = newC
-    out = np.argmax(means @ C.T, axis=1)
+    out = nearest(means.astype(np.float64), C)
     out[n == 0] = -1
-    return out, C
+    return out, C.astype(np.float32)
+
+
+def box_teams(track: np.ndarray, frame: np.ndarray, det: np.ndarray, feats: np.ndarray, heights: np.ndarray,
+              centres: np.ndarray, window: int = TEAM_WINDOW) -> np.ndarray:
+    """
+    Kit cluster of every box (int8, -1 if unknown): the nearest centre to its tracklet's mean
+    colour shares over the boxes around it, so a tracklet that swapped from one player to another
+    changes cluster where it swapped. Rows in any order; returned in that order.
+    """
+    out = np.full(len(track), -1, np.int8)
+    if not len(track) or not len(centres):
+        return out
+    order = np.lexsort((frame, track))
+    p, w = _shares(feats, det[order], heights[order])
+    cs = np.vstack([np.zeros((1, p.shape[1])), np.cumsum(p * w[:, None], 0)])
+    cw = np.r_[0.0, np.cumsum(w)]
+    tr = track[order]
+    starts = np.r_[0, np.flatnonzero(np.diff(tr)) + 1]
+    seg = np.repeat(np.arange(len(starts)), np.diff(np.r_[starts, len(tr)]))
+    a, b = starts[seg], np.r_[starts[1:], len(tr)][seg]
+    i = np.arange(len(tr))
+    lo, hi = np.maximum(a, i - window), np.minimum(b, i + window + 1)
+    tot = cw[hi] - cw[lo]
+    kits = (cs[hi] - cs[lo]) / np.maximum(tot, 1e-9)[:, None]
+    C = centres.astype(np.float64)
+    team = np.argmin((kits ** 2).sum(1)[:, None] - 2 * kits @ C.T + (C ** 2).sum(1)[None], axis=1).astype(np.int8)
+    team[tot <= 0] = -1
+    out[order] = team
+    return out
+
+
+def affinity(track: np.ndarray, box_team: np.ndarray, k: int) -> np.ndarray:
+    """
+    How much clusters share tracklets: for clusters a and b, the boxes a tracklet has in both
+    (the smaller count, summed over tracklets) over the smaller cluster's boxes. High = the same
+    kit seen in different light.
+    """
+    ok = box_team >= 0
+    ids, inv = np.unique(track[ok], return_inverse=True)
+    cnt = np.zeros((len(ids), k))
+    np.add.at(cnt, (inv, box_team[ok].astype(int)), 1)
+    tot = cnt.sum(0)
+    aff = np.zeros((k, k))
+    for a in range(k):
+        aff[a] = np.minimum(cnt[:, [a]], cnt).sum(0)
+    np.fill_diagonal(aff, 0)
+    return aff / np.maximum(np.minimum(tot[:, None], tot[None]), 1)
 
 
 def load(store: Store, game: Game, model: str) -> np.ndarray | None:

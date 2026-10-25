@@ -259,17 +259,61 @@ def test_team_clusters_and_roles(store):
     rng = np.random.default_rng(0)
     colours = np.eye(kit.NBINS, dtype=np.float32)[[0, 10, 4, 16]]  # red (us), blue (them), yellow (ref), dark
     means = np.vstack([colours[g] + 0.05 * rng.random(kit.NBINS) for g in [0] * 10 + [1] * 10 + [2] * 2 + [3] * 3])
-    means /= np.linalg.norm(means, axis=1, keepdims=True)
     n = np.full(len(means), 100)
     n[-1] = 0  # no known kit
     cluster, centres = kit.cluster_teams(means, n, k=4)
     assert len(set(cluster[:10])) == 1 and len(set(cluster[10:20])) == 1 and cluster[0] != cluster[10]
     assert cluster[-1] == -1 and centres.shape == (4, kit.NBINS)
-    # roles: the cluster under the labelled player is ours, the biggest other one opponents
+    # clusters sharing tracklets are the same kit
+    track = np.array([1] * 10 + [2] * 10 + [3] * 10)
+    box_team = np.array([0] * 5 + [1] * 5 + [1] * 10 + [2] * 10)  # tracklet 1 goes from cluster 0 to 1
+    aff = kit.affinity(track, box_team, 3)
+    assert aff[0, 1] == aff[1, 0] == pytest.approx(5 / 5) and aff[0, 2] == 0
+
+
+def test_team_roles_from_labelled_boxes(store, monkeypatch):
+    monkeypatch.setattr(people, "OURS_MIN_BOXES", 50)
     game = two_players(store)
     t = people.tracks(store, game)
     left, right = t.at(50, 0.15, 0.5), t.at(50, 0.65, 0.5)
-    t.team = {left: 2, right: 5}
-    picks = [{"frame": 50, "x": 0.15, "y": 0.5, "player": 38, "kind": "is"}]
-    assert people.team_roles(t, picks, game, 38) == {2: "ours", 5: "opponents"}
-    assert people.team_roles(t, [], game, 38) == {2: "team", 5: "team"}
+    # left player: clusters 0 (first half) and 1 (second half, in shade); right player: 2 then 3
+    first = t.frame < 50
+    t.box_team = np.where(t.track == left, np.where(first, 0, 1), np.where(first, 2, 3)).astype(np.int8)
+    t.team = {left: 0, right: 2}
+    t.affinity = np.zeros((4, 4))
+    t.affinity[2, 3] = t.affinity[3, 2] = 0.5
+    picks = [{"frame": 10, "x": 0.15, "y": 0.5, "player": 38, "kind": "is"}]  # labels the whole left tracklet
+    assert people.team_roles(t, picks, game, 38) == {0: "ours", 1: "ours", 2: "opponents", 3: "opponents"}
+    t.affinity[:] = 0  # without the shared tracklets, only the biggest other cluster is the opponents
+    assert people.team_roles(t, picks, game, 38) == {0: "ours", 1: "ours", 2: "opponents", 3: "other"}
+    assert set(people.team_roles(t, [], game, 38).values()) == {"team", "other"}
+
+
+def test_box_teams_follow_a_swap_inside_a_tracklet():
+    from soccer_clips.track import kit
+
+    red, blue = np.zeros(kit.NBINS, np.uint8), np.zeros(kit.NBINS, np.uint8)
+    red[[0, kit.BINS]], blue[[15, kit.BINS + 15]] = 255, 255  # shirt and shorts
+    feats = np.array([red] * 60 + [blue] * 60)
+    track = np.ones(120, int)  # one tracklet: red for 60 frames, then blue
+    centres = np.vstack([red, blue]).astype(np.float32) / 255
+    centres /= np.linalg.norm(centres, axis=1, keepdims=True)
+    team = kit.box_teams(track, np.arange(120), np.arange(120), feats, np.full(120, 80.0), centres)
+    assert (team[:45] == 0).all() and (team[-45:] == 1).all()
+
+
+def test_box_roles_ride_out_flicker_but_follow_a_swap(store):
+    game = two_players(store)
+    t = people.tracks(store, game)
+    left = t.at(50, 0.15, 0.5)
+    on_left = t.track == left
+    # left player: cluster 0 (ours), with a 1 s flicker to cluster 1 (opponents' kit) at frames 40-69
+    t.box_team = np.where(on_left, np.where((t.frame >= 40) & (t.frame < 70), 1, 0), 1).astype(np.int8)
+    roles = {0: "ours", 1: "opponents"}
+    r = people.box_roles(t, roles, window=45)
+    assert (r[on_left] == 0).all() and (r[~on_left] == 1).all()
+    # a lasting change (from frame 30 to the end: 70 frames) does show
+    t.box_team = np.where(on_left & (t.frame >= 30), 1, t.box_team).astype(np.int8)
+    t.box_team[on_left & (t.frame < 30)] = 0
+    r = people.box_roles(t, roles, window=20)
+    assert (r[on_left & (t.frame < 10)] == 0).all() and (r[on_left & (t.frame >= 60)] == 1).all()
