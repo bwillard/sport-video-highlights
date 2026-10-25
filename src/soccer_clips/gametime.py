@@ -47,6 +47,12 @@ class Suggestion:
     end_2h_s: float | None
     notes: list[str]
 
+    def __post_init__(self):
+        # plain floats: the window arithmetic yields numpy numbers, which don't go into JSON
+        for k in ("start_1h_s", "end_1h_s", "start_2h_s", "end_2h_s"):
+            v = getattr(self, k)
+            setattr(self, k, None if v is None else float(v))
+
 
 def activity(store: Store, game: Game) -> dict[str, np.ndarray]:
     """

@@ -149,3 +149,27 @@ def test_gametime_api(store):
         assert client.get(f"/video/{GAME}").headers["content-length"] != "0"
         assert client.post(f"{url}/gametime/cut").status_code == 409
         assert client.post(f"{url}/gametime/restore").json()["cut"] is None
+
+
+def test_suggest_finds_the_halves(store, monkeypatch):
+    import dataclasses
+
+    game = store.load_game(GAME)
+    # pretend a 12 s video is long: windows of play, a quiet half time, play, then a crowd
+    monkeypatch.setattr(gametime, "WINDOW_S", 0.1)
+    monkeypatch.setattr(gametime, "MIN_RUN_S", 1.0)
+    monkeypatch.setattr(gametime, "MIN_BREAK_S", 1.0)
+    monkeypatch.setattr(gametime, "GAP_OK_S", 0.2)
+    monkeypatch.setattr(gametime, "SMOOTH_W", 3)
+    n = int(np.ceil(game.duration_s / 0.1))
+    count = np.full(n, 20.0)
+    count[:10] = 0  # before kickoff (1 s)
+    count[50:65] = 6  # half time (5.0-6.5 s)
+    count[110:] = 40  # the handshake crowd
+    act = {"count": count, "camera": np.ones(n), "speed": np.ones(n), "height": np.full(n, 60.0),
+           "tracked": np.ones(n, bool)}
+    monkeypatch.setattr(gametime, "activity", lambda store, game: act)
+    sg = gametime.suggest(store, game)
+    assert sg.start_1h_s == pytest.approx(1.0) and sg.end_1h_s == pytest.approx(5.0)
+    assert sg.start_2h_s == pytest.approx(6.5) and sg.end_2h_s == pytest.approx(11.0)
+    json.dumps(dataclasses.asdict(sg))  # plain numbers, so the API can send it
