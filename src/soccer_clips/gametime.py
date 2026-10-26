@@ -169,7 +169,8 @@ def suggest(store: Store, game: Game) -> Suggestion:
 # ---- cutting the video to game time ----
 # Each half (plus PAD_S either side) is copied out of the original without re-encoding, from a
 # keyframe to a keyframe (Veo: one every 2.5 s, no B-frames), so frame k of a piece is exactly
-# frame orig_start + k of the original; the pieces are joined into <cut folder>/<year>/<id>.mp4.
+# frame orig_start + k of the original; the pieces are joined into <cut folder>/<year>/<id>.mp4,
+# with the sound cut to the same stretches (re-encoded, sample-accurate).
 # The original stays in full/. Then every stored time and frame number of the game is moved
 # onto the new timeline (TimeMap) and anything outside game time dropped, after copying all of
 # it to <data root>/backup/<time>-cut-<game>/ (`restore` puts it back).
@@ -243,19 +244,21 @@ def periods(game: Game) -> list[tuple[float, float]]:
     return [(t[0], t[1]), (t[2], t[3])]
 
 
-def keyframes(store: Store, path: Path, game: Game) -> np.ndarray:
-    """Frame numbers of the video's keyframes."""
+def keyframes(store: Store, path: Path, game: Game) -> tuple[np.ndarray, int]:
+    """Frame numbers of the video's keyframes, and its real number of frames (the stated duration
+    can round a frame or two past the last one: SAA, 2026-10-25)."""
     out = subprocess.run([store.settings.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
                           "packet=pts_time,flags", "-of", "csv=p=0", str(path)], capture_output=True, text=True,
                          check=True).stdout
-    ks = [float(line.split(",")[0]) for line in out.splitlines() if "K" in line.split(",", 1)[-1]]
-    return np.unique(np.round(np.array(ks) * game.fps).astype(np.int64))
+    rows = [line.split(",") for line in out.splitlines() if line.strip()]
+    slots = np.round(np.array([float(r[0]) for r in rows]) * game.fps).astype(np.int64)
+    keys = slots[[i for i, r in enumerate(rows) if "K" in ",".join(r[1:])]]
+    return np.unique(keys), int(slots.max()) + 1
 
 
 def plan(store: Store, game: Game) -> list[CutSegment]:
     """Keyframe-to-keyframe segments covering each half plus PAD_S either side."""
-    n = game.frame_at(game.duration_s)
-    keys = keyframes(store, store.full_path(game), game)
+    keys, n = keyframes(store, store.full_path(game), game)
     spans = []
     for start, end in periods(game):
         a = keys[keys <= max(0, game.frame_at(start - PAD_S))]
@@ -270,6 +273,13 @@ def plan(store: Store, game: Game) -> list[CutSegment]:
     return out
 
 
+def _slots(store: Store, path: Path, fps: float) -> np.ndarray:
+    """Frame slot (pts x fps, rounded) of every video packet."""
+    out = subprocess.run([store.settings.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "packet=pts_time", "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True).stdout
+    return np.round(np.array([float(x.split(",")[0]) for x in out.split()]) * fps).astype(np.int64)
+
+
 def _count_frames(store: Store, path: Path) -> int:
     out = subprocess.run([store.settings.ffprobe, "-v", "error", "-select_streams", "v:0", "-count_packets",
                           "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", str(path)],
@@ -278,39 +288,60 @@ def _count_frames(store: Store, path: Path) -> int:
 
 
 def cut_video(store: Store, game: Game, segments: list[CutSegment], out: Path, log=print) -> None:
-    """Copy the segments out of the original (no re-encoding) and join them into `out`."""
+    """
+    Copy the segments' pictures out of the original (no re-encoding) and join them, cut the same
+    stretches of sound sample-accurately (re-encoded: copying sound in 21 ms chunks kept nudging the
+    pictures by a frame, 2026-10-25), and put the two together in `out`. Checks that the pictures
+    start at the very beginning, have exactly the planned frames, and run without a timing gap.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
     fps = game.fps
-    parts = []
+    src = str(store.full_path(game))
+    temp = [out.with_name(f"{out.stem}.part{i}.mp4") for i in range(len(segments))]
+    video, audio = out.with_name(out.stem + ".video.mp4"), out.with_name(out.stem + ".audio.m4a")
+    listing, tmp = out.with_name(out.stem + ".parts.txt"), out.with_name(out.stem + ".part.mp4")
+    run = lambda cmd: subprocess.run([store.settings.ffmpeg, "-v", "error", "-y", *cmd], check=True)  # noqa: E731
     try:
-        for i, s in enumerate(segments):
-            part = out.with_name(f"{out.stem}.part{i}.mp4")
-            parts.append(part)  # (so it's removed if anything below fails)
+        for i, (s, part) in enumerate(zip(segments, temp)):
             want = s.orig_end - s.orig_start
-            # the video by exact frame count (a duration can round to one frame more, as on elite-strikers,
-            # 2026-10-25); the audio by duration
-            subprocess.run([store.settings.ffmpeg, "-v", "error", "-y", "-ss", f"{(s.orig_start + 0.5) / fps:.6f}",
-                            "-i", str(store.full_path(game)), "-frames:v", str(want), "-t", f"{want / fps:.6f}",
-                            "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-avoid_negative_ts", "make_zero",
-                            str(part)], check=True)
+            # by exact frame count: a duration can round to one frame more (elite-strikers, 2026-10-25)
+            run(["-ss", f"{(s.orig_start + 0.5) / fps:.6f}", "-i", src, "-frames:v", str(want), "-map", "0:v:0",
+                 "-c", "copy", "-an", "-avoid_negative_ts", "make_zero", str(part)])
             n = _count_frames(store, part)
             if n != want:
                 raise RuntimeError(f"piece {i} has {n} frames, expected {want}")
-            log(f"{game.id}: piece {i + 1}/{len(segments)} cut ({n} frames)")
-        listing = out.with_name(out.stem + ".parts.txt")
-        listing.write_text("".join(f"file '{p.name}'\n" for p in parts))
-        tmp = out.with_name(out.stem + ".part.mp4")
-        subprocess.run([store.settings.ffmpeg, "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
-                        "-c", "copy", "-movflags", "+faststart", str(tmp)], check=True)
+            log(f"{game.id}: pictures {i + 1}/{len(segments)} cut ({n} frames)")
+        # each piece's exact length, so the next starts on the very next frame
+        listing.write_text("".join(f"file '{p.name}'\nduration {(s.orig_end - s.orig_start) / fps:.6f}\n"
+                                   for p, s in zip(temp, segments)))
+        run(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(video)])
+        if game.has_audio:
+            trims = "".join(f"[0:a]atrim=start={s.orig_start / fps:.6f}:end={s.orig_end / fps:.6f},"
+                            f"asetpts=PTS-STARTPTS[a{i}];" for i, s in enumerate(segments))
+            joined = "".join(f"[a{i}]" for i in range(len(segments)))
+            run(["-i", src, "-filter_complex", f"{trims}{joined}concat=n={len(segments)}:v=0:a=1[a]", "-map", "[a]",
+                 "-c:a", "aac", "-b:a", "160k", str(audio)])
+            log(f"{game.id}: sound cut")
+            run(["-i", str(video), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+                 "-movflags", "+faststart", str(tmp)])
+        else:
+            run(["-i", str(video), "-map", "0:v:0", "-c", "copy", "-movflags", "+faststart", str(tmp)])
         total = sum(s.orig_end - s.orig_start for s in segments)
-        if _count_frames(store, tmp) != total:
-            raise RuntimeError("the joined video doesn't have the expected number of frames")
+        streams = json.loads(subprocess.run([store.settings.ffprobe, "-v", "error", "-show_entries",
+                                             "stream=codec_type,start_time", "-of", "json", str(tmp)],
+                                            capture_output=True, text=True, check=True).stdout)["streams"]
+        v_start = min(float(x["start_time"]) for x in streams if x["codec_type"] == "video")
+        if v_start - min(float(x["start_time"]) for x in streams) > 0.25 / fps:
+            raise RuntimeError(f"the joined video's pictures start {v_start:.3f} s into the file (frames would be off)")
+        slots = _slots(store, tmp, fps)
+        if len(slots) != total or not np.array_equal(slots - slots[0], np.arange(total)):
+            gaps = np.flatnonzero(np.diff(slots) != 1)
+            raise RuntimeError(f"the joined video has {len(slots)} frames (expected {total})"
+                               + (f", with a timing gap after frame {int(slots[gaps[0]] - slots[0])}" if len(gaps) else ""))
         tmp.replace(out)
     finally:
-        for p in parts:
+        for p in [*temp, video, audio, listing, tmp]:
             p.unlink(missing_ok=True)
-        out.with_name(out.stem + ".parts.txt").unlink(missing_ok=True)
-        out.with_name(out.stem + ".part.mp4").unlink(missing_ok=True)
 
 
 def _frame(store: Store, game: Game, frame: int) -> np.ndarray:
@@ -607,7 +638,11 @@ def cut_game(store: Store, game_id: str, log=print) -> dict:
     cut_video(store, game, segments, out, log)
     info = ffprobe(store.settings, out)
     cut = GameCut(file=rel, segments=segments, original_duration_s=game.duration_s)
-    verify(store, game, game.model_copy(update={"cut": cut}), segments)
+    try:
+        verify(store, game, game.model_copy(update={"cut": cut}), segments)
+    except Exception:
+        out.unlink(missing_ok=True)  # nothing else has been touched yet
+        raise
     log(f"{game.id}: cut video checked against the original")
     dest = backup(store, game)
     cut.backup = str(dest.relative_to(data_root(store)))
