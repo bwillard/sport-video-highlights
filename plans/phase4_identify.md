@@ -127,6 +127,17 @@ For a chosen player, find the stretches of a game where they're involved with th
 - Acceptable full-game processing time (overnight is fine?).
 
 ## Findings
+- **2026-10-26** — Appearance re-ID, first test: can a model tell #38 from her teammates? Positives: her labelled stretches (128 tracklets); negatives: our-kit tracklets on the pitch during them (2,173; certainly not her). 3 crops per tracklet (the biggest box in each third, ≥ 45 px), averaged. AUC = chance one of her tracklets scores above a teammate's (0.5 coin flip, 1.0 perfect), mean over the six games:
+
+  | Model | Within the game (similarity) | Her look from the other games | Linear classifier trained on the other 5 games |
+  |---|---|---|---|
+  | ResNet50 (ImageNet) | 0.66 | 0.65 | 0.68 |
+  | OSNet x1_0 (MSMT17 re-ID) | 0.67 | 0.72 | 0.79 |
+  | **OSNet-AIN x1_0 (MSMT17 re-ID)** | **0.71** | **0.75** | **0.85** (0.77–0.93 per game) |
+  | DINOv2-small | 0.67 | 0.64 | 0.77 |
+  | DINOv2-base | 0.62 | 0.58 | 0.71 |
+
+  A model made for telling people apart (and for generalising across cameras: AIN) beats general image models; DINOv2 brings nothing here (small, blurry crops of girls in the same kit). Training on our own labels matters more than the backbone (0.75 → 0.85 for OSNet-AIN). Next: fine-tune OSNet-AIN on our labels (her vs teammates, plus teammates named by group), more and bigger crops per tracklet, and score the real task: picking her among the teammates on screen at the same moment. Stock PARSeq (2026-10-26) read none of 40 close-ups of her as 38: most crops are front views (sponsor logo, no number) and the few with a number are blurry; a jersey-trained reader with a legibility check would be needed for numbers.
 - **2026-10-25** — Kit colour in tracking, tuned against the #38 labels (215 known points, 29 swaps; `people eval-labels`). Tracking cached per gate, cut/join scored on top:
 
   | Setting | Hold median / mean (s) | Conflicts | Swaps left |
