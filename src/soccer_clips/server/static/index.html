@@ -28,6 +28,12 @@
   #debugStat { display: inline-block; min-width: 8.5em; }
   #markin { display: inline-block; min-width: 4em; }
   #peopleStat { display: inline-block; min-width: 11em; }
+  /* help: one collapsible section per topic; closed ones share a line, an open one takes the full width */
+  .help-secs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin-top: 6px; line-height: 1.7; }
+  .help-secs details[open] { flex-basis: 100%; }
+  .help-secs summary { cursor: pointer; color: var(--text); }
+  .help-secs ul { margin: 2px 0 6px; padding-left: 20px; }
+  .help-title { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -62,32 +68,49 @@
       <span id="flash"></span>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
-    <p class="help">
-      <kbd>Space</kbd> play/pause · <kbd>M</kbd> sound on/off · <kbd>[</kbd>/<kbd>]</kbd> speed −/+ 0.5× ·
-      <kbd>←</kbd>/<kbd>→</kbd> ±5s (<kbd>Shift</kbd> ±60s) · <kbd>,</kbd>/<kbd>.</kbd> frame step<br>
-      <kbd>Enter</kbd> save clip (no in point: last 8s + next 2s) · <kbd>I</kbd>/<kbd>O</kbd> mark in/out ·
-      <kbd>Shift</kbd>+<kbd>I</kbd>/<kbd>O</kbd> move selected clip's start/end here · <kbd>Esc</kbd> clear<br>
-      <kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>+</kbd>/<kbd>-</kbd> 😊/🙁 · <kbd>F</kbd> default player · <kbd>P</kbd> add a player number · <kbd>T</kbd> team play ·
-      <kbd>N</kbd> note · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next clip · <kbd>R</kbd> replay clip ·
-      <kbd>E</kbd> export · <kbd>Del</kbd> delete ·
-      <kbd>H</kbd>/<kbd>Shift</kbd>+<kbd>H</kbd> 1st/2nd half kickoff (H late in the game asks which) ·
-      <kbd>J</kbd>/<kbd>Shift</kbd>+<kbd>J</kbd> end of the 1st/2nd half (non-game time is shaded on the timeline)<br>
-      <kbd>C</kbd> callout: pause inside the selected clip, press C, click on the player (drag to size the ring) ·
-      <kbd>Shift</kbd>+<kbd>C</kbd> remove it · <kbd>B</kbd> show the game ball (where it has been tracked)<br>
-      Fixing the ball (ring on): <kbd>K</kbd> then click the ball = it's here · <kbd>Shift</kbd>+<kbd>K</kbd> = that ring is wrong, no ball to see ·
-      <kbd>K</kbd> <kbd>O</kbd> other balls: click each spare / next-field ball (cyan), click again to remove, <kbd>O</kbd>/<kbd>Esc</kbd> to stop
-      (for training; a click on a detection takes its exact spot and size) ·
-      <kbd>D</kbd> debug layer: every ball detection as a circle with its confidence (dim below 0.25), magenta dot = a ball you placed,
-      red × = a detection your fix suppressed, orange "fixed" = on something that never moves all game (a flag, chair, bag: never the ball),
-      dashed box = the area the detector searches (balls outside it are never found).
-      A grey circle with no ring = seen but dropped by the filter; nothing = never detected.<br>
-      Players: <kbd>V</kbd> show tracked players (boxes by kit: white = our team, blue = opponents, grey dashed = refs/keepers/spectators; orange ring = the player picked next to 👥) ·
-      <kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person) ·
-      <kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one.
-      The orange strip under the timeline = where they're labelled<br>
-      the path is redone around the fix, and (unless switched off next to the ⚽ button) the frame becomes a labelled
-      frame: most go to training, one 30-second moment in five to the benchmark
-    </p>
+    <div class="help help-secs" id="help">
+      <span class="help-title">Keys &amp; help:</span>
+      <details data-sec="playback"><summary>Playback</summary><ul>
+        <li><kbd>Space</kbd> play / pause · <kbd>M</kbd> sound on / off · <kbd>[</kbd> / <kbd>]</kbd> speed −/+ 0.5×</li>
+        <li><kbd>←</kbd> / <kbd>→</kbd> back / forward 5 s (<kbd>Shift</kbd>: 60 s) · <kbd>,</kbd> / <kbd>.</kbd> one frame back / forward</li>
+        <li>Click or drag the timeline to jump; hover it to see the time</li>
+      </ul></details>
+      <details data-sec="clips"><summary>Clips</summary><ul>
+        <li><kbd>I</kbd> / <kbd>O</kbd> mark in / out · <kbd>Enter</kbd> save the clip (without an in point: the last 8 s and next 2 s) · <kbd>Esc</kbd> clear</li>
+        <li><kbd>↑</kbd> / <kbd>↓</kbd> previous / next clip · <kbd>R</kbd> replay it · <kbd>Shift</kbd>+<kbd>I</kbd> / <kbd>O</kbd> move its start / end to here</li>
+        <li><kbd>1</kbd>–<kbd>9</kbd> tags · <kbd>+</kbd> / <kbd>-</kbd> 😊 / 🙁 · <kbd>N</kbd> note</li>
+        <li><kbd>F</kbd> default player · <kbd>P</kbd> add a player number · <kbd>T</kbd> team play</li>
+        <li><kbd>E</kbd> export · <kbd>Del</kbd> delete</li>
+      </ul></details>
+      <details data-sec="gametime"><summary>Game time</summary><ul>
+        <li><kbd>H</kbd> / <kbd>Shift</kbd>+<kbd>H</kbd> 1st / 2nd half kickoff (H late in the game asks which)</li>
+        <li><kbd>J</kbd> / <kbd>Shift</kbd>+<kbd>J</kbd> end of the 1st / 2nd half</li>
+        <li>Non-game time is shaded on the timeline. The Game time box (right) suggests the times, jumps to each, and cuts the video down to game time</li>
+      </ul></details>
+      <details data-sec="callouts"><summary>Callouts</summary><ul>
+        <li><kbd>C</kbd> pause inside the selected clip, press C, click on the player (drag to size the ring): the reel freezes there with a spotlight</li>
+        <li><kbd>Shift</kbd>+<kbd>C</kbd> remove it</li>
+      </ul></details>
+      <details data-sec="ball"><summary>Ball</summary><ul>
+        <li><kbd>B</kbd> show the game ball where it has been tracked (solid ring: seen; dashed: filled in across a short gap)</li>
+        <li><kbd>K</kbd> then click the ball = it's here · <kbd>Shift</kbd>+<kbd>K</kbd> = that ring is wrong, no ball to see.
+          The path is redone around the fix, and (unless switched off next to the ⚽ button) the frame becomes a labelled
+          frame: most go to training, one 30-second moment in five to the benchmark</li>
+        <li><kbd>K</kbd> <kbd>O</kbd> other balls: click each spare / next-field ball (cyan), click again to remove, <kbd>O</kbd> / <kbd>Esc</kbd> to stop
+          (for training; a click on a detection takes its exact spot and size)</li>
+        <li><kbd>D</kbd> debug layer: every ball detection as a circle with its confidence (dim below 0.25); a grey circle with no ring =
+          seen but dropped by the filter, nothing = never detected; magenta dot = a ball you placed; red × = a detection your fix
+          suppressed; orange "fixed" = on something that never moves all game (a flag, chair, bag: never the ball); dashed box =
+          the area the detector searches</li>
+      </ul></details>
+      <details data-sec="players"><summary>Players</summary><ul>
+        <li><kbd>V</kbd> show tracked players: boxes by kit (white = our team, blue = opponents, grey dashed = refs, keepers,
+          spectators); orange ring = the player picked next to 👥</li>
+        <li><kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person)</li>
+        <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
+        <li>The orange strip under the timeline = where they're labelled</li>
+      </ul></details>
+    </div>
   </section>
   <aside>
     <div class="box filters" title="Shown on the opening card of reels made from this game">
@@ -996,6 +1019,12 @@ async function undoPick() {
   flash(r.undone ? `took back the last player label (#${r.undone.player} at ${fmt(r.undone.frame / fps)})` : "no player labels to take back");
 }
 $("peopleBtn").addEventListener("click", (e) => { e.currentTarget.blur(); togglePeople(); });
+
+// help sections: remember which are open
+for (const d of document.querySelectorAll("#help details")) {
+  try { d.open = localStorage.getItem(`help:${d.dataset.sec}`) === "1"; } catch {}
+  d.addEventListener("toggle", () => { try { localStorage.setItem(`help:${d.dataset.sec}`, d.open ? "1" : "0"); } catch {} });
+}
 showPeopleButton();
 showDebugButton();
 showBallButton();
