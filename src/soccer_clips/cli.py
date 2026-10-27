@@ -350,6 +350,14 @@ def cmd_reid(store: Store, args: argparse.Namespace) -> None:
                 print(f"{gid}: no crops yet, skipped")
                 continue
             print(f"{gid}: {reid.compute_signatures(store, game, device=args.device, log=log)} signatures", flush=True)
+    elif args.reid_command == "auto-eval":
+        ids = args.games or [g.id for g in store.list_games() if reid.sigs_path(store, g).exists()]
+        r = reid.evaluate_auto(store, ids, log=log)
+        print("group   min  margin | right wrong missed | precision coverage | claimed min | on others' labels s")
+        for grp, per in r.items():
+            for (mn, mg), x in per.items():
+                print(f"{grp:7} {mn:4} {mg:6} | {x['right']:5} {x['wrong']:5} {x['missed']:6} | {x['precision']!s:9}"
+                      f" {x['coverage']:8} | {x['claimed_s'] / 60:11.1f} | {x['false_s']:.0f}")
     elif args.reid_command == "experiment":
         r = reid.run_experiment(Path(args.data), Path(args.stock), Path(args.out), n_folds=args.folds,
                                 steps=args.steps, device=args.device, log=log)
@@ -575,6 +583,8 @@ def main() -> None:
     rs = rp_sub.add_parser("sigs", help="appearance signatures of our team's crops (tuned model if there is one)")
     rs.add_argument("--games", nargs="+", help="game ids (default: all)")
     rs.add_argument("--device", default="cpu", help="cpu or cuda (about 17 crops/s on this CPU)")
+    ra = rp_sub.add_parser("auto-eval", help="score automatic labels: hide half of each player's labels, auto-label, compare")
+    ra.add_argument("--games", nargs="+", help="game ids (default: all with signatures)")
     rx = rp_sub.add_parser("experiment", help="cross-validated fine-tuning and scoring on a crops bundle (GPU pod)")
     rx.add_argument("--data", required=True, help="folder from reid.write_bundle")
     rx.add_argument("--stock", required=True, help="stock OSNet-AIN weights")

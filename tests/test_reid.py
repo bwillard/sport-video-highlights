@@ -119,6 +119,11 @@ def test_suggestions_rank_lookalikes_and_respect_one_place_at_a_time(settings, m
     assert [s["track"] for s in got["suggestions"]] == [3, 2]
     assert got["suggestions"][0]["score"] > 0.5 > got["suggestions"][1]["score"]
     assert reid.suggest(store, game, 7)["note"] == "no labelled stretches of #7 yet"
+    # automatic labels: the look-alike while she isn't labelled; never the different-looking teammate, nor
+    # the look-alike on screen while she's labelled elsewhere
+    assert [c["track"] for c in reid.auto_label(store, game, 38, min_score=0.5)] == [3]
+    assert reid.auto_label(store, game, 38, min_score=0.99) == []
+    assert {p: [c["track"] for c in cs] for p, cs in reid.auto_all(store, game).items()} == {38: [3]}
     # "no" takes a tracklet out of the suggestions, without counting as a swap
     people.add_pick(store, game, 100, 38, "no", 0.55, 0.4, track=3)
     assert [s["track"] for s in reid.suggest(store, game, 38)["suggestions"]] == [2]

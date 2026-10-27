@@ -766,3 +766,176 @@ def suggest(store: Store, game: Game, player: int, limit: int = 20) -> dict:
                     "box": [round(v, 4) for v in (x1, y1, x2, y2)], "score": round(float(score[j]), 3),
                     "start": t.first[k], "end": t.last[k] + 1})
     return {"suggestions": out, "look_crops": n, "candidates": len(first)}
+
+
+# ---- automatic labels: where a player is, from appearance alone ----
+
+AUTO_MARGIN = 0.02  # a piece must beat every other unlabelled teammate on screen by this much (cosine)
+AUTO_MIN = 0.9  # and look at least this much like the player (2026-10-27: her own pieces ~0.95 against her look
+# from the other games, pieces labelled as teammates ~0.45-0.69)
+
+
+def _look_without(store: Store, game: Game, player: int, hidden: list[dict]) -> np.ndarray | None:
+    """The player's look from every game, leaving out this game's `hidden` stretches (for the yardstick)."""
+    total, n = np.zeros(512, np.float32), 0
+    for g in store.list_games():
+        got = player_sums(store, g).get(player)
+        if got:
+            total += got[0]
+            n += got[1]
+    if hidden:
+        s = load_sigs(store, game)
+        for x in hidden:
+            m = (s["track"] == x["track"]) & (s["frame"] >= x["start"]) & (s["frame"] < x["end"])
+            total -= s["sig"][m].sum(0)
+            n -= int(m.sum())
+    return total / max(np.linalg.norm(total), 1e-9) if n > 0 else None
+
+
+def auto_label(store: Store, game: Game, player: int, margin: float = AUTO_MARGIN, min_score: float = AUTO_MIN,
+               hidden: list[dict] | None = None, others_compete: bool = False) -> list[dict]:
+    """
+    Stretches where `player` is probably on screen and unlabelled: {track, start, end, margin}. A piece (~PIECE
+    crops of a tracklet) is claimed when it looks at least `min_score` like the player and more like them than
+    every other unlabelled our-team piece on screen at the same time, by at least `margin`. Nothing is claimed
+    while the player is labelled elsewhere, nor on stretches labelled as anyone. For the yardstick: `hidden` =
+    labelled stretches of the player to treat as unlabelled; `others_compete` = stretches labelled as other
+    players stay in (a claim there is a known mistake).
+    """
+    from soccer_clips.track import people
+
+    pc = _pieces(store, game)
+    hidden = hidden or []
+    look = _look_without(store, game, player, hidden)
+    if pc is None or look is None:
+        return []
+    t = people.tracks(store, game)
+    hid = {(x["track"], x["start"], x["end"]) for x in hidden}
+    segs = [x for x in people.segments(t, people.load_picks(store, game))
+            if (x["track"], x["start"], x["end"]) not in hid]
+    ok = ~np.isin(pc["track"], list(_not_ours(t, people.roles_for(store, game)[1])))
+    for x in segs:  # labelled pieces aren't candidates; the player labelled elsewhere rules out everyone else
+        over = (pc["lo"] < x["end"]) & (pc["hi"] >= x["start"])
+        if x["player"] == player or not others_compete:
+            ok &= ~(over & (pc["track"] == x["track"]))
+        if x["player"] == player:
+            ok &= ~over
+    idx = np.flatnonzero(ok)
+    score = pc["vec"][idx] @ look
+    # each piece against the best other candidate on screen at any of its crop frames
+    lo, hi = pc["lo"][idx] // CROP_EVERY, pc["hi"][idx] // CROP_EVERY
+    counts = hi - lo + 1
+    owner = np.repeat(np.arange(len(idx)), counts)
+    cell = np.repeat(lo, counts) + (np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts))
+    order = np.lexsort((-score[owner], cell))
+    cell_s, owner_s = cell[order], owner[order]
+    starts = np.flatnonzero(np.r_[True, np.diff(cell_s) > 0])
+    best = np.full(cell_s.max() + 1 if len(cell_s) else 1, -np.inf)
+    second = best.copy()
+    best[cell_s[starts]] = score[owner_s[starts]]
+    has2 = np.r_[starts[1:], len(cell_s)] - starts > 1
+    second[cell_s[starts[has2]]] = score[owner_s[starts[has2] + 1]]
+    rival = np.where(best[cell] == score[owner], second[cell], best[cell])
+    worst = np.full(len(idx), -np.inf)
+    np.maximum.at(worst, owner, rival)
+    lead = score - worst
+    out = []
+    for j in np.flatnonzero((lead >= margin) & (score >= min_score)):
+        p = idx[j]
+        out.append({"track": int(pc["track"][p]), "start": int(pc["lo"][p]), "end": int(pc["hi"][p]) + CROP_EVERY,
+                    "margin": round(float(lead[j]), 4)})
+    out.sort(key=lambda x: x["start"])
+    merged = []  # consecutive pieces of one tracklet become one stretch
+    for x in out:
+        if merged and merged[-1]["track"] == x["track"] and x["start"] <= merged[-1]["end"]:
+            merged[-1]["end"] = max(merged[-1]["end"], x["end"])
+            merged[-1]["margin"] = min(merged[-1]["margin"], x["margin"])
+        else:
+            merged.append(dict(x))
+    return merged
+
+
+def evaluate_auto(store: Store, game_ids: list[str], players: list[int] | None = None,
+                  settings: tuple[tuple[float, float], ...] = ((0.0, 0.0), (0.8, 0.0), (0.85, 0.0), (0.85, 0.02),
+                                                               (0.9, 0.0), (0.9, 0.02)), log=print) -> dict:
+    """
+    Hide every other labelled stretch of a player in a game, auto-label, and score (two rounds, so each
+    stretch is hidden once). At each crop frame of a hidden stretch: right = claimed on the hidden tracklet,
+    wrong = claimed on another, missed = no claim. false_s = seconds claimed on stretches labelled as another
+    player (they compete here, so each is a known mistake). Per group (PLAYER as "her", everyone else as
+    "others") and (min_score, margin) setting, summed over the games.
+    """
+    from soccer_clips.track import people
+
+    res = {grp: {st: {"right": 0, "wrong": 0, "missed": 0, "false_s": 0.0, "claimed_s": 0.0} for st in settings}
+           for grp in ("her", "others")}
+    for gid in game_ids:
+        game = store.load_game(gid)
+        if _pieces(store, game) is None:
+            continue
+        t = people.tracks(store, game)
+        segs = people.segments(t, people.load_picks(store, game))
+        s = load_sigs(store, game)
+        fps = game.fps_num / game.fps_den
+        for player in sorted({x["player"] for x in segs} if players is None else set(players)):
+            mine = [x for x in segs if x["player"] == player]
+            theirs = [x for x in segs if x["player"] != player]
+            r = res["her" if player == PLAYER else "others"]
+            for half in (0, 1):
+                hidden = mine[half::2]
+                if not hidden:
+                    continue
+                for st in settings:
+                    claims = auto_label(store, game, player, margin=st[1], min_score=st[0], hidden=hidden,
+                                        others_compete=True)
+                    r[st]["claimed_s"] += sum(c["end"] - c["start"] for c in claims) / fps
+                    for c in claims:
+                        for x in theirs:
+                            if x["track"] == c["track"]:
+                                r[st]["false_s"] += max(0, min(c["end"], x["end"]) - max(c["start"], x["start"])) / fps
+                    for x in hidden:
+                        frames = s["frame"][(s["track"] == x["track"]) & (s["frame"] >= x["start"]) & (s["frame"] < x["end"])]
+                        for f in frames.tolist():
+                            at = [c["track"] for c in claims if c["start"] <= f < c["end"]]
+                            if x["track"] in at:
+                                r[st]["right"] += 1
+                            elif at:
+                                r[st]["wrong"] += 1
+                            else:
+                                r[st]["missed"] += 1
+        log(f"{gid}: done")
+    for per in res.values():
+        for r in per.values():
+            claimed = r["right"] + r["wrong"]
+            r["precision"] = round(r["right"] / claimed, 3) if claimed else None
+            r["coverage"] = round(r["right"] / max(1, claimed + r["missed"]), 3)
+    return res
+
+
+_auto_cache: dict = {}
+
+
+def auto_all(store: Store, game: Game) -> dict[int, list[dict]]:
+    """auto_label for every player labelled in any game; a stretch two players both claim is dropped.
+    Cached until the game's signatures, tracklets or picks change, or labels change in another game."""
+    from soccer_clips.track import people
+
+    files = [sigs_path(store, game), people.path(store, game, people.DEFAULT_MODEL)]
+    if not all(f.exists() for f in files):
+        return {}
+    looks = [_looks_path(store, g) for g in store.list_games()]
+    pp = people._picks_path(store, game)
+    key = (game.id, *(f.stat().st_mtime_ns for f in files), pp.stat().st_mtime_ns if pp.exists() else 0,
+           *(f.stat().st_mtime_ns if f.exists() else 0 for f in looks))
+    if key not in _auto_cache:
+        players = sorted({p for g in store.list_games() for p in player_sums(store, g)})
+        claims = {p: auto_label(store, game, p) for p in players}
+        flat = sorted((c["track"], c["start"], c["end"], p) for p, cs in claims.items() for c in cs)
+        clash = set()
+        for (k1, a1, b1, p1), (k2, a2, b2, p2) in zip(flat, flat[1:]):
+            if k1 == k2 and a2 < b1 and p1 != p2:
+                clash |= {(k1, a1, p1), (k2, a2, p2)}
+        out = {p: [c for c in cs if (c["track"], c["start"], p) not in clash] for p, cs in claims.items()}
+        _auto_cache.clear()
+        _auto_cache[key] = {p: cs for p, cs in out.items() if cs}
+    return _auto_cache[key]

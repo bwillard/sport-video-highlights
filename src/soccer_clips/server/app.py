@@ -636,6 +636,13 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         return reid.suggest(store, load(game_id), player, limit=min(max(limit, 1), 200))
 
+    @app.get("/api/games/{game_id}/people/auto")
+    def game_people_auto(game_id: str) -> dict:
+        """Automatic labels (reid.auto_all): {player: [{track, start, end, margin}]} for every labelled player."""
+        from soccer_clips.track import reid
+
+        return {str(p): cs for p, cs in reid.auto_all(store, load(game_id)).items()}
+
     @app.delete("/api/games/{game_id}/people/picks/last")
     def game_people_undo(game_id: str) -> dict:
         """Take back the last pick; returns it (null if there were none) and the labels."""

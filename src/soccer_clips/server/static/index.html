@@ -56,7 +56,7 @@
     <option value="">fixes → don't label</option>
   </select>
   <button id="loupeBtn" title="Magnifier (Z): a 3× close-up follows the mouse over the video, boxes and rings included.&#10;Shift+Z switches between 3× and 6×.">🔎 magnifier</button>
-  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;A small white #number over a box = already labelled as that player.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.">👥 players</button>
+  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;A small white #number over a box = already labelled as that player.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.&#10;Dashed ring / faint #n? = probably that player, by appearance; Y / X confirm or reject the dashed ring.">👥 players</button>
   <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
   <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
   <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
@@ -118,6 +118,9 @@
         <li><kbd>G</kbd> next suggestion: jumps to an unlabelled teammate who looks like the player you follow (magenta box, best
           match first) · <kbd>Y</kbd> yes, that's them (labels the tracklet) · <kbd>X</kbd> no · <kbd>G</kbd> again skips it.
           Works for any player with a few labels; each answer makes the next suggestions better</li>
+        <li>Dashed orange ring with <b>#38?</b> = where the player you follow probably is, by appearance (not yet labelled;
+          the faint strip above the timeline's orange one) · paused on one, <kbd>Y</kbd> confirms it, <kbd>X</kbd> says no.
+          A faint <i>#5?</i> = another player placed the same way</li>
       </ul></details>
     </div>
   </section>
@@ -562,6 +565,10 @@ function drawTimeline() {
     for (const sg of people.segments) {
       if (sg.player === followWho) ctx.fillRect(x(sg.start * spf), h - 4, Math.max(1, x((sg.end - sg.start) * spf)), 4);
     }
+    ctx.fillStyle = "rgba(255,159,64,0.45)";  // automatic (appearance): a thinner, fainter strip above
+    for (const sg of (autoLabels?.gameId === game.id && autoLabels.byPlayer[followWho]) || []) {
+      ctx.fillRect(x(sg.start * spf), h - 7, Math.max(1, x((sg.end - sg.start) * spf)), 2);
+    }
   }
   ctx.font = "11px system-ui, sans-serif";
   ctx.textBaseline = "top";
@@ -955,17 +962,37 @@ const boxChunks = new Map();  // chunk index -> Float32Array, or "loading"
 try { showPeople = localStorage.getItem("showPeople") === "1"; } catch {}
 
 let peopleLoading = null;  // the request for the players' summary, while it's on its way
+let autoLabels = null;  // {gameId, byPlayer: {player: [{track, start, end}]}}: where each player probably is (appearance)
+let autoHere = null;  // the followed player's automatic box in this frame: {track, frame, x, y}
+function loadAuto() {
+  if (!showPeople || !game) return;
+  const id = game.id;
+  getJson(`/api/games/${encodeURIComponent(id)}/people/auto`)
+    .then((a) => { if (game?.id === id) autoLabels = { gameId: id, byPlayer: a }; })
+    .catch(() => {});
+}
+function autoAt(f) {
+  // track -> player for automatic stretches at frame f
+  const m = new Map();
+  if (autoLabels?.gameId !== game?.id) return m;
+  for (const [p, list] of Object.entries(autoLabels.byPlayer)) {
+    for (const sg of list) if (f >= sg.start && f < sg.end) m.set(sg.track, +p);
+  }
+  return m;
+}
 function loadPeople() {
   if (!showPeople || !game || people?.gameId === game.id) return peopleLoading;
   const id = game.id;
   peopleLoading = getJson(`/api/games/${encodeURIComponent(id)}/people`).then((p) => {
     if (game?.id === id) people = { gameId: id, ...p };
     fetchSuggestions()?.catch(() => {});  // ready before the first G
+    loadAuto();
   }).finally(() => { peopleLoading = null; });
   return peopleLoading;
 }
 function setLabels(r) {
   if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
+  loadAuto();  // labels move the automatic ones
   boxChunks.clear();  // which kit is "ours" comes from the labels, so box teams may have changed
 }
 function togglePeople() {
@@ -1055,16 +1082,39 @@ function drawPeople(ctx) {
     ctx.strokeRect(r.x + rows[o + 2] * r.w, r.y + rows[o + 3] * r.h, (rows[o + 4] - rows[o + 2]) * r.w, (rows[o + 5] - rows[o + 3]) * r.h);
   }
   ctx.setLineDash([]);
-  // a small number over everyone already labelled (the followed player gets the ring below instead)
-  const known = labelledAt(f);
+  // a small number over everyone already labelled (the followed player gets the ring below instead),
+  // and a faint "#n?" over anyone placed automatically by appearance
+  const known = labelledAt(f), auto = autoAt(f);
+  autoHere = null;
   ctx.font = "bold 11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.fillStyle = "#fff";
   for (let i = i0; i < i1; i++) {
-    const o = i * STRIDE, n = known.get(rows[o + 1]);
-    if (n == null || mine.has(rows[o + 1])) continue;
+    const o = i * STRIDE, tr = rows[o + 1], n = known.get(tr);
+    if (mine.has(tr)) continue;
     const cx = r.x + (rows[o + 2] + rows[o + 4]) / 2 * r.w, y1 = r.y + rows[o + 3] * r.h;
-    ctx.strokeText(`#${n}`, cx, y1 - 3);
-    ctx.fillText(`#${n}`, cx, y1 - 3);
+    if (n != null) {
+      ctx.fillStyle = "#fff"; ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.strokeText(`#${n}`, cx, y1 - 3);
+      ctx.fillText(`#${n}`, cx, y1 - 3);
+      continue;
+    }
+    const a = auto.get(tr);
+    if (a == null) continue;
+    if (a === followWho) {  // the followed player, placed automatically: dashed ring, Y / X answer it
+      const x1 = r.x + rows[o + 2] * r.w, x2 = r.x + rows[o + 4] * r.w, y2 = r.y + rows[o + 5] * r.h;
+      const rx = Math.max(10, (x2 - x1) * 0.75), ry = Math.max(4, rx * 0.35);
+      autoHere = { track: tr, frame: f, x: (rows[o + 2] + rows[o + 4]) / 2, y: (rows[o + 3] + rows[o + 5]) / 2 };
+      ctx.save();
+      ctx.setLineDash([5, 4]); ctx.lineWidth = 2; ctx.strokeStyle = "#ff9f40";
+      ctx.beginPath(); ctx.ellipse(cx, y2, rx, ry, 0, 0, 2 * Math.PI); ctx.stroke();
+      ctx.restore();
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.8)";
+      ctx.fillStyle = "#ffbf80"; ctx.font = "bold 11px system-ui, sans-serif";
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.font = "italic 11px system-ui, sans-serif";
+    }
+    ctx.strokeText(`#${a}?`, cx, y1 - 3);
+    ctx.fillText(`#${a}?`, cx, y1 - 3);
   }
   for (let i = i0; i < i1; i++) {
     const o = i * STRIDE;
@@ -1096,7 +1146,9 @@ function drawPeople(ctx) {
     ? `players: finding teammates who look like #${suggestWaiting}…`
     : suggestion
     ? `players: is this #${suggestion.player}? (best match ${suggestion.n} of ${suggestion.of} unlabelled tracklets of our team)`
-    : `players: ${who || "nobody followed"} ${here ? "here" : "not labelled here"}`;
+    : here ? `players: ${who} here`
+    : autoHere ? `players: ${who} probably here (by appearance): Y yes · X no`
+    : `players: ${who || "nobody followed"} not labelled here`;
 }
 function startPicking() {
   if (!showPeople) return flash("press V to show the players first", true);
@@ -1175,8 +1227,19 @@ async function nextSuggestion() {
   seekTo(suggestion.frame / fps);
   render();
 }
+async function answerAuto(yes) {
+  const a = autoHere;
+  const body = { frame: a.frame, player: followWho, kind: yes ? "is" : "no", x: a.x, y: a.y, track: a.track };
+  const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);
+  setLabels(r);
+  suggestList = null;
+  fetchSuggestions()?.catch(() => {});
+  flash(yes ? `that's #${body.player}: tracklet labelled` : `not #${body.player} here`);
+  render();
+}
 async function answerSuggestion(yes) {
-  if (!suggestion) return flash("press G for a suggestion first", true);
+  if (!suggestion && autoHere && showPeople) return answerAuto(yes);
+  if (!suggestion) return flash("press G for a suggestion, or pause on a dashed ring, first", true);
   const sg = suggestion;
   const body = { frame: sg.frame, player: sg.player, kind: yes ? "is" : "no", x: sg.x, y: sg.y, track: sg.track };
   const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);

@@ -140,6 +140,18 @@ For a chosen player, find the stretches of a game where they're involved with th
 - Acceptable full-game processing time (overnight is fine?).
 
 ## Findings
+- **2026-10-27** — Automatic labels (`reid.auto_label`, `soccer-clips reid auto-eval`): a ~10 s piece of an unlabelled our-team tracklet is claimed for a player when it looks at least `AUTO_MIN` like them and beats every other unlabelled teammate on screen by `AUTO_MARGIN`; never while the player is labelled elsewhere. Yardstick: hide every other labelled stretch of a player, auto-label, score on the hidden ones (right / wrong tracklet / missed), with stretches labelled as other players competing (a claim there is a known mistake). Her own pieces score ~0.95 against her look from the other games, labelled teammates ~0.45–0.69.
+
+  | | setting (min, margin) | right claims | hidden time found | claims on others' labels |
+  |---|---|---|---|---|
+  | **fcu, her** (never trained on) | 0.9, 0.02 | 97% | 93% | 0 s |
+  | fcu, teammates | 0.9, 0.02 | 100% | 42% | 0 s |
+  | six trained games, her | 0.9, 0.02 | 99% | 74% | 0 s |
+  | six trained games, teammates | 0.9, 0.02 | 99% | 90% | 83 s of ~700 min |
+  | fcu, her, no thresholds | 0, 0 | 96% | 93% | 0 s |
+  | six trained games, teammates, no thresholds | 0, 0 | 98% | 94% | 2,671 s |
+
+  The trained games are optimistic (the model saw those labels); fcu is the fair test. Default 0.9 / 0.02: few false claims over coverage. In fcu that places her for 40 of 70 min, #28 24, #5 20, #29 12. Shown in the tagger as a dashed ring "#38?" (Y / X confirm or reject) and a faint "#n?" over other players.
 - **2026-10-27** — Re-run with more labels (her: saa 7 → 18 min, ebu 10 → 17 min; 12 teammates labelled, 98 stretches) and every labelled player trained as one person across games (40% of batches around her, 30% around a teammate). Same 3-fold test, 52 min, $1.03. Teammates: at each labelled stretch of another player, are they the teammate most like their look from the other games?
 
   | game | her stretches | her top-1 stock → tuned (last run) | her AUC | teammates top-1 | same girl later |
