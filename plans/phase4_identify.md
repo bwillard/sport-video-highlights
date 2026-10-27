@@ -140,6 +140,19 @@ For a chosen player, find the stretches of a game where they're involved with th
 - Acceptable full-game processing time (overnight is fine?).
 
 ## Findings
+- **2026-10-27** — Re-run with more labels (her: saa 7 → 18 min, ebu 10 → 17 min; 12 teammates labelled, 98 stretches) and every labelled player trained as one person across games (40% of batches around her, 30% around a teammate). Same 3-fold test, 52 min, $1.03. Teammates: at each labelled stretch of another player, are they the teammate most like their look from the other games?
+
+  | game | her stretches | her top-1 stock → tuned (last run) | her AUC | teammates top-1 | same girl later |
+  |---|---|---|---|---|---|
+  | elite-strikers | 41 | 71% → 66% (90%) | 0.88 → 0.93 | 44% → 81% (16) | 80% → 92% |
+  | fc-stars | 39 | 18% → 82% (82%) | 0.78 → 0.97 | 25% → 75% (20) | 76% → 89% |
+  | prsc | 77 | 30% → 77% (60%) | 0.73 → 0.91 | 44% → 81% (16) | 69% → 86% |
+  | saa | 68 | 13% → 63% (18%) | 0.71 → 0.89 | 42% → 83% (24) | 69% → 84% |
+  | fc-1 | 17 | 41% → 65% (76%) | 0.71 → 0.86 | – | 71% → 83% |
+  | ebu | 63 | 40% → 65% (48%) | 0.75 → 0.87 | 16% → 89% (37) | 73% → 89% |
+  | **mean** | | **35% → 70%** (31% → 62%) | **0.76 → 0.90** (0.87) | **34% → 82%** | **73% → 87%** (85%) |
+
+  More labels fixed the weak games (saa 18% → 63%, ebu 48% → 65%, prsc 60% → 77%). Named teammates are picked out 82% of the time (chance 11%) from only 98 stretches. elite-strikers dropped (90% → 66%; 41 moments, so ±7%); fc-1 (fewest labels, 17) is now the thinnest.
 - **2026-10-26** — Fine-tuned OSNet-AIN (3,000 steps of 16 players × 4 crops, 3-fold over the six games, each game scored by a model that never saw it; RTX 4090, 54 min with the final model, $0.80). At the middle of each of her labelled stretches, is her tracklet the teammate on screen most like her look from the other games (about 8 teammates, chance 11%)? And does an our-team tracklet match itself 10–20 s later better than the teammates on screen then?
 
   | game | stretches | her top-1 stock → tuned | her AUC | same girl later |
