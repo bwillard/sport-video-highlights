@@ -97,7 +97,7 @@ Turn many short, anonymous tracklets of our team into named players.
 - [x] Roster file (`roster.json` in the data folder; per-game "who played" still to do)
 - [ ] Gallery index + crop saving (from callouts, corrections, reviews)
 - [x] OSNet embeddings; DINOv2 embeddings; compare (OSNet-AIN best; Findings 2026-10-26)
-- [ ] Fine-tune OSNet-AIN on our games (`track/reid.py`, `gpu run reid-train`): see below
+- [x] Fine-tune OSNet-AIN on our games (`track/reid.py`, `gpu run reid-train`): see below; model `models/reid_osnet_ain.pt`
 - [ ] Tracklet linking within a game (similarity + constraints)
 - [ ] Jersey OCR signal
 - [ ] Per-player scoring / linear probe across games
@@ -134,6 +134,19 @@ For a chosen player, find the stretches of a game where they're involved with th
 - Acceptable full-game processing time (overnight is fine?).
 
 ## Findings
+- **2026-10-26** — Fine-tuned OSNet-AIN (3,000 steps of 16 players × 4 crops, 3-fold over the six games, each game scored by a model that never saw it; RTX 4090, 54 min with the final model, $0.80). At the middle of each of her labelled stretches, is her tracklet the teammate on screen most like her look from the other games (about 8 teammates, chance 11%)? And does an our-team tracklet match itself 10–20 s later better than the teammates on screen then?
+
+  | game | stretches | her top-1 stock → tuned | her AUC | same girl later |
+  |---|---|---|---|---|
+  | elite-strikers | 39 | 72% → **90%** | 0.87 → 0.96 | 80% → 89% |
+  | fc-stars | 39 | 15% → **82%** | 0.75 → 0.94 | 76% → 88% |
+  | prsc | 45 | 27% → **60%** | 0.67 → 0.86 | 69% → 85% |
+  | saa | 11 | 0% → 18% | 0.62 → 0.75 | 69% → 83% |
+  | fc-1 | 17 | 35% → **76%** | 0.68 → 0.83 | 71% → 82% |
+  | ebu | 33 | 39% → 48% | 0.79 → 0.88 | 73% → 86% |
+  | **mean** | | **31% → 62%** | **0.73 → 0.87** | **73% → 85%** |
+
+  Training on tracklets alone (no names) also makes every teammate easier to follow (same girl later 73% → 85%), so it helps full-team tracking, not just #38. Weakest where she has fewest labels (saa: 11 stretches) and in ebu; more labelled stretches there are the cheapest next gain. A single moment is a hard test: chaining moments along a tracklet, and the one-place-at-a-time rule, should do better.
 - **2026-10-26** — The real task with stock OSNet-AIN: at each of her 148 labelled stretches, does her tracklet look most like her (her look from the other five games) among the our-kit tracklets on the pitch during that stretch (23 on average, so chance 6%)? Top-1 16% by likeness to her average look, 32% with a linear probe trained on the other games (0–77% per game). Far from usable stock, which is what fine-tuning has to fix.
 - **2026-10-26** — Appearance re-ID, first test: can a model tell #38 from her teammates? Positives: her labelled stretches (128 tracklets); negatives: our-kit tracklets on the pitch during them (2,173; certainly not her). 3 crops per tracklet (the biggest box in each third, ≥ 45 px), averaged. AUC = chance one of her tracklets scores above a teammate's (0.5 coin flip, 1.0 perfect), mean over the six games:
 
