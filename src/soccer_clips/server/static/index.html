@@ -14,6 +14,9 @@
   #stage { position: relative; }
   #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #stage.placing #overlay { pointer-events: auto; cursor: crosshair; }
+  #stage.magnify { cursor: crosshair; }
+  #loupe { position: absolute; width: 240px; height: 240px; border: 2px solid #fff; border-radius: 4px;
+           pointer-events: none; box-shadow: 0 2px 12px #000a; background: #000; z-index: 1; }
   /* One fixed-height line, so the video never moves when a stat changes length (a narrow
      window scrolls the bar sideways). Messages show over the video's corner instead. */
   .bar { flex-wrap: nowrap; height: 44px; overflow-x: auto; overflow-y: hidden; gap: 10px; white-space: nowrap;
@@ -52,6 +55,7 @@
     <option value="auto">fixes → label too</option>
     <option value="">fixes → don't label</option>
   </select>
+  <button id="loupeBtn" title="Magnifier (Z): a 3× close-up follows the mouse over the video, boxes and rings included.&#10;Shift+Z switches between 3× and 6×.">🔎 magnifier</button>
   <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.">👥 players</button>
   <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
   <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
@@ -65,6 +69,7 @@
     <div id="stage">
       <video id="v" preload="auto"></video>
       <canvas id="overlay"></canvas>
+      <canvas id="loupe" width="240" height="240" hidden></canvas>
       <span id="flash"></span>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
@@ -74,6 +79,7 @@
         <li><kbd>Space</kbd> play / pause · <kbd>M</kbd> sound on / off · <kbd>[</kbd> / <kbd>]</kbd> speed −/+ 0.5×</li>
         <li><kbd>←</kbd> / <kbd>→</kbd> back / forward 5 s (<kbd>Shift</kbd>: 60 s) · <kbd>,</kbd> / <kbd>.</kbd> one frame back / forward</li>
         <li>Click or drag the timeline to jump; hover it to see the time</li>
+        <li><kbd>Z</kbd> magnifier on / off: a close-up that follows the mouse over the video · <kbd>Shift</kbd>+<kbd>Z</kbd> 3× / 6×</li>
       </ul></details>
       <details data-sec="clips"><summary>Clips</summary><ul>
         <li><kbd>I</kbd> / <kbd>O</kbd> mark in / out · <kbd>Enter</kbd> save the clip (without an in point: the last 8 s and next 2 s) · <kbd>Esc</kbd> clear</li>
@@ -601,6 +607,7 @@ function frame() {
   $("clock").textContent = (game && matchClock(v.currentTime)) || "–";
   drawTimeline();
   drawOverlay();
+  drawLoupe();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -617,6 +624,62 @@ function videoRect() {
   const W = v.clientWidth, H = v.clientHeight, vw = v.videoWidth || 16, vh = v.videoHeight || 9;
   const s = Math.min(W / vw, H / vh);
   return { x: (W - vw * s) / 2, y: (H - vh * s) / 2, w: vw * s, h: vh * s };
+}
+
+// ---------- magnifier (Z) ----------
+const loupe = $("loupe"), lctx = loupe.getContext("2d");
+let showLoupe = false, loupeZoom = 3, loupeAt = null;  // loupeAt: mouse in CSS px over the video box
+try { showLoupe = localStorage.getItem("showLoupe") === "1"; loupeZoom = +localStorage.getItem("loupeZoom") || 3; } catch {}
+function showLoupeButton() {
+  $("loupeBtn").classList.toggle("on", showLoupe);
+  stage.classList.toggle("magnify", showLoupe);
+}
+function toggleLoupe() {
+  showLoupe = !showLoupe;
+  try { localStorage.setItem("showLoupe", showLoupe ? "1" : "0"); } catch {}
+  showLoupeButton();
+  flash(showLoupe ? `magnifier on (${loupeZoom}×): move the mouse over the video` : "magnifier off");
+}
+function cycleLoupeZoom() {
+  loupeZoom = loupeZoom === 3 ? 6 : 3;
+  try { localStorage.setItem("loupeZoom", loupeZoom); } catch {}
+  flash(`magnifier ${loupeZoom}×`);
+}
+stage.addEventListener("pointermove", (e) => {
+  const b = v.getBoundingClientRect();
+  loupeAt = { x: e.clientX - b.left, y: e.clientY - b.top };
+});
+stage.addEventListener("pointerleave", () => (loupeAt = null));
+$("loupeBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleLoupe(); });
+function drawLoupe() {
+  const r = videoRect();
+  const m = loupeAt;
+  if (!showLoupe || !m || !v.videoWidth || m.x < r.x || m.x > r.x + r.w || m.y < r.y || m.y > r.y + r.h) {
+    loupe.hidden = true;
+    return;
+  }
+  loupe.hidden = false;
+  const L = loupe.width, span = L / loupeZoom;  // CSS px of the video shown
+  const k = v.videoWidth / r.w;  // video px per CSS px
+  lctx.imageSmoothingEnabled = true;
+  lctx.fillStyle = "#000";
+  lctx.fillRect(0, 0, L, L);
+  lctx.drawImage(v, (m.x - r.x - span / 2) * k, (m.y - r.y - span / 2) * k, span * k, span * k, 0, 0, L, L);
+  const dpr = overlay.width / Math.max(1, overlay.clientWidth);  // boxes, rings and the ball, magnified too
+  lctx.drawImage(overlay, (m.x - span / 2) * dpr, (m.y - span / 2) * dpr, span * dpr, span * dpr, 0, 0, L, L);
+  const c = L / 2;
+  lctx.strokeStyle = "#fff8";
+  lctx.lineWidth = 1;
+  lctx.beginPath();
+  lctx.moveTo(c - 20, c); lctx.lineTo(c - 6, c); lctx.moveTo(c + 6, c); lctx.lineTo(c + 20, c);
+  lctx.moveTo(c, c - 20); lctx.lineTo(c, c - 6); lctx.moveTo(c, c + 6); lctx.lineTo(c, c + 20);
+  lctx.stroke();
+  // beside the cursor, flipping to the other side near the edges
+  let left = m.x + 40, top = m.y - L - 40;
+  if (left + L > v.clientWidth) left = m.x - L - 40;
+  if (top < 0) top = m.y + 40;
+  loupe.style.left = `${left}px`;
+  loupe.style.top = `${top}px`;
 }
 
 function startCallout() {
@@ -1079,6 +1142,7 @@ for (const d of document.querySelectorAll("#help details")) {
   d.addEventListener("toggle", () => { try { localStorage.setItem(`help:${d.dataset.sec}`, d.open ? "1" : "0"); } catch {} });
 }
 showPeopleButton();
+showLoupeButton();
 showDebugButton();
 showBallButton();
 
@@ -1193,6 +1257,7 @@ document.addEventListener("keydown", (e) => {
     d: () => toggleDebug(),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
     v: () => togglePeople(),
+    z: () => (e.shiftKey ? cycleLoupeZoom() : toggleLoupe()),
     l: () => (e.shiftKey ? pickPlayer("not") : startPicking()),
     u: () => undoPick(),
     g: () => nextSuggestion(),
