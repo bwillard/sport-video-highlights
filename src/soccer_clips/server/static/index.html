@@ -29,6 +29,10 @@
   #flash:empty { display: none; }
   #ballStat { display: inline-block; min-width: 10.5em; }
   #debugStat { display: inline-block; min-width: 8.5em; }
+  #layers { position: fixed; z-index: 5; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 6px;
+            background: var(--panel); border: 1px solid var(--line); box-shadow: 0 2px 12px #000a; }
+  #layers label { display: flex; gap: 6px; align-items: center; cursor: pointer; white-space: nowrap; }
+  #layers .hint { color: var(--muted); font-size: 12px; }
   #markin { display: inline-block; min-width: 4em; }
   #peopleStat { display: inline-block; min-width: 11em; }
   /* "who is this?": after clicking a player */
@@ -56,7 +60,7 @@
   <span class="stat" title="Playback speed: [ and ] change it by 0.5×">rate <b id="rate">1</b>×</span>
   <button id="sound" title="Sound on/off (M). Starts off.">🔇 sound off</button>
   <button id="ballBtn" title="Show the game ball (B): a yellow ring follows it where the game has been ball-tracked.&#10;Solid ring = detected in that frame; dashed = filled in across a short gap.&#10;With it on: K fixes the ball, K then O marks other balls.">⚽ ball</button>
-  <button id="debugBtn" title="Debug layer (D): every ball the detector found, not just the game ball.&#10;White circle + confidence (dim below 0.25) = a detection. Grey circle with no yellow ring = seen but dropped by the filter; no circle = never detected.&#10;Dashed box = where the detector looks (balls outside it are never found). Magenta dot = a ball you placed; red × = a detection a fix suppressed; orange &quot;fixed&quot; = on something that never moves all game, so never taken for the ball.">🔍 raw</button>
+  <button id="layersBtn" title="What's drawn over the video: ball detections (raw, D) and which players' boxes (our team, opponents, others). Lit when anything beyond our team is on.">🔍 layers ▾</button>
   <span class="stat" id="debugStat" hidden title="Ball detections in this frame (before the filter picks the game ball)"></span>
   <span class="stat" id="ballStat" hidden title="The game ball in this frame:&#10;seen = detected; filled in = between detections, a short gap bridged;&#10;not seen = no game ball chosen (hidden, out of shot, or missed);&#10;not tracked here = this part of the game hasn't been through ball tracking"></span>
   <select id="fixTo" hidden title="What happens to frames you fix (K) or mark other balls on (K then O):&#10;label too = each also becomes a labelled ball frame for training the detector. Most go to the training set; one 30-second moment in five (and anything near a benchmark clip) goes to the benchmark set, used to score models.&#10;don't label = only the ball path is corrected.">
@@ -72,6 +76,13 @@
   <a href="/players" title="Check players a page at a time: tiles of tracklets, &quot;is this #38?&quot;, click the wrong ones, Enter">Players</a>
   <a href="/label-ball" title="Label the ball in sampled frames: the training and benchmark data for the ball detector">Ball labels</a>
   <a href="/reel" title="Build highlight reels from tagged clips, across games">Reels →</a>
+</div>
+<div id="layers" hidden>
+  <label title="Every ball the detector found, not just the game ball (D)"><input type="checkbox" id="layRaw"> ball detections (raw) <kbd>D</kbd></label>
+  <label title="Boxes on our team (white), and on anyone not yet put on a team"><input type="checkbox" id="layOurs"> our team</label>
+  <label title="Boxes on the other team (blue)"><input type="checkbox" id="layTheirs"> opponents</label>
+  <label title="Boxes on referees, keepers and spectators (grey dashed)"><input type="checkbox" id="layRest"> others: refs, keepers, spectators</label>
+  <div class="hint">Player boxes need 👥 players on · <kbd>Shift</kbd>+<kbd>D</kbd> opponents + others</div>
 </div>
 <div class="layout">
   <section>
@@ -114,14 +125,15 @@
           frame: most go to training, one 30-second moment in five to the benchmark</li>
         <li><kbd>K</kbd> <kbd>O</kbd> other balls: click each spare / next-field ball (cyan), click again to remove, <kbd>O</kbd> / <kbd>Esc</kbd> to stop
           (for training; a click on a detection takes its exact spot and size)</li>
-        <li><kbd>D</kbd> debug layer: every ball detection as a circle with its confidence (dim below 0.25); a grey circle with no ring =
+        <li><kbd>D</kbd> (or 🔍 layers) debug layer: every ball detection as a circle with its confidence (dim below 0.25); a grey circle with no ring =
           seen but dropped by the filter, nothing = never detected; magenta dot = a ball you placed; red × = a detection your fix
           suppressed; orange "fixed" = on something that never moves all game (a flag, chair, bag: never the ball); dashed box =
           the area the detector searches</li>
       </ul></details>
       <details data-sec="players"><summary>Players</summary><ul>
         <li><kbd>V</kbd> show tracked players: boxes by kit (white = our team, blue = opponents, grey dashed = refs, keepers,
-          spectators); orange ring = the player picked next to 👥; a small white #number = anyone else already labelled</li>
+          spectators); orange ring = the player picked next to 👥; a small white #number = anyone else already labelled.
+          Which teams get boxes: 🔍 layers (our team only to start) · <kbd>Shift</kbd>+<kbd>D</kbd> opponents + others on / off</li>
         <li><kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person)</li>
         <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
         <li>The orange strip under the timeline = where they're labelled</li>
@@ -920,9 +932,41 @@ function toggleDebug() {
   loadRaw();
 }
 function showDebugButton() {
-  $("debugBtn").classList.toggle("on", showDebug);
+  $("layersBtn").classList.toggle("on", showDebug || showTeams[1] || showTeams[2]);
+  $("layRaw").checked = showDebug;
+  for (const [id, k] of [["layOurs", 0], ["layTheirs", 1], ["layRest", 2]]) $(id).checked = showTeams[k];
   $("debugStat").hidden = !showDebug;
 }
+// which players' boxes are drawn (and can be pointed at): 0 our team (and anyone not on a team yet),
+// 1 opponents, 2 the rest; only our team by default
+let showTeams = { 0: true, 1: false, 2: false };
+try { showTeams = { ...showTeams, ...JSON.parse(localStorage.getItem("showTeams") || "{}") }; } catch {}
+const teamShown = (team) => showTeams[team === 1 || team === 2 ? team : 0];
+function setTeams(changes) {
+  Object.assign(showTeams, changes);
+  try { localStorage.setItem("showTeams", JSON.stringify(showTeams)); } catch {}
+  showDebugButton();
+}
+function toggleOthersLayers() {
+  const on = !(showTeams[1] && showTeams[2]);
+  setTeams({ 1: on, 2: on });
+  flash(on ? "showing opponents and others too" : "showing our team only");
+}
+$("layersBtn").addEventListener("click", (e) => {
+  e.currentTarget.blur();
+  const el = $("layers");
+  el.hidden = !el.hidden;
+  const b = e.currentTarget.getBoundingClientRect();
+  el.style.left = `${b.left}px`;
+  el.style.top = `${b.bottom + 4}px`;
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!e.target.closest("#layers, #layersBtn")) $("layers").hidden = true;
+});
+$("layRaw").addEventListener("change", (e) => { e.target.blur(); if (e.target.checked !== showDebug) toggleDebug(); });
+$("layOurs").addEventListener("change", (e) => { e.target.blur(); setTeams({ 0: e.target.checked }); });
+$("layTheirs").addEventListener("change", (e) => { e.target.blur(); setTeams({ 1: e.target.checked }); });
+$("layRest").addEventListener("change", (e) => { e.target.blur(); setTeams({ 2: e.target.checked }); });
 function firstAtOrAfter(a, f) {  // first index with a[i] >= f in sorted a
   let lo = 0, hi = a.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (a[mid] < f) lo = mid + 1; else hi = mid; }
@@ -962,7 +1006,6 @@ function drawRaw(ctx) {
   }
   ctx.restore();
 }
-$("debugBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleDebug(); });
 
 // ---------- tracked players (Phase 3.3) ----------
 // Every tracked box comes from the server in chunks of game frames (binary float32 rows of
@@ -1123,6 +1166,7 @@ function drawPeople(ctx) {
   ctx.lineWidth = 1;
   for (let i = i0; i < i1; i++) {
     const o = i * STRIDE;
+    if (!teamShown(rows[o + 6])) continue;
     const [colour, dash] = TEAM_STYLE[rows[o + 6]] || ["rgba(255,255,255,0.28)", []];
     ctx.strokeStyle = colour;
     ctx.setLineDash(dash);
@@ -1223,6 +1267,7 @@ function boxUnder(f, i0, i1, rows, known, auto) {
   const s = 0.01, { x, y } = hoverAt;
   for (let i = i0; i < i1; i++) {
     const o = i * STRIDE;
+    if (!teamShown(rows[o + 6]) && !known.has(rows[o + 1])) continue;  // hidden boxes can't be pointed at
     if (x < rows[o + 2] - s || x > rows[o + 4] + s || y < rows[o + 3] - s || y > rows[o + 5] + s) continue;
     const a = (rows[o + 4] - rows[o + 2]) * (rows[o + 5] - rows[o + 3]);
     if (a < area) { area = a; best = o; }
@@ -1586,7 +1631,7 @@ document.addEventListener("keydown", (e) => {
     " ": () => (v.paused ? v.play() : v.pause()),
     m: () => toggleMute(),
     b: () => toggleBall(),
-    d: () => toggleDebug(),
+    d: () => (e.shiftKey ? toggleOthersLayers() : toggleDebug()),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
     v: () => togglePeople(),
     z: () => (e.shiftKey ? cycleLoupeZoom() : toggleLoupe()),
