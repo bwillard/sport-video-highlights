@@ -56,7 +56,7 @@
     <option value="">fixes → don't label</option>
   </select>
   <button id="loupeBtn" title="Magnifier (Z): a 3× close-up follows the mouse over the video, boxes and rings included.&#10;Shift+Z switches between 3× and 6×.">🔎 magnifier</button>
-  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.">👥 players</button>
+  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;A small white #number over a box = already labelled as that player.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.">👥 players</button>
   <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
   <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
   <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
@@ -111,7 +111,7 @@
       </ul></details>
       <details data-sec="players"><summary>Players</summary><ul>
         <li><kbd>V</kbd> show tracked players: boxes by kit (white = our team, blue = opponents, grey dashed = refs, keepers,
-          spectators); orange ring = the player picked next to 👥</li>
+          spectators); orange ring = the player picked next to 👥; a small white #number = anyone else already labelled</li>
         <li><kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person)</li>
         <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
         <li>The orange strip under the timeline = where they're labelled</li>
@@ -1019,6 +1019,12 @@ function boxesAt(f) {
   while (i1 < n && rows[i1 * STRIDE] === f) i1++;
   return [lo, i1, rows];
 }
+function labelledAt(f) {
+  // track -> player number for every labelled stretch at frame f (any player)
+  const m = new Map();
+  for (const sg of people.segments) if (f >= sg.start && f < sg.end) m.set(sg.track, sg.player);
+  return m;
+}
 function followedTracks(f) {
   return new Set(people.segments.filter((sg) => sg.player === followWho && f >= sg.start && f < sg.end).map((sg) => sg.track));
 }
@@ -1044,6 +1050,17 @@ function drawPeople(ctx) {
     ctx.strokeRect(r.x + rows[o + 2] * r.w, r.y + rows[o + 3] * r.h, (rows[o + 4] - rows[o + 2]) * r.w, (rows[o + 5] - rows[o + 3]) * r.h);
   }
   ctx.setLineDash([]);
+  // a small number over everyone already labelled (the followed player gets the ring below instead)
+  const known = labelledAt(f);
+  ctx.font = "bold 11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.fillStyle = "#fff";
+  for (let i = i0; i < i1; i++) {
+    const o = i * STRIDE, n = known.get(rows[o + 1]);
+    if (n == null || mine.has(rows[o + 1])) continue;
+    const cx = r.x + (rows[o + 2] + rows[o + 4]) / 2 * r.w, y1 = r.y + rows[o + 3] * r.h;
+    ctx.strokeText(`#${n}`, cx, y1 - 3);
+    ctx.fillText(`#${n}`, cx, y1 - 3);
+  }
   for (let i = i0; i < i1; i++) {
     const o = i * STRIDE;
     if (!mine.has(rows[o + 1])) continue;
