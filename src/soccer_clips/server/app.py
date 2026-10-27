@@ -130,9 +130,10 @@ class OtherBallFixIn(OtherBallIn):
 class PickIn(RequestBody):
     frame: int = Field(ge=0)
     player: int = Field(ge=0)
-    kind: Literal["is", "not"]
+    kind: Literal["is", "not", "no"]  # "no": a suggestion turned down
     x: float | None = Field(default=None, ge=0, le=1)  # "not" without a position: the marker's own box
     y: float | None = Field(default=None, ge=0, le=1)
+    track: int | None = None  # the tracklet meant, when boxes overlap (suggestions know it)
 
 
 class VerdictIn(RequestBody):
@@ -218,8 +219,10 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.get("/api/settings")
     def ui_settings() -> dict:
-        """What the pages need from .env: the player the F key tags."""
-        return {"default_player": store.settings.default_player}
+        """What the pages need: the player the F key tags (.env) and the roster's shirt numbers."""
+        from soccer_clips.roster import load_roster
+
+        return {"default_player": store.settings.default_player, "roster": load_roster(store.settings).numbers()}
 
     @app.get("/api/games/{game_id}/clips")
     def list_clips(game_id: str) -> list[Clip]:
@@ -621,10 +624,17 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         game = load(game_id)
         try:
-            pick = people.add_pick(store, game, body.frame, body.player, body.kind, body.x, body.y)
+            pick = people.add_pick(store, game, body.frame, body.player, body.kind, body.x, body.y, track=body.track)
         except ValueError as e:
             raise HTTPException(422, str(e))
         return {"pick": pick, **people_labels(game)}
+
+    @app.get("/api/games/{game_id}/people/suggest")
+    def game_people_suggest(game_id: str, player: int, limit: int = 20) -> dict:
+        """Unlabelled our-team tracklets that look most like #player (reid.suggest), best first."""
+        from soccer_clips.track import reid
+
+        return reid.suggest(store, load(game_id), player, limit=min(max(limit, 1), 200))
 
     @app.delete("/api/games/{game_id}/people/picks/last")
     def game_people_undo(game_id: str) -> dict:

@@ -613,3 +613,33 @@ soccer-clips reid experiment --data $W/reid --stock $W/{stock.relative_to(root)}
 """
     return Job(name="reid-train", uploads=[str(f.relative_to(root)) for f in files] + [str(stock.relative_to(root))],
                script=script, downloads=["out"])
+
+
+def reid_sigs_job(store: Store, game_ids: list[str] | None) -> Job:
+    """Appearance signatures of our team's crops (track/reid.py) with the tuned model, on the GPU."""
+    from soccer_clips.track import reid
+
+    root = data_root(store)
+    weights = reid.model_path(store)
+    ids = game_ids or [g.id for g in store.list_games() if reid.crops_path(store, g).exists()]
+    uploads = [str(weights.relative_to(root))]
+    for gid in ids:
+        game = store.load_game(gid)
+        uploads += [str((store.game_dir(game.year, game.id) / "game.json").relative_to(root)),
+                    str(reid.crops_path(store, game).relative_to(root))]
+    script = f"soccer-clips reid sigs --device cuda --games {' '.join(ids)} 2>&1 | (grep --line-buffered -v 'signatures [0-9]' || true)\n"
+    return Job(name="reid-sigs", uploads=uploads, script=script, downloads=["games/*/*/tracks/reid_sigs.npz"])
+
+
+def install_tracks_files(store: Store, results: Path, name: str, log=print) -> int:
+    """Copy games/*/*/tracks/<name> brought back by a job into the local games folders."""
+    import shutil
+
+    n = 0
+    for f in sorted((results / "games").glob(f"*/*/tracks/{name}")):
+        dest = data_root(store) / f.relative_to(results)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(f, dest)
+        n += 1
+        log(f"installed {dest.relative_to(data_root(store))}")
+    return n

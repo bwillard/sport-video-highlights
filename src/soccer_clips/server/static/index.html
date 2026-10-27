@@ -52,7 +52,7 @@
     <option value="auto">fixes → label too</option>
     <option value="">fixes → don't label</option>
   </select>
-  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.">👥 players</button>
+  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.">👥 players</button>
   <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
   <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
   <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
@@ -109,6 +109,9 @@
         <li><kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person)</li>
         <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
         <li>The orange strip under the timeline = where they're labelled</li>
+        <li><kbd>G</kbd> next suggestion: jumps to an unlabelled teammate who looks like the player you follow (magenta box, best
+          match first) · <kbd>Y</kbd> yes, that's them (labels the tracklet) · <kbd>X</kbd> no · <kbd>G</kbd> again skips it.
+          Works for any player with a few labels; each answer makes the next suggestions better</li>
       </ul></details>
     </div>
   </section>
@@ -162,6 +165,7 @@ let selectedId = null, markIn = null, markOut = null, stopAt = null;
 let jobsByClip = {}, pollTimer = null, hoverX = null;
 let fps = 30000 / 1001;
 let defaultPlayer = null;  // SOCCER_DEFAULT_PLAYER from .env; the F key
+let roster = [];  // shirt numbers from roster.json
 
 const matchClock = (t) => matchClockFor(t, game?.kickoff_1h_s, game?.kickoff_2h_s);
 const label = (t) => matchClock(t) || fmt(t);
@@ -882,6 +886,8 @@ const TEAM_STYLE = { 0: ["rgba(255,255,255,0.75)", []], 1: ["rgba(90,176,255,0.7
                      2: ["rgba(170,170,170,0.45)", [3, 3]] };
 let showPeople = false, people = null;  // people: {gameId, ranges, teams, picks, segments}
 let followWho = null, picking = false;
+let suggestion = null;  // {track, frame, x, y, box, score, start, end, n, of} being asked about
+const skippedSuggestions = new Set();  // "player:track" skipped with G
 const boxChunks = new Map();  // chunk index -> Float32Array, or "loading"
 try { showPeople = localStorage.getItem("showPeople") === "1"; } catch {}
 
@@ -906,8 +912,8 @@ function showPeopleButton() {
   $("peopleStat").hidden = $("followWho").hidden = !showPeople;
 }
 function fillFollowWho() {
-  // the default player plus every number tagged on a clip in this game
-  const nums = new Set(clips.flatMap((c) => c.players));
+  // the default player, the roster, and every number tagged on a clip in this game
+  const nums = new Set([...roster, ...clips.flatMap((c) => c.players)]);
   if (defaultPlayer != null) nums.add(defaultPlayer);
   let keep = followWho;
   try { keep ??= +localStorage.getItem("followWho") || null; } catch {}
@@ -920,6 +926,7 @@ function fillFollowWho() {
 }
 $("followWho").addEventListener("change", (e) => {
   followWho = +e.target.value || null;
+  suggestion = null;
   try { localStorage.setItem("followWho", followWho ?? ""); } catch {}
   e.target.blur();
 });
@@ -987,8 +994,22 @@ function drawPeople(ctx) {
     ctx.font = "bold 12px system-ui, sans-serif"; ctx.fillStyle = "#ff9f40"; ctx.textAlign = "center";
     ctx.fillText(who, cx, y1 - 4);
   }
+  if (suggestion) {
+    for (let i = i0; i < i1; i++) {
+      const o = i * STRIDE;
+      if (rows[o + 1] !== suggestion.track) continue;
+      const x1 = r.x + rows[o + 2] * r.w, x2 = r.x + rows[o + 4] * r.w, y1 = r.y + rows[o + 3] * r.h, y2 = r.y + rows[o + 5] * r.h;
+      ctx.lineWidth = 3; ctx.strokeStyle = "#ff40d0"; ctx.setLineDash([6, 3]);
+      ctx.strokeRect(x1 - 3, y1 - 3, x2 - x1 + 6, y2 - y1 + 6);
+      ctx.setLineDash([]);
+      ctx.font = "bold 13px system-ui, sans-serif"; ctx.fillStyle = "#ff40d0"; ctx.textAlign = "center";
+      ctx.fillText(`#${suggestion.player}?  Y / X`, (x1 + x2) / 2, y1 - 8);
+    }
+  }
   ctx.restore();
-  $("peopleStat").textContent = `players: ${who || "nobody followed"} ${here ? "here" : "not labelled here"}`;
+  $("peopleStat").textContent = suggestion
+    ? `players: is this #${suggestion.player}? (suggestion ${suggestion.n} of ${suggestion.of}, likeness ${suggestion.score.toFixed(2)})`
+    : `players: ${who || "nobody followed"} ${here ? "here" : "not labelled here"}`;
 }
 function startPicking() {
   if (!showPeople) return flash("press V to show the players first", true);
@@ -1017,6 +1038,33 @@ async function undoPick() {
   const r = await api("DELETE", `/api/games/${encodeURIComponent(game.id)}/people/picks/last`);
   setLabels(r);
   flash(r.undone ? `took back the last player label (#${r.undone.player} at ${fmt(r.undone.frame / fps)})` : "no player labels to take back");
+}
+async function nextSuggestion() {
+  if (!showPeople || !people) return flash("press V to show the players first", true);
+  if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
+  if (suggestion) skippedSuggestions.add(`${suggestion.player}:${suggestion.track}`);
+  const who = followWho, id = game.id;
+  const r = await getJson(`/api/games/${encodeURIComponent(id)}/people/suggest?player=${who}&limit=200`);
+  if (game?.id !== id) return;
+  const left = r.suggestions.filter((sg) => !skippedSuggestions.has(`${who}:${sg.track}`));
+  if (!left.length) {
+    suggestion = null; render();
+    return flash(r.note || `no more suggestions for #${who}`, !!r.note);
+  }
+  suggestion = { ...left[0], player: who, n: r.suggestions.length - left.length + 1, of: r.candidates };
+  v.pause();
+  seekTo(suggestion.frame / fps);
+  render();
+}
+async function answerSuggestion(yes) {
+  if (!suggestion) return flash("press G for a suggestion first", true);
+  const sg = suggestion;
+  const body = { frame: sg.frame, player: sg.player, kind: yes ? "is" : "no", x: sg.x, y: sg.y, track: sg.track };
+  const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);
+  setLabels(r);
+  suggestion = null;
+  flash(yes ? `that's #${sg.player}: tracklet labelled (G for the next)` : `not #${sg.player} (G for the next)`);
+  render();
 }
 $("peopleBtn").addEventListener("click", (e) => { e.currentTarget.blur(); togglePeople(); });
 
@@ -1117,6 +1165,7 @@ document.addEventListener("keydown", (e) => {
   if (fixingBall && e.key === "Escape") { e.preventDefault(); stopBallFix(); return; }
   if (otherMode && e.key === "Escape") { e.preventDefault(); toggleOtherMode(false); return; }
   if (picking && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
+  if (suggestion && e.key === "Escape") { e.preventDefault(); suggestion = null; render(); return; }
   // O while fixing the ball switches to other balls (as on the labelling page); otherwise it's the out point
   if ((fixingBall || otherMode) && e.key.toLowerCase() === "o" && !e.shiftKey) {
     e.preventDefault(); toggleOtherMode(); return;
@@ -1141,6 +1190,9 @@ document.addEventListener("keydown", (e) => {
     v: () => togglePeople(),
     l: () => (e.shiftKey ? pickPlayer("not") : startPicking()),
     u: () => undoPick(),
+    g: () => nextSuggestion(),
+    y: () => answerSuggestion(true),
+    x: () => answerSuggestion(false),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),
@@ -1262,6 +1314,7 @@ async function loadGame(id, startT = 0, clipId = null) {
   raw = null;
   loadRaw();
   people = null;
+  suggestion = null;
   boxChunks.clear();
   loadPeople();
 }
@@ -1281,7 +1334,7 @@ window.addEventListener("hashchange", applyHash);
 
 (async () => {
   tags = await getJson("/api/tags");
-  ({ default_player: defaultPlayer } = await getJson("/api/settings"));
+  ({ default_player: defaultPlayer, roster = [] } = await getJson("/api/settings"));
   for (const t of tags) $("ftag").append(new Option(t.name, t.name));
   const games = await getJson("/api/games");
   for (const g of games) sel.append(new Option(g.id, g.id));

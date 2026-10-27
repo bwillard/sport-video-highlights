@@ -146,7 +146,7 @@ def test_her_flag_becomes_default_player(client, settings):
     clips = client.get(f"/api/games/{GAME}/clips").json()
     assert [c["players"] for c in clips] == [[38], []]
     assert "involves_her" not in clips[0]
-    assert client.get("/api/settings").json() == {"default_player": 38}
+    assert client.get("/api/settings").json() == {"default_player": 38, "roster": []}
     assert client.patch(f"/api/games/{GAME}/clips/a", json={"players": [-1]}).status_code == 422
 
 

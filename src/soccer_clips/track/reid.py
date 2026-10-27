@@ -543,3 +543,159 @@ def run_experiment(folder: Path, stock: Path, out: Path, n_folds: int = 3, steps
     results["summary"] = summary(results)
     (out / "reid_results.json").write_text(json.dumps(results, indent=1))
     return results
+
+
+# ---- signatures for use (our team's crops, tuned model) ----
+
+SIG_ROLES = (0,)  # ours: the players we name
+
+
+def sigs_path(store: Store, game: Game) -> Path:
+    return store.game_dir(game.year, game.id) / "tracks" / "reid_sigs.npz"
+
+
+def model_path(store: Store) -> Path:
+    """The tuned model if there is one, else the stock weights."""
+    from soccer_clips.track.benchmark import models_dir
+
+    tuned = models_dir(store) / TUNED
+    return tuned if tuned.exists() else models_dir(store) / STOCK
+
+
+def compute_signatures(store: Store, game: Game, device: str = "cpu", log=print) -> int:
+    """Signatures of the game's our-team crops (from extract_crops) with model_path(). Returns crops done.
+    About 17 crops/s on this machine's CPU (OSNet's many small convolutions), thousands on a GPU."""
+    import torch
+
+    from soccer_clips.track import ball_game
+
+    torch.set_num_threads(4)
+    c = Crops(crops_path(store, game), [], game.fps_num / game.fps_den)
+    idx = np.flatnonzero(np.isin(c.role, SIG_ROLES))
+    weights = model_path(store)
+    model = load_model(weights, device)
+    sigs = np.zeros((len(idx), 512), np.float16)
+    step = 2048
+    for k in range(0, len(idx), step):
+        part = idx[k:k + step]
+        sigs[k:k + len(part)] = embed(model, [c.image(i) for i in part], device)
+        log(f"{game.id}: signatures {k + len(part)}/{len(idx)}")
+    ball_game.save_npz(sigs_path(store, game), frame=c.frame[idx], track=c.track[idx], sig=sigs,
+                       model=np.array(weights.name))
+    return len(idx)
+
+
+# ---- suggestions: "is this #N?" for any player with labels ----
+
+PIECE = 10  # crops (~10 s) per piece of a tracklet: a swap mid-tracklet only spoils some pieces
+
+
+def load_sigs(store: Store, game: Game) -> dict | None:
+    p = sigs_path(store, game)
+    if not p.exists():
+        return None
+    with np.load(p) as z:
+        return {"frame": z["frame"], "track": z["track"], "sig": z["sig"].astype(np.float32)}
+
+
+def _looks_path(store: Store, game: Game) -> Path:
+    return store.game_dir(game.year, game.id) / "tracks" / "reid_looks.npz"
+
+
+def player_sums(store: Store, game: Game) -> dict[int, tuple[np.ndarray, int]]:
+    """Sum and count of signatures in each player's labelled stretches in this game (cached on disk
+    until the signatures, tracklets or picks change)."""
+    from soccer_clips.track import ball_game, people
+
+    files = [sigs_path(store, game), people.path(store, game, people.DEFAULT_MODEL), people._picks_path(store, game)]
+    if not files[0].exists() or not files[1].exists():
+        return {}
+    key = " ".join(f"{f.stat().st_mtime_ns}" if f.exists() else "-" for f in files)
+    cache = _looks_path(store, game)
+    if cache.exists():
+        with np.load(cache) as z:
+            if str(z["key"]) == key:
+                return {int(p): (s, int(n)) for p, s, n in zip(z["players"], z["sums"], z["counts"])}
+    s = load_sigs(store, game)
+    t = people.Tracks.load(people.path(store, game, people.DEFAULT_MODEL))  # not the shared cache: may be another game than the one open
+    out: dict[int, list] = {}
+    for seg in people.segments(t, people.load_picks(store, game)):
+        m = (s["track"] == seg["track"]) & (s["frame"] >= seg["start"]) & (s["frame"] < seg["end"])
+        if m.any():
+            acc = out.setdefault(seg["player"], [np.zeros(512, np.float32), 0])
+            acc[0] += s["sig"][m].sum(0)
+            acc[1] += int(m.sum())
+    players = sorted(out)
+    ball_game.save_npz(cache, key=np.array(key), players=np.array(players, np.int64),
+                       sums=np.array([out[p][0] for p in players], np.float32).reshape(-1, 512),
+                       counts=np.array([out[p][1] for p in players], np.int64))
+    return {p: (out[p][0], out[p][1]) for p in players}
+
+
+def player_look(store: Store, player: int, skip: str | None = None) -> tuple[np.ndarray | None, int]:
+    """(unit-length mean signature of the player's labelled crops over all games but `skip`, crops used)."""
+    total, n = np.zeros(512, np.float32), 0
+    for g in store.list_games():
+        if g.id == skip:
+            continue
+        got = player_sums(store, g).get(player)
+        if got:
+            total += got[0]
+            n += got[1]
+    return (total / max(np.linalg.norm(total), 1e-9), n) if n else (None, 0)
+
+
+def suggest(store: Store, game: Game, player: int, limit: int = 20) -> dict:
+    """
+    Our-team tracklets in the game that look most like `player` (their labelled crops in every game),
+    best first, one per tracklet: {track, frame, x, y, score, start, end}. Left out: tracklets with any
+    label in this game or a pick for this player, and anything on screen while the player is labelled
+    elsewhere (one place at a time).
+    """
+    from soccer_clips.track import people
+
+    s = load_sigs(store, game)
+    if s is None:
+        return {"suggestions": [], "note": "no appearance signatures for this game yet (soccer-clips reid sigs)"}
+    look, n = player_look(store, player)
+    if look is None:
+        return {"suggestions": [], "note": f"no labelled stretches of #{player} yet"}
+    t = people.tracks(store, game)
+    picks = people.load_picks(store, game)
+    segs = people.segments(t, picks)
+    skip = {x["track"] for x in segs} | {p["track"] for p in picks if p["player"] == player}
+    busy = sorted((x["start"], x["end"]) for x in segs if x["player"] == player)
+    starts, ends = np.array([a for a, _ in busy], np.int64), np.array([b for _, b in busy], np.int64)
+
+    def is_busy(frames: np.ndarray) -> bool:
+        k = np.searchsorted(starts, frames, side="right") - 1
+        return bool(((k >= 0) & (frames < ends[np.maximum(k, 0)])).any()) if len(starts) else False
+
+    order = np.lexsort((s["frame"], s["track"]))
+    tr, fr, sig = s["track"][order], s["frame"][order], s["sig"][order]
+    bounds = np.flatnonzero(np.diff(tr)) + 1
+    best = []
+    for idx in np.split(np.arange(len(tr)), bounds):
+        k = int(tr[idx[0]])
+        if k in skip:
+            continue
+        top = None
+        for piece in np.array_split(idx, max(1, round(len(idx) / PIECE))):
+            if len(piece) < 3 or is_busy(fr[piece]):
+                continue
+            v = sig[piece].mean(0)
+            score = float(v @ look / max(np.linalg.norm(v), 1e-9))
+            if top is None or score > top[0]:
+                top = (score, int(fr[piece[len(piece) // 2]]))
+        if top:
+            best.append((top[0], k, top[1]))
+    best.sort(reverse=True)
+    out = []
+    for score, k, f in best[:limit]:
+        a, b = t.window(f, f + 1)
+        i = a + int(np.flatnonzero(t.track[a:b] == k)[0])
+        x1, y1, x2, y2 = t.box[i].tolist()
+        out.append({"track": k, "frame": f, "x": round((x1 + x2) / 2, 4), "y": round((y1 + y2) / 2, 4),
+                    "box": [round(v, 4) for v in (x1, y1, x2, y2)], "score": round(score, 3),
+                    "start": t.first[k], "end": t.last[k] + 1})
+    return {"suggestions": out, "look_crops": n, "candidates": len(best)}

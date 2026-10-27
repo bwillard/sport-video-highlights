@@ -343,6 +343,13 @@ def cmd_reid(store: Store, args: argparse.Namespace) -> None:
                 print(f"{gid}: no player tracks yet, skipped")
                 continue
             print(f"{gid}: {reid.extract_crops(store, game, workers=args.workers, log=log)} crops", flush=True)
+    elif args.reid_command == "sigs":
+        for gid in args.games or [g.id for g in store.list_games()]:
+            game = store.load_game(gid)
+            if not reid.crops_path(store, game).exists():
+                print(f"{gid}: no crops yet, skipped")
+                continue
+            print(f"{gid}: {reid.compute_signatures(store, game, device=args.device, log=log)} signatures", flush=True)
     elif args.reid_command == "experiment":
         r = reid.run_experiment(Path(args.data), Path(args.stock), Path(args.out), n_folds=args.folds,
                                 steps=args.steps, device=args.device, log=log)
@@ -365,6 +372,8 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
             job = gpu.ball_games_job(store, ids, mode=args.mode, log=lambda m: print(m, flush=True))
         elif args.job == "reid-train":
             job = gpu.reid_train_job(store, args.games, steps=args.steps)
+        elif args.job == "reid-sigs":
+            job = gpu.reid_sigs_job(store, args.games)
         elif args.job == "people-games":
             ids = args.games or [g.id for g in store.list_games()]
             job = gpu.people_games_job(store, ids, mode=args.mode, models=args.models, workers=args.workers)
@@ -382,6 +391,8 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
                 gpu.install_ball_tracks(store, runner.dir / "results", log=print)
             if args.job == "people-games" and (runner.dir / "results").exists():
                 gpu.install_people_raw(store, runner.dir / "results", log=print)
+            if args.job == "reid-sigs" and (runner.dir / "results").exists():
+                gpu.install_tracks_files(store, runner.dir / "results", "reid_sigs.npz", log=print)
         for w in sorted((results / "models").glob("ball_*.pt")):
             shutil.copy(w, models_dir(store) / w.name)
             print(f"model: {models_dir(store) / w.name}")
@@ -561,6 +572,9 @@ def main() -> None:
     rc = rp_sub.add_parser("crops", help="cut player crops out of each tracked game (for training and scoring)")
     rc.add_argument("--games", nargs="+", help="game ids (default: all)")
     rc.add_argument("--workers", type=int, default=4)
+    rs = rp_sub.add_parser("sigs", help="appearance signatures of our team's crops (tuned model if there is one)")
+    rs.add_argument("--games", nargs="+", help="game ids (default: all)")
+    rs.add_argument("--device", default="cpu", help="cpu or cuda (about 17 crops/s on this CPU)")
     rx = rp_sub.add_parser("experiment", help="cross-validated fine-tuning and scoring on a crops bundle (GPU pod)")
     rx.add_argument("--data", required=True, help="folder from reid.write_bundle")
     rx.add_argument("--stock", required=True, help="stock OSNet-AIN weights")
@@ -571,7 +585,7 @@ def main() -> None:
     g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")
     g_sub = g.add_subparsers(dest="gpu_command")
     run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")
-    run_gpu.add_argument("job", choices=["ball-train", "ball-games", "people-games", "reid-train"],
+    run_gpu.add_argument("job", choices=["ball-train", "ball-games", "people-games", "reid-train", "reid-sigs"],
                          help="ball-train: fine-tune the ball model; ball-games: game-ball paths for games; "
                          "people-games: person boxes for games")
     run_gpu.add_argument("--mode", choices=["callouts", "clips", "all"], default="clips",

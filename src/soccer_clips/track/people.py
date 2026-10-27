@@ -553,7 +553,8 @@ def load_tracks(store: Store, game: Game, model: str = DEFAULT_MODEL) -> tuple[n
 
 # ---- following a player (Phase 3.3) ----
 # Clicks while watching say "this is #38" (kind "is") or "the marker is on the wrong person
-# from here" (kind "not"). They're kept as clicks (frame and position), not track ids, in
+# from here" (kind "not"); answering "no" to an appearance suggestion (reid.suggest) is kind "no":
+# like "not" it ends any label from there, but it isn't counted as a swap by the label yardstick. They're kept as clicks (frame and position), not track ids, in
 # tracks/people_picks.json, so they still apply after the game is tracked again: each time,
 # a click is matched to the tracklet whose box it falls in. A tracklet's frames are split at
 # the clicks on it; each piece takes the label of the click that starts it, and the piece
@@ -694,11 +695,12 @@ def follows(t: Tracks, picks: list[dict], player: int, frame: int) -> int | None
 
 
 def add_pick(store: Store, game: Game, frame: int, player: int, kind: str, x: float | None = None,
-             y: float | None = None, model: str = DEFAULT_MODEL) -> dict:
+             y: float | None = None, model: str = DEFAULT_MODEL, track: int | None = None) -> dict:
     """
     Record a click while watching. "is": the player under (x, y) is `player`. "not": the
     marker for `player` is on the wrong person from this frame on; without (x, y) the
-    marker's own box is used. Raises ValueError if there's no tracked box there.
+    marker's own box is used. "no": the player under (x, y) isn't `player` (a suggestion turned
+    down). track: the tracklet meant, when boxes overlap. Raises ValueError if there's no tracked box there.
     """
     t = tracks(store, game, model)
     if t is None:
@@ -715,7 +717,7 @@ def add_pick(store: Store, game: Game, frame: int, player: int, kind: str, x: fl
         x, y = float((x1 + x2) / 2), float((y1 + y2) / 2)
         tid = t.at(frame, x, y, prefer=tid)
     else:
-        tid = t.at(frame, x, y)
+        tid = t.at(frame, x, y, prefer=track)
     if tid is None:
         raise ValueError("no tracked player there")
     pick = {"frame": frame, "x": round(x, 4), "y": round(y, 4), "player": player, "kind": kind, "track": tid}
