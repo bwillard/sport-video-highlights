@@ -807,19 +807,19 @@ _strip_cache: dict = {}
 
 
 def _crop_store(store: Store, game: Game) -> dict | None:
-    """The game's crops in memory (one game at a time, until they're cut again), with a by-track index."""
+    """The game's crops in memory (every game: ~100 MB each; the roster page mixes games), with a by-track index.
+    Kept until they're cut again."""
     path = crops_path(store, game)
     if not path.exists():
         return None
     key = (str(path), path.stat().st_mtime_ns)
-    if key not in _strip_cache:
+    if _strip_cache.get(str(path), (None,))[0] != key:
         with np.load(path) as z:
             got = {"data": z["data"], "offsets": z["offsets"], "frame": z["frame"], "track": z["track"]}
         order = np.lexsort((got["frame"], got["track"]))
         got["order"], got["sorted_track"] = order, got["track"][order]
-        _strip_cache.clear()
-        _strip_cache[key] = got
-    return _strip_cache[key]
+        _strip_cache[str(path)] = (key, got)
+    return _strip_cache[str(path)][1]
 
 
 def strip(store: Store, game: Game, track: int, start: int, end: int, n: int = 3, height: int = 120) -> bytes | None:

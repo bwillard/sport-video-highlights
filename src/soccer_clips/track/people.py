@@ -766,7 +766,7 @@ def answer_tracklets(store: Store, game: Game, player: int, answers: list[dict],
         if ans.get("labelled"):
             p = None if ans["yes"] else _starting_pick(t, picks, k, int(ans["start"]), player)
             if p is not None:
-                p.update(kind="no", was="is", batch=batch)
+                _change(p, batch, kind="no")
                 n += 1
             continue
         a, b = t.window(int(ans["frame"]), int(ans["frame"]) + 1)
@@ -781,15 +781,72 @@ def answer_tracklets(store: Store, game: Game, player: int, answers: list[dict],
     return n
 
 
+def _change(p: dict, batch: str, **fields) -> None:
+    """Change a pick for batch `batch`, keeping what it was (and its own batch) for undo_answers."""
+    p.setdefault("before", []).append({k: p.get(k) for k in [*fields, "batch"]})
+    p.update(fields, batch=batch)
+
+
+NOT_OURS = -1  # the "player" of a "no" pick that says a stretch isn't anyone on our team (the roster page)
+
+
+def assign_stretches(store: Store, game: Game, stretches: list[dict], player: int | None, batch: str,
+                     model: str = DEFAULT_MODEL) -> int:
+    """
+    Give tracklet stretches (as segments() and the gaps between them have them: {track, start, label}; label
+    None if unlabelled) to `player`, from the roster page. player None: unlabel; NOT_OURS: unlabel and keep
+    out of the unassigned pictures (an opponent, a ref, a parent). A labelled stretch's starting pick is
+    changed (player, or kind "no"); an unlabelled one gets a pick at its first box, which labels it to the
+    tracklet's next pick. Changed picks carry `batch` (undo_answers). Returns the picks added or changed.
+    """
+    t = tracks(store, game, model)
+    if t is None:
+        raise ValueError("this game hasn't been through player tracking")
+    picks = load_picks(store, game)
+    n = 0
+    for sg in stretches:
+        k, start, label = int(sg["track"]), int(sg["start"]), sg.get("label")
+        if label is not None and label == player:
+            continue
+        if label is not None:
+            p = _starting_pick(t, picks, k, start, int(label))
+            if p is None:
+                continue
+            _change(p, batch, **({"kind": "no"} if player is None or player == NOT_OURS else {"player": player}))
+            n += 1
+            if player != NOT_OURS:
+                continue
+        elif player is None:
+            continue
+        a, b = t.window(start, int(sg.get("end", t.last[k] + 1)))
+        on = np.flatnonzero(t.track[a:b] == k)
+        if not len(on):
+            continue
+        i = a + int(on[0])
+        x1, y1, x2, y2 = t.box[i].tolist()
+        picks.append({"frame": int(t.frame[i]), "x": round((x1 + x2) / 2, 4), "y": round((y1 + y2) / 2, 4), "player": player,
+                      "kind": "no" if player == NOT_OURS else "is", "track": k, "batch": batch})
+        n += 1
+    _save_picks(store, game, picks)
+    return n
+
+
 def undo_answers(store: Store, game: Game, batch: str) -> int:
-    """Take back a page saved by answer_tracklets (picks added are removed, picks changed are restored)."""
+    """Take back a page saved by answer_tracklets or assign_stretches (picks added are removed, picks changed
+    are restored)."""
     out, n = [], 0
     for p in load_picks(store, game):
         if p.get("batch") != batch:
             out.append(p)
             continue
         n += 1
-        if "was" in p:
+        if p.get("before"):
+            back = {k: v for k, v in p.items() if k != "before"}
+            back.update(p["before"][-1])
+            if p["before"][:-1]:
+                back["before"] = p["before"][:-1]
+            out.append({k: v for k, v in back.items() if v is not None})
+        elif "was" in p:  # changed before the undo stack (2026-10-27)
             out.append({k: v for k, v in p.items() if k not in ("was", "batch")} | {"kind": p["was"]})
     _save_picks(store, game, out)
     return n
@@ -924,6 +981,12 @@ def labelled_ours(t: Tracks, picks: list[dict], role: np.ndarray) -> np.ndarray:
     return role
 
 
+def roles_of(t: Tracks, picks: list[dict], game: Game, player: int | None) -> tuple[dict[int, str], np.ndarray]:
+    """team_roles, and every box's team (box_roles, labelled stretches ours)."""
+    roles = team_roles(t, picks, game, player)
+    return roles, labelled_ours(t, picks, box_roles(t, roles))
+
+
 _roles_cache: dict = {}
 
 
@@ -938,9 +1001,7 @@ def roles_for(store: Store, game: Game, model: str = DEFAULT_MODEL) -> tuple[dic
            pp.stat().st_mtime if pp.exists() else 0, store.settings.default_player)
     if key not in _roles_cache:
         _roles_cache.clear()
-        picks = load_picks(store, game)
-        roles = team_roles(t, picks, game, store.settings.default_player)
-        _roles_cache[key] = (roles, labelled_ours(t, picks, box_roles(t, roles)))
+        _roles_cache[key] = roles_of(t, load_picks(store, game), game, store.settings.default_player)
     return _roles_cache[key]
 
 

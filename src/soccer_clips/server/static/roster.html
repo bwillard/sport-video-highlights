@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Clips — Roster</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  body { display: flex; flex-direction: column; height: 100vh; margin: 0; }
+  .wrap { flex: 1; display: flex; min-height: 0; }
+  #side { width: 290px; flex: none; border-right: 1px solid var(--line); overflow-y: auto; padding: 10px 0; }
+  #main { flex: 1; overflow-y: auto; padding: 12px 16px 40px; }
+  .sec { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 12px 4px; }
+  .who { display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 12px; cursor: pointer; border-left: 3px solid transparent; }
+  .who:hover { background: #222; }
+  .who.on { background: #23272e; border-left-color: var(--accent); }
+  .who.drop { background: #1e3350; outline: 1px dashed var(--accent); }
+  .who .num { font-weight: 700; min-width: 34px; font-variant-numeric: tabular-nums; }
+  .who input.name { flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; color: var(--text); padding: 2px 4px;
+                    border-radius: 3px; font: inherit; }
+  .who input.name:hover, .who input.name:focus { border-color: var(--line); background: #151515; }
+  .who .cnt { color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .who .cnt b { color: var(--warn); font-weight: 600; }
+  .who .del { visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 2px; }
+  .who:hover .del { visibility: visible; }
+  .who.extra .num, .who.extra .name { color: var(--muted); font-style: italic; }
+  .who.extra button.add { font-size: 11px; padding: 1px 6px; }
+  .addrow { display: flex; gap: 4px; padding: 6px 12px; }
+  .addrow input { min-width: 0; }
+  .addrow input[type=number] { width: 56px; }
+  .addrow input.nm { flex: 1; }
+  h2 { margin: 0 0 4px; font-size: 18px; }
+  .tabs { display: flex; gap: 4px; margin: 8px 0; }
+  .tabs button.on { background: var(--accent); color: #000; border-color: var(--accent); }
+  .intro { color: var(--muted); line-height: 1.6; margin-bottom: 10px; max-width: 900px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
+  .tile { position: relative; background: var(--panel); border: 2px solid var(--line); border-radius: 6px; padding: 6px;
+          cursor: pointer; user-select: none; }
+  .tile:hover { border-color: #666; }
+  .tile.sel { border-color: var(--accent); background: #1c2633; }
+  .tile.sel::after { content: "✓"; position: absolute; top: 8px; left: 10px; color: var(--accent); font-weight: 700; font-size: 20px;
+                     text-shadow: 0 0 4px #000; }
+  .tile .pics { height: 120px; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 3px; overflow: hidden; }
+  .tile img { max-width: 100%; max-height: 120px; display: block; pointer-events: none; }
+  .tile .none { color: var(--muted); font-size: 12px; }
+  .tile .cap { display: flex; gap: 6px; align-items: baseline; margin-top: 4px; font-size: 12px; color: var(--muted);
+               font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+  .tile .cap a { margin-left: auto; text-decoration: none; }
+  .tile .who2 { font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .who2 .lab { color: var(--text); font-weight: 600; }
+  .tile .who2 .g1 { color: var(--warn); }
+  .tile .who2 .g { color: var(--muted); }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+  .placeholder { padding: 48px 16px; text-align: center; color: var(--muted); }
+  #typed { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #23272e; border: 1px solid var(--accent);
+           padding: 8px 16px; border-radius: 6px; font-size: 16px; display: none; z-index: 10; }
+  .keys { color: var(--muted); font-size: 12px; line-height: 1.8; padding: 10px 12px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="/" title="Back to the tagger">← Tagger</a>
+  <select id="game" aria-label="game" title="Pictures from every game, or just one"></select>
+  <select id="sort" aria-label="order" title="Order of the pictures"></select>
+  <span class="stat" id="count"></span>
+  <span class="stat" id="selInfo"></span>
+  <button id="undo" title="Take back the last change (U)" disabled>Undo <kbd>U</kbd></button>
+  <span id="flash"></span>
+</div>
+<div class="wrap">
+  <div id="side">
+    <div class="sec">Players</div>
+    <div id="players"></div>
+    <div class="addrow">
+      <input id="addNum" type="number" min="0" max="99" placeholder="#" aria-label="new player's number">
+      <input id="addName" class="nm" placeholder="name (optional)" aria-label="new player's name">
+      <button id="addBtn" title="Add to the roster">Add</button>
+    </div>
+    <div class="sec">Pictures</div>
+    <div id="views"></div>
+    <div class="keys">
+      Click to select · Shift-click a range · <kbd>Ctrl</kbd>+<kbd>A</kbd> all on page · <kbd>Esc</kbd> none<br>
+      Type a number + <kbd>Enter</kbd>: assign to that player · or drag onto a name<br>
+      <kbd>Backspace</kbd> unlabel · <kbd>N</kbd> not our team · <kbd>U</kbd> undo · <kbd>←</kbd>/<kbd>→</kbd> pages<br>
+      Without a selection, keys act on the picture under the mouse.
+    </div>
+  </div>
+  <div id="main">
+    <h2 id="title"></h2>
+    <div class="tabs" id="tabs"></div>
+    <div class="intro" id="intro"></div>
+    <div id="grid"></div>
+    <div class="placeholder" id="empty" hidden></div>
+    <div class="pager" id="pager" hidden>
+      <button id="prev">← Prev</button><span class="stat" id="pageInfo"></span><button id="next">Next →</button>
+    </div>
+  </div>
+</div>
+<div id="typed"></div>
+
+<script src="/static/common.js"></script>
+<script>
+// The roster: names for numbers, and the pictures (tracklet stretches: crops from the start, middle and end)
+// that go with each player, from every game. Select pictures and type a number or drop them on a name to
+// assign them; unassigned and doubtful ones have their own views.
+const PAGE = 60, NOT_OURS = -1;
+const SORTS = {
+  player: [["least", "least like them first"], ["time", "by game and time"]],
+  probable: [["likely", "best match first"], ["doubt", "least sure first"], ["long", "longest first"], ["time", "by game and time"]],
+  unassigned: [["long", "longest first"], ["likely", "best match first"], ["doubt", "least sure first"], ["time", "by game and time"]],
+  unsure: [["gap", "most doubtful first"], ["time", "by game and time"]],
+};
+let games = new Map(), roster = [], stats = { players: {}, unassigned: 0, unsure: 0 };
+let view = "player", player = null, offset = 0, total = 0, items = [], loading = 0;
+const sel = new Set();  // keys of selected tiles
+let anchor = null, hovered = null, typed = "", typedTimer = null;
+const undos = [];  // batch ids, latest last
+
+const keyOf = (it) => `${it.game}:${it.track}:${it.start}`;
+const nameOf = (n) => roster.find((p) => p.number === n)?.name;
+const label = (n) => n === NOT_OURS ? "not our team" : `#${n}${nameOf(n) ? " " + nameOf(n) : ""}`;
+const fpsOf = (id) => { const g = games.get(id); return g ? g.fps_num / g.fps_den : 30000 / 1001; };
+const gameName = (id) => shortGame(id).replace(/^gu\d+-?(black-)?(vs-)?/, "") || shortGame(id);  // "fcu"
+const mins = (s) => s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m` : `${Math.round(s / 60)}m`;
+
+async function init() {
+  const [gamesIn, settings] = await Promise.all([getJson("/api/games"), getJson("/api/settings")]);
+  const gs = gamesIn.sort((a, b) => (b.played_on || "").localeCompare(a.played_on || ""));
+  games = new Map(gs.map((g) => [g.id, g]));
+  $("game").append(new Option("all games", ""));
+  for (const g of gs) $("game").append(new Option(`${gameName(g.id)} ${g.played_on || ""}`, g.id));
+  const h = readHash();
+  view = SORTS[h.view] ? h.view : "player";
+  player = h.player != null && h.player !== "" ? +h.player : null;
+  $("game").value = games.has(h.game) ? h.game : "";
+  await loadRoster();
+  if (view === "player" || view === "probable") player ??= settings.default_player ?? roster[0]?.number ?? null;
+  if (player == null && (view === "player" || view === "probable")) view = "unassigned";
+  setSorts(h.sort);
+  await load();
+}
+
+async function loadRoster() {
+  $("players").innerHTML = roster.length ? "" : `<div class="keys">counting pictures… (the first time takes about 10 s)</div>`;
+  const r = await getJson("/api/roster");
+  roster = r.roster;
+  stats = r;
+  renderSide();
+}
+
+function renderSide() {
+  const extra = Object.keys(stats.players).map(Number).filter((n) => !roster.some((p) => p.number === n)).sort((a, b) => a - b);
+  const row = (n, name, isExtra) => {
+    const s = stats.players[n] || { stretches: 0, seconds: 0, probable: 0 };
+    const on = (view === "player" || view === "probable") && player === n ? "on" : "";
+    return `<div class="who ${on} ${isExtra ? "extra" : ""}" data-player="${n}" title="${isExtra ? "Labelled but not on the roster" : "Click to see their pictures; drop pictures here to assign them"}">
+      <span class="num">#${n}</span>
+      ${isExtra ? `<span class="name">not on roster</span><button class="add" data-add="${n}">add</button>`
+                : `<input class="name" data-name="${n}" value="${esc(name || "")}" placeholder="name" aria-label="name of #${n}">`}
+      <span class="cnt" title="labelled stretches · time labelled · probable unassigned pictures">${s.stretches} · ${mins(s.seconds)}${s.probable ? ` · <b>${s.probable}?</b>` : ""}</span>
+      ${isExtra ? "" : `<button class="del" data-del="${n}" title="Remove from the roster (keeps the labels)">✕</button>`}
+    </div>`;
+  };
+  $("players").innerHTML = roster.map((p) => row(p.number, p.name, false)).join("") + extra.map((n) => row(n, null, true)).join("");
+  const v = (id, text, n, title) => `<div class="who ${view === id ? "on" : ""}" data-view="${id}" title="${title}">
+    <span class="name" style="flex:1">${text}</span><span class="cnt">${n ?? ""}</span></div>`;
+  $("views").innerHTML =
+    v("unassigned", "Unassigned", stats.unassigned, "Our-team pictures with no player yet; drop pictures here to unlabel them") +
+    v("unsure", "Doubtful labels", stats.unsure, "Labelled pictures that look as much like someone else") +
+    `<div class="who" data-view="notours" title="Drop pictures here: an opponent, a ref, a parent (they leave the unassigned list)">
+      <span class="name" style="flex:1">✗ Not our team</span><span class="cnt">drop here</span></div>`;
+}
+
+function setSorts(want) {
+  const opts = SORTS[view];
+  $("sort").innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  $("sort").value = opts.some(([v]) => v === want) ? want : opts[0][0];
+}
+
+function go(v, p = player) {
+  if (v !== view) { view = v; setSorts(); }
+  player = p;
+  offset = 0;
+  sel.clear();
+  renderSide();
+  load();
+}
+
+async function load() {
+  const ticket = ++loading;
+  history.replaceState(null, "", makeHash({ view, player: view === "player" || view === "probable" ? player : null,
+                                            game: $("game").value || null, sort: $("sort").value }));
+  renderHead();
+  $("empty").hidden = false;
+  $("empty").textContent = "finding pictures…";
+  $("grid").innerHTML = "";
+  $("pager").hidden = true;
+  const q = new URLSearchParams({ view, sort: $("sort").value, offset, limit: PAGE });
+  if (player != null) q.set("player", player);
+  if ($("game").value) q.set("game", $("game").value);
+  try {
+    const r = await getJson(`/api/roster/pictures?${q}`);
+    if (ticket !== loading) return;
+    items = r.items;
+    total = r.total;
+  } catch (e) {
+    if (ticket === loading) $("empty").textContent = String(e.message || e);
+    return;
+  }
+  render();
+}
+
+function renderHead() {
+  const s = stats.players[player] || {};
+  if (view === "player" || view === "probable") {
+    $("title").textContent = label(player);
+    $("tabs").innerHTML = `<button data-tab="player" class="${view === "player" ? "on" : ""}">Labelled (${s.stretches ?? 0})</button>
+      <button data-tab="probable" class="${view === "probable" ? "on" : ""}">Probably #${player} (${s.probable ?? 0})</button>`;
+  } else {
+    $("title").textContent = view === "unassigned" ? "Unassigned pictures" : "Doubtful labels";
+    $("tabs").innerHTML = "";
+  }
+  $("intro").textContent = {
+    player: `Every stretch labelled #${player}, least like their other pictures first: wrong ones gather at the top. Each tile shows the start, middle and end of the stretch; if it's not the same girl throughout, that's a swap.`,
+    probable: `Unlabelled pictures that look like #${player} (0.9 or better, and clearly ahead of anyone else). Select the right ones and type ${player} + Enter, or drag them onto the name.`,
+    unassigned: "Our-team pictures nobody is labelled on. Under each: who it looks most like. Opponents, refs and parents that slipped in: N.",
+    unsure: "Labelled pictures that look at least as much like someone else as like their label (the first number): a wrong label, or a swap mid-stretch.",
+  }[view];
+}
+
+function render() {
+  $("count").innerHTML = total ? `<b>${total}</b> pictures` : "";
+  $("empty").hidden = items.length > 0;
+  if (!items.length) $("empty").textContent = {
+    player: "No labelled pictures yet. Try the Probably tab.", probable: "Nothing that clearly looks like them left.",
+    unassigned: "Nothing unassigned.", unsure: "No doubtful labels.",
+  }[view];
+  $("pager").hidden = total <= PAGE;
+  $("pageInfo").textContent = `${offset + 1}–${Math.min(offset + PAGE, total)} of ${total}`;
+  $("prev").disabled = offset === 0;
+  $("next").disabled = offset + PAGE >= total;
+  $("grid").innerHTML = items.map((it, i) => {
+    const fps = fpsOf(it.game), t = it.frame / fps, gid = encodeURIComponent(it.game);
+    const gs = it.guesses.map((g, j) => `<span class="${j ? "g" : "g1"}">#${g.player} ${g.score.toFixed(2)}</span>`).join(" ");
+    const who = it.label != null
+      ? `<span class="lab">#${it.label}</span>${it.score != null ? ` ${it.score.toFixed(2)}` : ""}${gs ? " · like " + gs : ""}`
+      : gs ? `like ${gs}` : `<span class="g">too few pictures to say</span>`;
+    return `<div class="tile ${sel.has(keyOf(it)) ? "sel" : ""}" data-i="${i}" draggable="true">
+      <div class="pics"><img loading="lazy" alt="" src="/api/games/${gid}/people/strip.jpg?track=${it.track}&start=${it.start}&end=${it.end}"
+        onerror="this.replaceWith(Object.assign(document.createElement('span'), {className: 'none', textContent: 'no picture (too small)'}))"></div>
+      <div class="cap">${$("game").value ? "" : `<span title="${esc(it.game)}">${esc(gameName(it.game))}</span>`}<span>${fmt(t)}</span><span>${Math.round(it.secs)} s</span>
+        <a href="/#${makeHash({ game: it.game, t: t.toFixed(2) }).slice(1)}" target="_blank" title="Open in the tagger at this moment">▶</a></div>
+      <div class="who2" title="labelled as, and who it looks most like (higher is more alike)">${who}</div>
+    </div>`;
+  }).join("");
+  showSel();
+}
+
+function showSel() {
+  $("selInfo").textContent = sel.size ? `${sel.size} selected` : "";
+  for (const el of $("grid").children) el.classList.toggle("sel", sel.has(keyOf(items[+el.dataset.i])));
+}
+
+// what the keys act on: the selection, else the picture under the mouse
+function targets() {
+  const chosen = items.filter((it) => sel.has(keyOf(it)));
+  if (chosen.length) return chosen;
+  return hovered != null && items[hovered] ? [items[hovered]] : [];
+}
+
+async function assign(to, list = targets()) {
+  // to: a player number, null (unlabel) or NOT_OURS
+  list = list.filter((it) => to == null ? it.label != null : it.label !== to);  // nothing to do for the rest
+  if (!list.length) { flash(to == null ? "nothing labelled selected" : to === NOT_OURS ? "select some pictures first" : `already ${label(to)}`); return; }
+  const batch = Date.now().toString(36);
+  const r = await api("POST", "/api/roster/assign", {
+    player: to, batch,
+    stretches: list.map((it) => ({ game: it.game, track: it.track, start: it.start, end: it.end, label: it.label })),
+  });
+  undos.push(batch);
+  $("undo").disabled = false;
+  flash(`${list.length} picture${list.length === 1 ? "" : "s"} → ${to == null ? "unlabelled" : label(to)} (${r.changed} labels)`);
+  // the pictures leave this view unless they still belong in it
+  const gone = new Set(list.map(keyOf));
+  const stays = view === "player" && to === player;
+  if (!stays) {
+    items = items.filter((it) => !gone.has(keyOf(it)));
+    total -= gone.size;
+  }
+  for (const k of gone) sel.delete(k);
+  hovered = null;
+  if (!items.length && total > 0) { offset = Math.max(0, Math.min(offset, total - PAGE)); load(); } else render();
+  loadRoster();
+}
+
+async function undo() {
+  const batch = undos.pop();
+  if (!batch) return;
+  $("undo").disabled = !undos.length;
+  const r = await api("DELETE", `/api/roster/assign/${batch}`);
+  flash(`took back the last change (${r.undone} labels)`);
+  await Promise.all([loadRoster(), load()]);
+}
+
+async function saveRoster() {
+  const r = await api("PUT", "/api/roster", { players: roster });
+  roster = r.roster;
+  renderSide();
+  renderHead();
+}
+
+// ---- tiles: select, drag ----
+$("grid").addEventListener("click", (e) => {
+  if (e.target.closest("a")) return;
+  const el = e.target.closest(".tile");
+  if (!el) return;
+  const i = +el.dataset.i;
+  if (e.shiftKey && anchor != null) {
+    const [a, b] = [Math.min(anchor, i), Math.max(anchor, i)];
+    for (let j = a; j <= b; j++) sel.add(keyOf(items[j]));
+  } else {
+    const k = keyOf(items[i]);
+    sel.has(k) ? sel.delete(k) : sel.add(k);
+    anchor = i;
+  }
+  showSel();
+});
+$("grid").addEventListener("mouseover", (e) => { const el = e.target.closest(".tile"); hovered = el ? +el.dataset.i : null; });
+$("grid").addEventListener("mouseleave", () => { hovered = null; });
+$("grid").addEventListener("dragstart", (e) => {
+  const el = e.target.closest(".tile");
+  if (!el) return;
+  const k = keyOf(items[+el.dataset.i]);
+  if (!sel.has(k)) { sel.clear(); sel.add(k); showSel(); }
+  e.dataTransfer.setData("text/plain", `${sel.size} pictures`);
+  e.dataTransfer.effectAllowed = "move";
+});
+
+// ---- the side: views, names, drops ----
+function dropTarget(el) {
+  const row = el.closest(".who");
+  if (!row) return undefined;
+  if (row.dataset.player != null) return +row.dataset.player;
+  if (row.dataset.view === "notours") return NOT_OURS;
+  if (row.dataset.view === "unassigned") return null;
+  return undefined;
+}
+$("side").addEventListener("dragover", (e) => {
+  if (dropTarget(e.target) === undefined) return;
+  e.preventDefault();
+  for (const r of document.querySelectorAll(".who.drop")) r.classList.remove("drop");
+  e.target.closest(".who").classList.add("drop");
+});
+$("side").addEventListener("dragleave", (e) => e.target.closest?.(".who")?.classList.remove("drop"));
+$("side").addEventListener("drop", (e) => {
+  const to = dropTarget(e.target);
+  for (const r of document.querySelectorAll(".who.drop")) r.classList.remove("drop");
+  if (to === undefined) return;
+  e.preventDefault();
+  assign(to, items.filter((it) => sel.has(keyOf(it))));
+});
+$("side").addEventListener("click", async (e) => {
+  if (e.target.matches("input")) return;
+  const add = e.target.closest("[data-add]"), del = e.target.closest("[data-del]"), row = e.target.closest(".who");
+  if (add) {
+    roster.push({ number: +add.dataset.add });
+    await saveRoster();
+    return;
+  }
+  if (del) {
+    const n = +del.dataset.del;
+    if (!confirm(`Take ${label(n)} off the roster? Her labels stay (she'll show as "not on roster").`)) return;
+    roster = roster.filter((p) => p.number !== n);
+    await saveRoster();
+    return;
+  }
+  if (!row) return;
+  if (row.dataset.player != null) go(view === "probable" ? "probable" : "player", +row.dataset.player);
+  else if (row.dataset.view && row.dataset.view !== "notours") go(row.dataset.view, null);
+});
+$("side").addEventListener("change", (e) => {
+  const n = e.target.dataset.name;
+  if (n == null) return;
+  const p = roster.find((q) => q.number === +n);
+  if (p) { p.name = e.target.value.trim() || null; saveRoster(); }
+});
+$("side").addEventListener("keydown", (e) => { if (e.target.matches("input.name") && e.key === "Enter") e.target.blur(); });
+$("addBtn").addEventListener("click", async () => {
+  const n = parseInt($("addNum").value, 10);
+  if (!(n >= 0 && n <= 99)) { flash("a number from 0 to 99", true); return; }
+  if (roster.some((p) => p.number === n)) { flash(`#${n} is already on the roster`, true); return; }
+  roster.push({ number: n, name: $("addName").value.trim() || null });
+  $("addNum").value = $("addName").value = "";
+  await saveRoster();
+});
+$("addName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("addBtn").click(); });
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) go(b.dataset.tab); });
+
+$("game").addEventListener("change", (e) => { e.target.blur(); offset = 0; sel.clear(); load(); });
+$("sort").addEventListener("change", (e) => { e.target.blur(); offset = 0; load(); });
+$("prev").addEventListener("click", () => { offset = Math.max(0, offset - PAGE); sel.clear(); load(); $("main").scrollTop = 0; });
+$("next").addEventListener("click", () => { if (offset + PAGE < total) { offset += PAGE; sel.clear(); load(); $("main").scrollTop = 0; } });
+$("undo").addEventListener("click", (e) => { e.currentTarget.blur(); undo(); });
+
+// ---- keys: a typed number assigns (Enter, or a pause); two digits go at once ----
+function showTyped() {
+  $("typed").style.display = typed ? "block" : "none";
+  const n = +typed;
+  $("typed").textContent = `assign ${targets().length} → #${typed}${nameOf(n) ? " " + nameOf(n) : ""}  (Enter)`;
+}
+function commitTyped() {
+  clearTimeout(typedTimer);
+  const n = typed === "" ? null : +typed;
+  typed = "";
+  showTyped();
+  if (n != null) assign(n);
+}
+document.addEventListener("keydown", (e) => {
+  if (typingInField(e) || e.altKey) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+    e.preventDefault();
+    for (const it of items) sel.add(keyOf(it));
+    showSel();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey) return;
+  if (/^[0-9]$/.test(e.key)) {
+    e.preventDefault();
+    typed += e.key;
+    clearTimeout(typedTimer);
+    if (typed.length >= 2) { commitTyped(); return; }
+    showTyped();
+    typedTimer = setTimeout(commitTyped, 1200);
+    return;
+  }
+  const act = {
+    Enter: () => typed && commitTyped(),
+    Escape: () => { typed = ""; showTyped(); sel.clear(); showSel(); },
+    Backspace: () => typed ? (typed = typed.slice(0, -1), showTyped()) : assign(null),
+    Delete: () => assign(null),
+    n: () => assign(NOT_OURS),
+    u: undo,
+    ArrowLeft: () => $("prev").disabled || $("prev").click(),
+    ArrowRight: () => $("next").disabled || $("next").click(),
+  }[e.key.length === 1 ? e.key.toLowerCase() : e.key];
+  if (!act) return;
+  e.preventDefault();
+  act();
+});
+
+init();
+</script>
+</body>
+</html>

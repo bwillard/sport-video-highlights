@@ -109,6 +109,7 @@ Turn many short, anonymous tracklets of our team into named players.
 - [ ] Jersey OCR signal
 - [ ] Per-player scoring / linear probe across games
 - [x] Review queue in the tagger (A: automatic guesses in turn) · [x] thumbnail grid per player (`/players`: automatic guesses, look-alikes or labelled stretches of one player, 24 tiles a page, each the start / middle / end crops of the stretch; Enter saves the page as one batch, U takes it back)
+- [x] Roster page (`/roster`, replaces `/players`; 2026-10-27): names for numbers (roster.json, outside the repo), and every tracklet stretch with crops from every game as a picture (track/gallery.py), scored against each player's look (a labelled one against its own player's look without itself). Views: a player's labelled pictures (least like them first), "probably #N" (unlabelled, >= 0.9 and 0.05 ahead of the next player), unassigned (our team, >= 3 crops), doubtful labels (someone else within 0.02). Select + type a number, or drag onto a name; Backspace unlabels, N = not our team (a "no" pick for player -1); every change is a batch, U undoes (changed picks keep a stack of what they were)
 
 ## 4.4 — Clips where a player is near the ball
 For a chosen player, find the stretches of a game where they're involved with the ball and offer them as clips.

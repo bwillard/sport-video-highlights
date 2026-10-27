@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal, get_args
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -148,6 +148,29 @@ class AnswersIn(RequestBody):
     player: int = Field(ge=0)
     batch: str = Field(min_length=1, max_length=64)  # an id for the page, so it can be taken back
     answers: list[AnswerIn]
+
+
+class RosterPlayerIn(RequestBody):
+    number: int = Field(ge=0, le=99)
+    name: str | None = Field(default=None, max_length=60)
+
+
+class RosterIn(RequestBody):
+    players: list[RosterPlayerIn]
+
+
+class StretchIn(RequestBody):
+    game: str
+    track: int
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    label: int | None = None  # who it's labelled as now (None: unlabelled)
+
+
+class AssignIn(RequestBody):
+    player: int | None = Field(default=None, ge=-1, le=99)  # None: unlabel; -1: not one of ours (people.NOT_OURS)
+    batch: str = Field(min_length=1, max_length=64)  # so it can be taken back
+    stretches: list[StretchIn] = Field(max_length=2000)
 
 
 class VerdictIn(RequestBody):
@@ -720,9 +743,59 @@ def create_app(store: Store | None = None) -> FastAPI:
             raise HTTPException(404, f"no frame {frame}")
         return FileResponse(ball_labels.frame_image(store, game, frame), media_type="image/jpeg")
 
+    @app.get("/roster")
+    def roster_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "roster.html")
+
     @app.get("/players")
-    def players_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "players.html")
+    def players_page() -> RedirectResponse:
+        return RedirectResponse("/roster")
+
+    @app.get("/api/roster")
+    def roster_get() -> dict:
+        """The roster (numbers and names) and, per number labelled anywhere, how much (gallery.summary)."""
+        from soccer_clips.roster import load_roster
+        from soccer_clips.track import gallery
+
+        return {"roster": load_roster(store.settings).model_dump(exclude_none=True)["players"], **gallery.summary(store)}
+
+    @app.put("/api/roster")
+    def roster_put(body: RosterIn) -> dict:
+        """Replace the roster (kept with the game data, not in the repo)."""
+        from soccer_clips.roster import Roster, save_roster
+
+        nums = [p.number for p in body.players]
+        if len(set(nums)) != len(nums):
+            raise HTTPException(422, "each number once")
+        roster = Roster.model_validate({"players": [{"number": p.number, "name": (p.name or "").strip() or None}
+                                                    for p in sorted(body.players, key=lambda p: p.number)]})
+        save_roster(store.settings, roster)
+        return {"roster": roster.model_dump(exclude_none=True)["players"]}
+
+    @app.get("/api/roster/pictures")
+    def roster_pictures(view: Literal["player", "probable", "unassigned", "unsure"], player: int | None = None,
+                        game: str | None = None, sort: str = "", offset: int = 0, limit: int = 60) -> dict:
+        """A page of tracklet stretches for the roster page (gallery.pictures)."""
+        from soccer_clips.track import gallery
+
+        return gallery.pictures(store, view, player, game, sort, max(offset, 0), min(max(limit, 1), 500))
+
+    @app.post("/api/roster/assign")
+    def roster_assign(body: AssignIn) -> dict:
+        """Give stretches to a player, unlabel them, or mark them not ours (gallery.assign)."""
+        from soccer_clips.track import gallery
+
+        try:
+            n = gallery.assign(store, [x.model_dump() for x in body.stretches], body.player, body.batch)
+        except (ValueError, FileNotFoundError) as e:
+            raise HTTPException(422, str(e))
+        return {"changed": n}
+
+    @app.delete("/api/roster/assign/{batch}")
+    def roster_assign_undo(batch: str) -> dict:
+        from soccer_clips.track import gallery
+
+        return {"undone": gallery.undo(store, batch)}
 
     @app.get("/label-ball")
     def label_ball_page() -> FileResponse:
