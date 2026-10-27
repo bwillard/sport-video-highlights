@@ -83,14 +83,21 @@ Turn many short, anonymous tracklets of our team into named players.
 3. Name chains: OCR hits, your labels, and similarity to each player's gallery from earlier games (a small per-player classifier / linear probe once there are enough examples).
 4. Score each label; low-confidence ones go to a review queue.
 
+**Fine-tuning (as built, `track/reid.py`)**
+- OSNet-AIN written out in our code (architecture from torchreid, MIT; BoxMOT's copy is AGPL), loading torchreid's MSMT17 weights; signatures match BoxMOT's exactly.
+- Crops (`soccer-clips reid crops`): every 30th frame (~1 s), every tracked box ≥ 40 px, as JPEG in `tracks/reid_crops.npz` (~60k crops, 80 MB per game; 3 min a game with 4 processes). Only crops go to the GPU, not videos.
+- No naming of other players needed: two tracklets on screen at the same moment are different people, and a tracklet within 5 s is one person. Each batch is 16 players (ours and opponents) on screen at one moment, 4 crops each from within 5 s. Half the batches are at a moment when #38 is labelled; her crops then come from all her labelled stretches in all games, so she becomes one person across games. Supervised contrastive loss, light augmentation (flip, shift, zoom, brightness; never hue).
+- Yardstick (`reid.evaluate`, games held out 3-fold): at the middle of each of her labelled stretches, is her tracklet the teammate on screen that looks most like her (her look from the other games)? Plus, for everyone on our team: does a tracklet match itself 10–20 s later better than the teammates on screen then?
+
 **Review UI:** a grid of tracklet thumbnails per player, "is this #38?" yes/no with one key, sorted by least confident first. Each answer is saved to the gallery.
 
 **Gallery** (`player_gallery/`): crops saved as image files, each with a line in `player_gallery/index.jsonl` (game, frame, box, player or team label, source = callout / correction / review / ocr). Teammates are hard negatives for each other. Append-only JSONL so it can grow to many thousands of entries.
 
 **Tasks**
-- [ ] Roster file + per-game "who played"
+- [x] Roster file (`roster.json` in the data folder; per-game "who played" still to do)
 - [ ] Gallery index + crop saving (from callouts, corrections, reviews)
-- [ ] OSNet embeddings; DINOv2 embeddings; compare
+- [x] OSNet embeddings; DINOv2 embeddings; compare (OSNet-AIN best; Findings 2026-10-26)
+- [ ] Fine-tune OSNet-AIN on our games (`track/reid.py`, `gpu run reid-train`): see below
 - [ ] Tracklet linking within a game (similarity + constraints)
 - [ ] Jersey OCR signal
 - [ ] Per-player scoring / linear probe across games
@@ -127,6 +134,7 @@ For a chosen player, find the stretches of a game where they're involved with th
 - Acceptable full-game processing time (overnight is fine?).
 
 ## Findings
+- **2026-10-26** — The real task with stock OSNet-AIN: at each of her 148 labelled stretches, does her tracklet look most like her (her look from the other five games) among the our-kit tracklets on the pitch during that stretch (23 on average, so chance 6%)? Top-1 16% by likeness to her average look, 32% with a linear probe trained on the other games (0–77% per game). Far from usable stock, which is what fine-tuning has to fix.
 - **2026-10-26** — Appearance re-ID, first test: can a model tell #38 from her teammates? Positives: her labelled stretches (128 tracklets); negatives: our-kit tracklets on the pitch during them (2,173; certainly not her). 3 crops per tracklet (the biggest box in each third, ≥ 45 px), averaged. AUC = chance one of her tracklets scores above a teammate's (0.5 coin flip, 1.0 perfect), mean over the six games:
 
   | Model | Within the game (similarity) | Her look from the other games | Linear classifier trained on the other 5 games |

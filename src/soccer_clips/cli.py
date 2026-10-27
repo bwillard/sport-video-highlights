@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+from pathlib import Path
 
 from soccer_clips.config import get_settings
 from soccer_clips.scan import scan
@@ -331,6 +332,23 @@ def cmd_gametime(store: Store, args: argparse.Namespace) -> None:
             gametime.restore(store, gid, log=log)
 
 
+def cmd_reid(store: Store, args: argparse.Namespace) -> None:
+    from soccer_clips.track import people, reid
+
+    log = lambda m: print(m, flush=True)  # noqa: E731
+    if args.reid_command == "crops":
+        for gid in args.games or [g.id for g in store.list_games()]:
+            game = store.load_game(gid)
+            if people.tracks(store, game) is None:
+                print(f"{gid}: no player tracks yet, skipped")
+                continue
+            print(f"{gid}: {reid.extract_crops(store, game, workers=args.workers, log=log)} crops", flush=True)
+    elif args.reid_command == "experiment":
+        r = reid.run_experiment(Path(args.data), Path(args.stock), Path(args.out), n_folds=args.folds,
+                                steps=args.steps, device=args.device, log=log)
+        print(json.dumps(r["summary"], indent=1))
+
+
 def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
     from soccer_clips import gpu
 
@@ -345,6 +363,8 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
                 raise SystemExit("ball-games takes --mode clips or all")
             ids = args.games or [g.id for g in store.list_games()]
             job = gpu.ball_games_job(store, ids, mode=args.mode, log=lambda m: print(m, flush=True))
+        elif args.job == "reid-train":
+            job = gpu.reid_train_job(store, args.games, steps=args.steps)
         elif args.job == "people-games":
             ids = args.games or [g.id for g in store.list_games()]
             job = gpu.people_games_job(store, ids, mode=args.mode, models=args.models, workers=args.workers)
@@ -365,6 +385,15 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         for w in sorted((results / "models").glob("ball_*.pt")):
             shutil.copy(w, models_dir(store) / w.name)
             print(f"model: {models_dir(store) / w.name}")
+        if args.job == "reid-train":
+            from soccer_clips.track import reid
+
+            if (results / "out" / reid.TUNED).exists():
+                shutil.copy(results / "out" / reid.TUNED, models_dir(store) / reid.TUNED)
+                print(f"model: {models_dir(store) / reid.TUNED}")
+            f = results / "out" / "reid_results.json"
+            if f.exists():
+                print(json.dumps(json.loads(f.read_text())["summary"], indent=1))
         for name in ("stock", "finetuned"):
             f = results / "out" / f"{name}.json"
             if f.exists():
@@ -527,10 +556,22 @@ def main() -> None:
     ct.add_argument("--yes", action="store_true", help="go ahead (without it, just says what would be kept)")
     rs = gt_sub.add_parser("restore", help="undo a cut from its backup")
     rs.add_argument("game")
+    rp = sub.add_parser("reid", help="player appearance signatures (Phase 4)")
+    rp_sub = rp.add_subparsers(dest="reid_command", required=True)
+    rc = rp_sub.add_parser("crops", help="cut player crops out of each tracked game (for training and scoring)")
+    rc.add_argument("--games", nargs="+", help="game ids (default: all)")
+    rc.add_argument("--workers", type=int, default=4)
+    rx = rp_sub.add_parser("experiment", help="cross-validated fine-tuning and scoring on a crops bundle (GPU pod)")
+    rx.add_argument("--data", required=True, help="folder from reid.write_bundle")
+    rx.add_argument("--stock", required=True, help="stock OSNet-AIN weights")
+    rx.add_argument("--out", required=True)
+    rx.add_argument("--folds", type=int, default=3)
+    rx.add_argument("--steps", type=int, default=3000)
+    rx.add_argument("--device", default="cuda")
     g = sub.add_parser("gpu", help="cloud GPU jobs on RunPod (lists our pods with no subcommand)")
     g_sub = g.add_subparsers(dest="gpu_command")
     run_gpu = g_sub.add_parser("run", help="start a pod, run the job, copy results back, delete the pod")
-    run_gpu.add_argument("job", choices=["ball-train", "ball-games", "people-games"],
+    run_gpu.add_argument("job", choices=["ball-train", "ball-games", "people-games", "reid-train"],
                          help="ball-train: fine-tune the ball model; ball-games: game-ball paths for games; "
                          "people-games: person boxes for games")
     run_gpu.add_argument("--mode", choices=["callouts", "clips", "all"], default="clips",
@@ -542,6 +583,7 @@ def main() -> None:
     run_gpu.add_argument("--stock", nargs="*", default=[], help="stock bases to score first (the best other one is also fine-tuned)")
     run_gpu.add_argument("--train", nargs="+", default=["yolo26x"], help="bases to fine-tune")
     run_gpu.add_argument("--epochs", type=int, default=60)
+    run_gpu.add_argument("--steps", type=int, default=3000, help="reid-train: training steps per model")
     run_gpu.add_argument("--batch", type=int, default=4,
                          help="images per step; YOLO26x at 1280 runs out of memory at 8 on a 24 GB card")
     run_gpu.add_argument("--gpu", nargs="+", help="RunPod GPU type ids, in order of preference")
@@ -564,7 +606,7 @@ def main() -> None:
 
     store = Store(get_settings())
     {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people, "gametime": cmd_gametime,
-     "gpu": cmd_gpu}[args.command](store, args)
+     "reid": cmd_reid, "gpu": cmd_gpu}[args.command](store, args)
 
 
 if __name__ == "__main__":

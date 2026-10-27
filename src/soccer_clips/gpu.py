@@ -591,3 +591,24 @@ def install_ball_tracks(store: Store, results: Path, log=print) -> int:
         n += 1
         log(f"installed {dest.relative_to(data_root(store))}")
     return n
+
+
+def reid_train_job(store: Store, game_ids: list[str] | None, steps: int = 3000) -> Job:
+    """
+    Fine-tune OSNet-AIN on the games' player crops (track/reid.py): cross-validated scores of the stock
+    and tuned models, then one model tuned on all the games. Sends crops, not videos.
+    """
+    from soccer_clips.track import reid
+    from soccer_clips.track.benchmark import models_dir
+
+    root = data_root(store)
+    stock = models_dir(store) / reid.STOCK
+    if not stock.exists():
+        raise ConfigError(f"{stock} is missing (torchreid's osnet_ain_x1_0 MSMT17 weights)")
+    ids = game_ids or [g.id for g in store.list_games() if reid.crops_path(store, g).exists()]
+    files = reid.write_bundle(store, ids, root / "reid")
+    script = f"""
+soccer-clips reid experiment --data $W/reid --stock $W/{stock.relative_to(root)} --out $W/out --steps {steps}
+"""
+    return Job(name="reid-train", uploads=[str(f.relative_to(root)) for f in files] + [str(stock.relative_to(root))],
+               script=script, downloads=["out"])
