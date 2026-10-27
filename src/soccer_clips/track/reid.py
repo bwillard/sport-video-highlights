@@ -679,18 +679,61 @@ def player_look(store: Store, player: int, skip: str | None = None) -> tuple[np.
     return (total / max(np.linalg.norm(total), 1e-9), n) if n else (None, 0)
 
 
+_pieces_cache: dict = {}
+_theirs_cache: dict = {}
+
+
+def _pieces(store: Store, game: Game) -> dict | None:
+    """The game's signatures as pieces of ~PIECE crops along each tracklet (>= 3 crops): track, first and last
+    frame, middle frame and unit mean signature of each. Kept in memory until the signatures change."""
+    path = sigs_path(store, game)
+    if not path.exists():
+        return None
+    key = (str(path), path.stat().st_mtime_ns)
+    if key not in _pieces_cache:
+        s = load_sigs(store, game)
+        order = np.lexsort((s["frame"], s["track"]))
+        tr, fr, sig = s["track"][order], s["frame"][order], s["sig"][order]
+        out = {"track": [], "lo": [], "hi": [], "mid": [], "vec": []}
+        for idx in np.split(np.arange(len(tr)), np.flatnonzero(np.diff(tr)) + 1):
+            for piece in np.array_split(idx, max(1, round(len(idx) / PIECE))):
+                if len(piece) < 3:
+                    continue
+                out["track"].append(int(tr[piece[0]]))
+                out["lo"].append(int(fr[piece[0]]))
+                out["hi"].append(int(fr[piece[-1]]))
+                out["mid"].append(int(fr[piece[len(piece) // 2]]))
+                out["vec"].append(sig[piece].mean(0))
+        vec = np.array(out["vec"], np.float32).reshape(-1, 512)
+        _pieces_cache.clear()  # one game at a time, like the tracklets
+        _pieces_cache[key] = {"track": np.array(out["track"], np.int64), "lo": np.array(out["lo"], np.int64),
+                              "hi": np.array(out["hi"], np.int64), "mid": np.array(out["mid"], np.int64),
+                              "vec": vec / np.maximum(np.linalg.norm(vec, axis=1, keepdims=True), 1e-9)}
+    return _pieces_cache[key]
+
+
+def _not_ours(t, roles: np.ndarray) -> set[int]:
+    """Tracklets mostly called opponents or others by the team split (unknown counts as ours); cached per split."""
+    key = id(roles)
+    if key not in _theirs_cache:
+        ids, inv = np.unique(t.track, return_inverse=True)
+        theirs = np.bincount(inv, weights=roles >= 1, minlength=len(ids)) / np.bincount(inv, minlength=len(ids))
+        _theirs_cache.clear()
+        _theirs_cache[key] = (roles, set(ids[theirs > 0.5].tolist()))  # holds roles so its id isn't reused
+    return _theirs_cache[key][1]
+
+
 def suggest(store: Store, game: Game, player: int, limit: int = 20) -> dict:
     """
     Our-team tracklets (by the current team split) in the game that look most like `player` (their labelled
-    crops in every game),
-    best first, one per tracklet: {track, frame, x, y, score, start, end}. Left out: tracklets with any
-    label in this game or a pick for this player, and anything on screen while the player is labelled
-    elsewhere (one place at a time).
+    crops in every game), best first, one per tracklet (its best ~PIECE-crop piece):
+    {track, frame, x, y, box, score, start, end}. Left out: tracklets with any label in this game or a pick
+    for this player, and anything on screen while the player is labelled elsewhere (one place at a time).
     """
     from soccer_clips.track import people
 
-    s = load_sigs(store, game)
-    if s is None:
+    pc = _pieces(store, game)
+    if pc is None:
         return {"suggestions": [], "note": "no appearance signatures for this game yet (soccer-clips reid sigs)"}
     look, n = player_look(store, player)
     if look is None:
@@ -701,42 +744,25 @@ def suggest(store: Store, game: Game, player: int, limit: int = 20) -> dict:
     skip = {x["track"] for x in segs} | {p["track"] for p in picks if p["player"] == player}
     # our team as the team split has it now (the crops' roles date from when they were cut: in a game with
     # no labels yet both teams were "team", and they split once she's labelled)
-    _, roles = people.roles_for(store, game)
-    ids, inv = np.unique(t.track, return_inverse=True)
-    theirs = np.bincount(inv, weights=roles >= 1, minlength=len(ids)) / np.bincount(inv, minlength=len(ids))
-    skip |= set(ids[theirs > 0.5].tolist())  # mostly opponents or others (unknown stays in)
+    skip |= _not_ours(t, people.roles_for(store, game)[1])
+    ok = ~np.isin(pc["track"], list(skip))
     busy = sorted((x["start"], x["end"]) for x in segs if x["player"] == player)
-    starts, ends = np.array([a for a, _ in busy], np.int64), np.array([b for _, b in busy], np.int64)
-
-    def is_busy(frames: np.ndarray) -> bool:
-        k = np.searchsorted(starts, frames, side="right") - 1
-        return bool(((k >= 0) & (frames < ends[np.maximum(k, 0)])).any()) if len(starts) else False
-
-    order = np.lexsort((s["frame"], s["track"]))
-    tr, fr, sig = s["track"][order], s["frame"][order], s["sig"][order]
-    bounds = np.flatnonzero(np.diff(tr)) + 1
-    best = []
-    for idx in np.split(np.arange(len(tr)), bounds):
-        k = int(tr[idx[0]])
-        if k in skip:
-            continue
-        top = None
-        for piece in np.array_split(idx, max(1, round(len(idx) / PIECE))):
-            if len(piece) < 3 or is_busy(fr[piece]):
-                continue
-            v = sig[piece].mean(0)
-            score = float(v @ look / max(np.linalg.norm(v), 1e-9))
-            if top is None or score > top[0]:
-                top = (score, int(fr[piece[len(piece) // 2]]))
-        if top:
-            best.append((top[0], k, top[1]))
-    best.sort(reverse=True)
+    if busy:  # a piece overlapping a stretch where the player is labelled elsewhere
+        starts, ends = np.array([a for a, _ in busy]), np.array([b for _, b in busy])
+        k = np.searchsorted(starts, pc["hi"], side="right") - 1
+        ok &= ~((k >= 0) & (pc["lo"] < ends[np.maximum(k, 0)]))
+    idx = np.flatnonzero(ok)
+    score = pc["vec"][idx] @ look
+    idx, score = idx[np.argsort(-score, kind="stable")], np.sort(score)[::-1]
+    _, first = np.unique(pc["track"][idx], return_index=True)  # each tracklet's best piece
+    first = np.sort(first)
     out = []
-    for score, k, f in best[:limit]:
+    for j in first[:limit]:
+        k, f = int(pc["track"][idx[j]]), int(pc["mid"][idx[j]])
         a, b = t.window(f, f + 1)
         i = a + int(np.flatnonzero(t.track[a:b] == k)[0])
         x1, y1, x2, y2 = t.box[i].tolist()
         out.append({"track": k, "frame": f, "x": round((x1 + x2) / 2, 4), "y": round((y1 + y2) / 2, 4),
-                    "box": [round(v, 4) for v in (x1, y1, x2, y2)], "score": round(score, 3),
+                    "box": [round(v, 4) for v in (x1, y1, x2, y2)], "score": round(float(score[j]), 3),
                     "start": t.first[k], "end": t.last[k] + 1})
-    return {"suggestions": out, "look_crops": n, "candidates": len(best)}
+    return {"suggestions": out, "look_crops": n, "candidates": len(first)}

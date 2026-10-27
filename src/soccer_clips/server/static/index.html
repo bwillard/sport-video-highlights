@@ -954,11 +954,15 @@ const skippedSuggestions = new Set();  // "player:track" skipped with G
 const boxChunks = new Map();  // chunk index -> Float32Array, or "loading"
 try { showPeople = localStorage.getItem("showPeople") === "1"; } catch {}
 
-async function loadPeople() {
-  if (!showPeople || !game || people?.gameId === game.id) return;
+let peopleLoading = null;  // the request for the players' summary, while it's on its way
+function loadPeople() {
+  if (!showPeople || !game || people?.gameId === game.id) return peopleLoading;
   const id = game.id;
-  const p = await getJson(`/api/games/${encodeURIComponent(id)}/people`);
-  if (game?.id === id) people = { gameId: id, ...p };
+  peopleLoading = getJson(`/api/games/${encodeURIComponent(id)}/people`).then((p) => {
+    if (game?.id === id) people = { gameId: id, ...p };
+    fetchSuggestions()?.catch(() => {});  // ready before the first G
+  }).finally(() => { peopleLoading = null; });
+  return peopleLoading;
 }
 function setLabels(r) {
   if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
@@ -990,6 +994,7 @@ function fillFollowWho() {
 $("followWho").addEventListener("change", (e) => {
   followWho = +e.target.value || null;
   suggestion = null;
+  fetchSuggestions()?.catch(() => {});
   try { localStorage.setItem("followWho", followWho ?? ""); } catch {}
   e.target.blur();
 });
@@ -1087,7 +1092,9 @@ function drawPeople(ctx) {
     }
   }
   ctx.restore();
-  $("peopleStat").textContent = suggestion
+  $("peopleStat").textContent = suggestWaiting != null
+    ? `players: finding teammates who look like #${suggestWaiting}…`
+    : suggestion
     ? `players: is this #${suggestion.player}? (best match ${suggestion.n} of ${suggestion.of} unlabelled tracklets of our team)`
     : `players: ${who || "nobody followed"} ${here ? "here" : "not labelled here"}`;
 }
@@ -1121,17 +1128,45 @@ async function undoPick() {
   flash(r.undone ? `took back the last player label (#${r.undone.player} at ${fmt(r.undone.frame / fps)})` : "no player labels to take back");
 }
 let suggestList = null;  // {key: "game:player", items, candidates}: fetched once, again after each answer
+let suggestFetch = null;  // {key, promise} while a list is on its way
+let suggestWaiting = null;  // the player whose list G is waiting for (shown in the status)
+function fetchSuggestions() {
+  // start fetching the list for the followed player (the first one in a game takes a few seconds)
+  if (!showPeople || !people || followWho == null || !game) return null;
+  const who = followWho, id = game.id, key = `${id}:${who}`;
+  if (suggestList?.key === key) return null;
+  if (suggestFetch?.key !== key) {
+    const promise = getJson(`/api/games/${encodeURIComponent(id)}/people/suggest?player=${who}&limit=200`)
+      .then((r) => {
+        if (suggestFetch?.key === key) suggestFetch = null;
+        if (!r.note && game?.id === id) suggestList = { key, items: r.suggestions, candidates: r.candidates };
+        return r;
+      })
+      .catch((e) => { if (suggestFetch?.key === key) suggestFetch = null; throw e; });
+    suggestFetch = { key, promise };
+  }
+  return suggestFetch.promise;
+}
 async function nextSuggestion() {
+  if (showPeople && !people && peopleLoading) {
+    flash("players still loading…");
+    await peopleLoading.catch(() => {});
+  }
   if (!showPeople || !people) return flash("press V to show the players first", true);
   if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
+  if (suggestWaiting != null) return;  // still finding them
   if (suggestion) skippedSuggestions.add(`${suggestion.player}:${suggestion.track}`);
   const who = followWho, id = game.id, key = `${id}:${who}`;
   if (suggestList?.key !== key) {
-    flash(`finding players who look like #${who}…`);
-    const r = await getJson(`/api/games/${encodeURIComponent(id)}/people/suggest?player=${who}&limit=200`);
-    if (game?.id !== id || followWho !== who) return;
-    if (r.note) { suggestion = null; render(); return flash(r.note, true); }
-    suggestList = { key, items: r.suggestions, candidates: r.candidates };
+    suggestWaiting = who;
+    suggestion = null;
+    try {
+      const r = await fetchSuggestions();
+      if (r?.note) return flash(r.note, true);
+    } finally {
+      suggestWaiting = null;
+    }
+    if (game?.id !== id || followWho !== who || suggestList?.key !== key) return;
   }
   const items = suggestList.items, i = items.findIndex((sg) => !skippedSuggestions.has(`${who}:${sg.track}`));
   if (i < 0) { suggestion = null; render(); return flash(`no more suggestions for #${who}`); }
@@ -1148,6 +1183,7 @@ async function answerSuggestion(yes) {
   setLabels(r);
   suggestion = null;
   suggestList = null;  // the answer changes the player's look and what's left
+  fetchSuggestions()?.catch(() => {});
   flash(yes ? `that's #${sg.player}: tracklet labelled (G for the next)` : `not #${sg.player} (G for the next)`);
   render();
 }

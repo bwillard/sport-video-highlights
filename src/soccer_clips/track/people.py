@@ -613,7 +613,9 @@ class Tracks:
 
     def window(self, start: int, end: int) -> tuple[int, int]:
         """Row slice for frames [start, end)."""
-        return int(np.searchsorted(self.frame, start)), int(np.searchsorted(self.frame, end))
+        # the bounds as the frame column's own int32: a Python int makes numpy convert all the rows each call
+        a, b = np.searchsorted(self.frame, np.array([start, end], self.frame.dtype))
+        return int(a), int(b)
 
     def at(self, frame: int, x: float, y: float, prefer: int | None = None, slack: float = 0.01) -> int | None:
         """
