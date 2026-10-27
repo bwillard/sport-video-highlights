@@ -736,6 +736,65 @@ def undo_pick(store: Store, game: Game) -> dict | None:
     return picks[-1]
 
 
+def _starting_pick(t: Tracks, picks: list[dict], track: int, start: int, player: int) -> dict | None:
+    """The "is" pick for `player` whose labelled stretch of `track` starts at `start` (as segments() has it)."""
+    ps = [p for p in picks if t.at(p["frame"], p["x"], p["y"], prefer=p.get("track")) == track]
+    ps.sort(key=lambda p: p["frame"])
+    edges = [t.first[track]] + [p["frame"] for p in ps[1:]]
+    for a, p in zip(edges, ps):
+        if a == start and p["player"] == player and p["kind"] == "is":
+            return p
+    return None
+
+
+def answer_tracklets(store: Store, game: Game, player: int, answers: list[dict], batch: str,
+                     model: str = DEFAULT_MODEL) -> int:
+    """
+    Save a page of answers from the players review: [{track, frame, start, yes, labelled}]. An unlabelled
+    stretch gets an "is" or "no" pick on its tracklet at `frame` (a frame the tracklet has a box in). A labelled
+    stretch turned down: the pick that starts it becomes "no" (unlabelled from there, and not suggested for
+    the player again); a labelled one said yes to is left alone. Each changed pick carries `batch` so
+    undo_answers can take the page back. Returns the picks added or changed.
+    """
+    t = tracks(store, game, model)
+    if t is None:
+        raise ValueError("this game hasn't been through player tracking")
+    picks = load_picks(store, game)
+    n = 0
+    for ans in answers:
+        k = int(ans["track"])
+        if ans.get("labelled"):
+            p = None if ans["yes"] else _starting_pick(t, picks, k, int(ans["start"]), player)
+            if p is not None:
+                p.update(kind="no", was="is", batch=batch)
+                n += 1
+            continue
+        a, b = t.window(int(ans["frame"]), int(ans["frame"]) + 1)
+        on = np.flatnonzero(t.track[a:b] == k)
+        if not len(on):
+            continue
+        x1, y1, x2, y2 = t.box[a + int(on[0])].tolist()
+        picks.append({"frame": int(ans["frame"]), "x": round((x1 + x2) / 2, 4), "y": round((y1 + y2) / 2, 4),
+                      "player": player, "kind": "is" if ans["yes"] else "no", "track": k, "batch": batch})
+        n += 1
+    _save_picks(store, game, picks)
+    return n
+
+
+def undo_answers(store: Store, game: Game, batch: str) -> int:
+    """Take back a page saved by answer_tracklets (picks added are removed, picks changed are restored)."""
+    out, n = [], 0
+    for p in load_picks(store, game):
+        if p.get("batch") != batch:
+            out.append(p)
+            continue
+        n += 1
+        if "was" in p:
+            out.append({k: v for k, v in p.items() if k not in ("was", "batch")} | {"kind": p["was"]})
+    _save_picks(store, game, out)
+    return n
+
+
 OURS_RATE = 0.12  # a cluster is ours if its share of the player's boxes is at least this of the top cluster's
 # (2026-10-25: our clusters held >= 17% of the top one's share on PRSC, >= 97% on fc-1; theirs <= 7%)
 OURS_MIN_BOXES = 200  # labelled boxes needed to go by them (else by the labelled points)

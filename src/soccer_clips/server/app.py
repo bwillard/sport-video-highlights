@@ -136,6 +136,20 @@ class PickIn(RequestBody):
     track: int | None = None  # the tracklet meant, when boxes overlap (suggestions know it)
 
 
+class AnswerIn(RequestBody):
+    track: int
+    frame: int = Field(ge=0)  # a frame the tracklet has a box in
+    start: int = Field(ge=0)  # where the stretch starts (finds a labelled stretch's pick)
+    yes: bool
+    labelled: bool = False  # a stretch already labelled as the player
+
+
+class AnswersIn(RequestBody):
+    player: int = Field(ge=0)
+    batch: str = Field(min_length=1, max_length=64)  # an id for the page, so it can be taken back
+    answers: list[AnswerIn]
+
+
 class VerdictIn(RequestBody):
     verdict: ball_others.Verdict
 
@@ -629,6 +643,43 @@ def create_app(store: Store | None = None) -> FastAPI:
             raise HTTPException(422, str(e))
         return {"pick": pick, **people_labels(game)}
 
+    @app.post("/api/games/{game_id}/people/answers")
+    def game_people_answers(game_id: str, body: AnswersIn) -> dict:
+        """A page of yes / no answers from the players review (people.answer_tracklets); returns the labels."""
+        from soccer_clips.track import people
+
+        game = load(game_id)
+        try:
+            n = people.answer_tracklets(store, game, body.player, [a.model_dump() for a in body.answers], body.batch)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"saved": n, **people_labels(game)}
+
+    @app.delete("/api/games/{game_id}/people/answers/{batch}")
+    def game_people_answers_undo(game_id: str, batch: str) -> dict:
+        """Take back a page of answers; returns how many picks it touched and the labels."""
+        from soccer_clips.track import people
+
+        game = load(game_id)
+        return {"undone": people.undo_answers(store, game, batch), **people_labels(game)}
+
+    @app.get("/api/games/{game_id}/people/labelled")
+    def game_people_labelled(game_id: str, player: int) -> dict:
+        """The player's labelled stretches, least like them first (reid.labelled_scores)."""
+        from soccer_clips.track import reid
+
+        return {"stretches": reid.labelled_scores(store, load(game_id), player)}
+
+    @app.get("/api/games/{game_id}/people/strip.jpg")
+    def game_people_strip(game_id: str, track: int, start: int, end: int, n: int = 3) -> Response:
+        """Crops of a tracklet across a stretch, side by side (reid.strip)."""
+        from soccer_clips.track import reid
+
+        jpg = reid.strip(store, load(game_id), track, start, end, n=min(max(n, 1), 6))
+        if jpg is None:
+            raise HTTPException(404, "no crops of this tracklet")
+        return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+
     @app.get("/api/games/{game_id}/people/suggest")
     def game_people_suggest(game_id: str, player: int, limit: int = 20) -> dict:
         """Unlabelled our-team tracklets that look most like #player (reid.suggest), best first."""
@@ -668,6 +719,10 @@ def create_app(store: Store | None = None) -> FastAPI:
         if not 0 <= frame < game.frame_at(game.duration_s):
             raise HTTPException(404, f"no frame {frame}")
         return FileResponse(ball_labels.frame_image(store, game, frame), media_type="image/jpeg")
+
+    @app.get("/players")
+    def players_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "players.html")
 
     @app.get("/label-ball")
     def label_ball_page() -> FileResponse:

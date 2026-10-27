@@ -136,3 +136,38 @@ def test_suggestions_rank_lookalikes_and_respect_one_place_at_a_time(settings, m
     assert reid.auto_label(store, game, 38, min_score=0.5) == []  # nor claimed automatically
     assert people.label_points(store, game, 38)[1] == []
     assert reid.guess(store, game, 3, 120)["players"][-1]["rejected"] is True  # #38 is now last for it
+    # the players review: a page of answers, a labelled stretch turned down, and each page taken back
+    assert [x["track"] for x in reid.labelled_scores(store, game, 38)] == [1]
+    segs = lambda: {(x["track"], x["player"]) for x in people.segments(people.tracks(store, game), people.load_picks(store, game))}
+    assert people.answer_tracklets(store, game, 38, [{"track": 2, "frame": 30, "start": 0, "yes": True},
+                                                     {"track": 4, "frame": 30, "start": 0, "yes": False}], "b1") == 2
+    assert segs() == {(1, 38), (2, 38)}
+    assert reid.guess(store, game, 4, 30)["players"][-1]["rejected"] is True
+    assert people.answer_tracklets(store, game, 38, [{"track": 1, "frame": 30, "start": 0, "yes": False, "labelled": True},
+                                                     {"track": 2, "frame": 30, "start": 0, "yes": True, "labelled": True}], "b2") == 1
+    assert segs() == {(2, 38)}
+    assert people.undo_answers(store, game, "b2") == 1 and segs() == {(1, 38), (2, 38)}
+    assert people.undo_answers(store, game, "b1") == 2 and segs() == {(1, 38)}
+    assert [p["kind"] for p in people.load_picks(store, game)] == ["is", "no"]
+
+
+def test_strip_shows_crops_across_the_stretch(settings):
+    make_video(settings, "2026/gu11-test-2026-10-10.mp4", duration_s=2, audio=False)
+    store = Store(settings)
+    scan(settings, store)
+    game = store.load_game("gu11-test-2026-10-10")
+    blobs, frame, track = [], [], []
+    for f in range(0, 300, 30):
+        for k, c in ((1, (0, 0, 200)), (2, (200, 0, 0))):
+            blobs.append(cv2.imencode(".png", np.full((60, 30, 3), c, np.uint8))[1].tobytes())
+            frame.append(f)
+            track.append(k)
+    reid.crops_path(store, game).parent.mkdir(parents=True, exist_ok=True)
+    np.savez(reid.crops_path(store, game), data=np.frombuffer(b"".join(blobs), np.uint8),
+             offsets=np.concatenate([[0], np.cumsum([len(b) for b in blobs])]), frame=np.array(frame), track=np.array(track))
+    img = cv2.imdecode(np.frombuffer(reid.strip(store, game, 1, 0, 300, height=120), np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape[0] == 120 and img.shape[1] == 3 * 60 + 2 * 3  # three crops (30x60 -> 60x120), two gaps
+    assert img[60, 30, 2] > 150 and img[60, 30, 0] < 60  # track 1's red, not track 2's blue
+    one = cv2.imdecode(np.frombuffer(reid.strip(store, game, 2, 100, 110), np.uint8), cv2.IMREAD_COLOR)
+    assert one.shape[1] == 60  # no crop inside: the nearest one
+    assert reid.strip(store, game, 9, 0, 300) is None

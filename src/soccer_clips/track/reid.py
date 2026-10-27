@@ -803,6 +803,81 @@ def guess(store: Store, game: Game, track: int, frame: int) -> dict:
     return {"players": out}
 
 
+_strip_cache: dict = {}
+
+
+def _crop_store(store: Store, game: Game) -> dict | None:
+    """The game's crops in memory (one game at a time, until they're cut again), with a by-track index."""
+    path = crops_path(store, game)
+    if not path.exists():
+        return None
+    key = (str(path), path.stat().st_mtime_ns)
+    if key not in _strip_cache:
+        with np.load(path) as z:
+            got = {"data": z["data"], "offsets": z["offsets"], "frame": z["frame"], "track": z["track"]}
+        order = np.lexsort((got["frame"], got["track"]))
+        got["order"], got["sorted_track"] = order, got["track"][order]
+        _strip_cache.clear()
+        _strip_cache[key] = got
+    return _strip_cache[key]
+
+
+def strip(store: Store, game: Game, track: int, start: int, end: int, n: int = 3, height: int = 120) -> bytes | None:
+    """
+    A JPEG of `n` crops of the tracklet side by side (first, middle, last in [start, end); else its nearest),
+    each scaled to `height`: one look at whether a stretch is the same girl throughout. None if it has no crops.
+    """
+    c = _crop_store(store, game)
+    if c is None:
+        return None
+    a, b = np.searchsorted(c["sorted_track"], [track, track + 1])
+    idx = c["order"][a:b]
+    if not len(idx):
+        return None
+    fr = c["frame"][idx]
+    inside = idx[(fr >= start) & (fr < end)]
+    if not len(inside):
+        inside = idx[np.argsort(np.abs(fr - (start + end) / 2))[:1]]
+    pick = inside[np.unique(np.linspace(0, len(inside) - 1, min(n, len(inside))).round().astype(int))]
+    imgs = []
+    for i in pick:
+        img = cv2.imdecode(c["data"][c["offsets"][i]:c["offsets"][i + 1]], cv2.IMREAD_COLOR)
+        imgs.append(cv2.resize(img, (max(1, round(img.shape[1] * height / img.shape[0])), height),
+                               interpolation=cv2.INTER_CUBIC))
+        imgs.append(np.full((height, 3, 3), 17, np.uint8))  # a gap
+    return cv2.imencode(".jpg", np.hstack(imgs[:-1]), [cv2.IMWRITE_JPEG_QUALITY, 88])[1].tobytes()
+
+
+def labelled_scores(store: Store, game: Game, player: int) -> list[dict]:
+    """The player's labelled stretches in the game, {track, start, end, frame, score}, least like them first
+    (score: their crops' mean signature against the player's look; frame: a crop frame in the middle)."""
+    from soccer_clips.track import people
+
+    t = people.tracks(store, game)
+    sg = load_sigs(store, game)
+    look, _ = player_look(store, player)
+    if t is None:
+        return []
+    out = []
+    for x in people.segments(t, people.load_picks(store, game)):
+        if x["player"] != player:
+            continue
+        m = None if sg is None else np.flatnonzero((sg["track"] == x["track"]) & (sg["frame"] >= x["start"]) & (sg["frame"] < x["end"]))
+        score = frame = None
+        if m is not None and len(m):
+            frame = int(sg["frame"][m[len(m) // 2]])
+            if look is not None:
+                v = sg["sig"][m].mean(0)
+                score = round(float(v @ look / max(np.linalg.norm(v), 1e-9)), 3)
+        if frame is None:  # no crops: a frame the tracklet has a box in
+            a, b = t.window(x["start"], x["end"])
+            on = np.flatnonzero(t.track[a:b] == x["track"])
+            frame = int(t.frame[a + on[len(on) // 2]]) if len(on) else x["start"]
+        out.append({**x, "frame": frame, "score": score})
+    out.sort(key=lambda x: (x["score"] is not None, x["score"] or 0))
+    return out
+
+
 # ---- automatic labels: where a player is, from appearance alone ----
 
 AUTO_MARGIN = 0.02  # a piece must beat every other unlabelled teammate on screen by this much (cosine)

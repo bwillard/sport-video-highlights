@@ -108,7 +108,7 @@ Turn many short, anonymous tracklets of our team into named players.
 - [ ] Tracklet linking within a game (similarity + constraints)
 - [ ] Jersey OCR signal
 - [ ] Per-player scoring / linear probe across games
-- [x] Review queue in the tagger (A: automatic guesses in turn) · [ ] thumbnail grid per player
+- [x] Review queue in the tagger (A: automatic guesses in turn) · [x] thumbnail grid per player (`/players`: automatic guesses, look-alikes or labelled stretches of one player, 24 tiles a page, each the start / middle / end crops of the stretch; Enter saves the page as one batch, U takes it back)
 
 ## 4.4 — Clips where a player is near the ball
 For a chosen player, find the stretches of a game where they're involved with the ball and offer them as clips.
