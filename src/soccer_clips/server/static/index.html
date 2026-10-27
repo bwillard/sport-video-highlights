@@ -1008,7 +1008,7 @@ function drawPeople(ctx) {
   }
   ctx.restore();
   $("peopleStat").textContent = suggestion
-    ? `players: is this #${suggestion.player}? (suggestion ${suggestion.n} of ${suggestion.of}, likeness ${suggestion.score.toFixed(2)})`
+    ? `players: is this #${suggestion.player}? (best match ${suggestion.n} of ${suggestion.of} unlabelled tracklets of our team)`
     : `players: ${who || "nobody followed"} ${here ? "here" : "not labelled here"}`;
 }
 function startPicking() {
@@ -1037,21 +1037,25 @@ async function undoPick() {
   if (!showPeople || !people) return flash("press V to show the players first", true);
   const r = await api("DELETE", `/api/games/${encodeURIComponent(game.id)}/people/picks/last`);
   setLabels(r);
+  suggestList = null;
   flash(r.undone ? `took back the last player label (#${r.undone.player} at ${fmt(r.undone.frame / fps)})` : "no player labels to take back");
 }
+let suggestList = null;  // {key: "game:player", items, candidates}: fetched once, again after each answer
 async function nextSuggestion() {
   if (!showPeople || !people) return flash("press V to show the players first", true);
   if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
   if (suggestion) skippedSuggestions.add(`${suggestion.player}:${suggestion.track}`);
-  const who = followWho, id = game.id;
-  const r = await getJson(`/api/games/${encodeURIComponent(id)}/people/suggest?player=${who}&limit=200`);
-  if (game?.id !== id) return;
-  const left = r.suggestions.filter((sg) => !skippedSuggestions.has(`${who}:${sg.track}`));
-  if (!left.length) {
-    suggestion = null; render();
-    return flash(r.note || `no more suggestions for #${who}`, !!r.note);
+  const who = followWho, id = game.id, key = `${id}:${who}`;
+  if (suggestList?.key !== key) {
+    flash(`finding players who look like #${who}…`);
+    const r = await getJson(`/api/games/${encodeURIComponent(id)}/people/suggest?player=${who}&limit=200`);
+    if (game?.id !== id || followWho !== who) return;
+    if (r.note) { suggestion = null; render(); return flash(r.note, true); }
+    suggestList = { key, items: r.suggestions, candidates: r.candidates };
   }
-  suggestion = { ...left[0], player: who, n: r.suggestions.length - left.length + 1, of: r.candidates };
+  const items = suggestList.items, i = items.findIndex((sg) => !skippedSuggestions.has(`${who}:${sg.track}`));
+  if (i < 0) { suggestion = null; render(); return flash(`no more suggestions for #${who}`); }
+  suggestion = { ...items[i], player: who, n: i + 1, of: suggestList.candidates };
   v.pause();
   seekTo(suggestion.frame / fps);
   render();
@@ -1063,6 +1067,7 @@ async function answerSuggestion(yes) {
   const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);
   setLabels(r);
   suggestion = null;
+  suggestList = null;  // the answer changes the player's look and what's left
   flash(yes ? `that's #${sg.player}: tracklet labelled (G for the next)` : `not #${sg.player} (G for the next)`);
   render();
 }
