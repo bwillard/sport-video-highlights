@@ -798,7 +798,8 @@ def auto_label(store: Store, game: Game, player: int, margin: float = AUTO_MARGI
     Stretches where `player` is probably on screen and unlabelled: {track, start, end, margin}. A piece (~PIECE
     crops of a tracklet) is claimed when it looks at least `min_score` like the player and more like them than
     every other unlabelled our-team piece on screen at the same time, by at least `margin`. Nothing is claimed
-    while the player is labelled elsewhere, nor on stretches labelled as anyone. For the yardstick: `hidden` =
+    while the player is labelled elsewhere, nor on stretches labelled as anyone, nor on tracklets turned
+    down for the player. For the yardstick: `hidden` =
     labelled stretches of the player to treat as unlabelled; `others_compete` = stretches labelled as other
     players stay in (a claim there is a known mistake).
     """
@@ -811,9 +812,11 @@ def auto_label(store: Store, game: Game, player: int, margin: float = AUTO_MARGI
         return []
     t = people.tracks(store, game)
     hid = {(x["track"], x["start"], x["end"]) for x in hidden}
-    segs = [x for x in people.segments(t, people.load_picks(store, game))
-            if (x["track"], x["start"], x["end"]) not in hid]
-    ok = ~np.isin(pc["track"], list(_not_ours(t, people.roles_for(store, game)[1])))
+    picks = people.load_picks(store, game)
+    segs = [x for x in people.segments(t, picks) if (x["track"], x["start"], x["end"]) not in hid]
+    # tracklets turned down for this player (X, or the marker said to be wrong) aren't claimed again
+    rejected = {p["track"] for p in picks if p["player"] == player and p["kind"] != "is"}
+    ok = ~np.isin(pc["track"], list(_not_ours(t, people.roles_for(store, game)[1]) | rejected))
     for x in segs:  # labelled pieces aren't candidates; the player labelled elsewhere rules out everyone else
         over = (pc["lo"] < x["end"]) & (pc["hi"] >= x["start"])
         if x["player"] == player or not others_compete:
