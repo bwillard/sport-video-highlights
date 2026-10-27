@@ -13,7 +13,7 @@ COLOURS = [(40, 40, 200), (200, 40, 40), (40, 200, 40), (200, 200, 40), (40, 200
 
 
 def fake_bundle(folder, games=("a", "b"), steps=40):
-    """Games where 6 tracklets are always on screen, each a solid colour; tracklet 0 is her (labelled)."""
+    """Games where 6 tracklets are always on screen, each a solid colour; tracklet 0 is her and 1 is #5 (labelled)."""
     rng = np.random.default_rng(0)
     folder.mkdir()
     index = {}
@@ -29,7 +29,7 @@ def fake_bundle(folder, games=("a", "b"), steps=40):
         np.savez(folder / f"{gid}.npz", data=np.frombuffer(b"".join(blobs), np.uint8),
                  offsets=np.concatenate([[0], np.cumsum(lengths)]), frame=np.array(frame), track=np.array(track),
                  role=np.zeros(len(frame), np.int8), height=np.full(len(frame), 60.0, np.float32))
-        index[gid] = {"fps": 30.0, "her": [[0, 0, steps * reid.CROP_EVERY]]}
+        index[gid] = {"fps": 30.0, "named": [[0, 0, steps * reid.CROP_EVERY, 38], [1, 0, steps * reid.CROP_EVERY, 5]]}
     (folder / "index.json").write_text(json.dumps(index))
     return reid.load_bundle(folder)
 
@@ -71,6 +71,7 @@ def test_train_and_evaluate(tmp_path):
     r = reid.evaluate(games, feats, ["a"])["a"]
     assert r["stretches"] == 1 and r["chance"] == pytest.approx(1 / 6)
     assert 0 <= r["her_auc"] <= 1 and r["same_n"] > 0
+    assert r["mates_players"] == 1 and r["mates_n"] == 1
 
 
 def test_every_nth_frame_is_exact(settings):

@@ -6,7 +6,7 @@ Re-Identification"; the torchreid MSMT17 weights, MIT licence), written out here
 Crops: every CROP_EVERY frames, each tracked box tall enough, kept as JPEG per game
 (tracks/reid_crops.npz). Training needs no naming of other players: two tracklets on screen
 at the same moment are two different people, and a tracklet over a few seconds is one person.
-Her labelled stretches (the picks) are one person across all games.
+Each labelled player's stretches (the picks) are one person across all games.
 
 Yardstick (evaluate): at each labelled stretch of #38 in a held-out game, is her tracklet the
 teammate that looks most like her (her look learnt from the other games)? And for everyone on
@@ -255,16 +255,18 @@ def extract_crops(store: Store, game: Game, workers: int = 4, log=print) -> int:
 
 
 class Crops:
-    """One game's crops (JPEG) with frame, track, role and whether it is a labelled stretch of PLAYER."""
+    """One game's crops (JPEG) with frame, track, role and the player labelled there (-1: nobody)."""
 
-    def __init__(self, path: Path, her: list[tuple[int, int, int]], fps: float):
+    def __init__(self, path: Path, named: list[tuple[int, int, int, int]], fps: float):
         with np.load(path) as z:
             self.data, self.offsets = z["data"], z["offsets"]
             self.frame, self.track, self.role = z["frame"], z["track"], z["role"]
         self.fps = fps
-        self.her = np.zeros(len(self.frame), bool)
-        for k, a, b in her:
-            self.her |= (self.track == k) & (self.frame >= a) & (self.frame < b)
+        self.player = np.full(len(self.frame), -1, np.int64)
+        for k, a, b, n in named:
+            self.player[(self.track == k) & (self.frame >= a) & (self.frame < b)] = n
+        self.her = self.player == PLAYER
+        self.named = {int(n): np.flatnonzero(self.player == n) for n in np.unique(self.player) if n >= 0}
         self.grid = {}  # frame -> crop indices at that frame
         for i, f in enumerate(self.frame.tolist()):
             self.grid.setdefault(f, []).append(i)
@@ -279,21 +281,20 @@ class Crops:
         return cv2.imdecode(self.data[self.offsets[i]:self.offsets[i + 1]], cv2.IMREAD_COLOR)
 
     def near(self, i: int, s: float = NEAR_S, same_label: bool = True) -> list[int]:
-        """Crops of i's tracklet within s seconds of it (and the same her/not-her label)."""
+        """Crops of i's tracklet within s seconds of it (and labelled as the same player, or nobody, as i)."""
         idx = np.array(self.by_track[int(self.track[i])])
         keep = np.abs(self.frame[idx] - self.frame[i]) <= s * self.fps
         if same_label:
-            keep &= self.her[idx] == self.her[i]
+            keep &= self.player[idx] == self.player[i]
         return idx[keep].tolist()
 
 
-def labels(store: Store, game: Game) -> list[tuple[int, int, int]]:
-    """PLAYER's labelled stretches as (track, start, end)."""
+def labels(store: Store, game: Game) -> list[tuple[int, int, int, int]]:
+    """Every player's labelled stretches as (track, start, end, player)."""
     from soccer_clips.track import people
 
     t = people.tracks(store, game)
-    return [(s["track"], s["start"], s["end"]) for s in people.segments(t, people.load_picks(store, game))
-            if s["player"] == PLAYER]
+    return [(s["track"], s["start"], s["end"], s["player"]) for s in people.segments(t, people.load_picks(store, game))]
 
 
 # ---- training data (on the GPU pod: no store, just files) ----
@@ -311,7 +312,7 @@ def write_bundle(store: Store, game_ids: list[str], out: Path) -> list[Path]:
             raise ValueError(f"{gid}: no crops yet (soccer-clips reid crops)")
         shutil.copy(src, out / f"{gid}.npz")
         files.append(out / f"{gid}.npz")
-        index[gid] = {"fps": game.fps_num / game.fps_den, "her": labels(store, game)}
+        index[gid] = {"fps": game.fps_num / game.fps_den, "named": labels(store, game)}
     (out / "index.json").write_text(json.dumps(index, indent=1))
     files.append(out / "index.json")
     return files
@@ -319,7 +320,7 @@ def write_bundle(store: Store, game_ids: list[str], out: Path) -> list[Path]:
 
 def load_bundle(folder: Path) -> dict[str, Crops]:
     index = json.loads((folder / "index.json").read_text())
-    return {gid: Crops(folder / f"{gid}.npz", [tuple(x) for x in v["her"]], v["fps"]) for gid, v in index.items()}
+    return {gid: Crops(folder / f"{gid}.npz", [tuple(x) for x in v["named"]], v["fps"]) for gid, v in index.items()}
 
 
 def _augment(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -335,38 +336,54 @@ def _augment(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     return np.clip(img.astype(np.float32) * a + b, 0, 255).astype(np.uint8)
 
 
+def _named_crop(games: dict[str, Crops], player: int, rng: np.random.Generator) -> tuple[Crops, int]:
+    """A random labelled crop of the player from any game (games weighted by how many they have)."""
+    have = [(g, g.named[player]) for g in games.values() if player in g.named]
+    sizes = np.array([len(idx) for _, idx in have], float)
+    g, idx = have[rng.choice(len(have), p=sizes / sizes.sum())]
+    return g, int(idx[rng.integers(len(idx))])
+
+
 def sample_batch(games: dict[str, Crops], rng: np.random.Generator, people_n: int = 16, per: int = 4,
-                 her_share: float = 0.5) -> tuple[list[np.ndarray], np.ndarray]:
+                 her_share: float = 0.4, named_share: float = 0.3) -> tuple[list[np.ndarray], np.ndarray]:
     """
     One batch: up to people_n tracklets on screen at one moment (so all different people), per crops
-    each from within NEAR_S of it. Half the batches are at a moment when PLAYER is labelled; her crops
-    then come from all her labelled stretches in all the games, so she is one person across games.
+    each from within NEAR_S of it. Some batches are at a moment when PLAYER is labelled (her_share), some
+    when another player is (named_share); a labelled player's crops then come from all their labelled
+    stretches in all the games, so each named player is one person across games.
     Returns crops and an identity per crop.
     """
     gids = list(games)
-    her_games = [g for g in gids if games[g].her.any()]
-    use_her = her_games and rng.random() < her_share
+    players = sorted({n for g in games.values() for n in g.named})
+    others = [n for n in players if n != PLAYER]
+    r = rng.random()
+    anchor = PLAYER if PLAYER in players and r < her_share else \
+        (others[rng.integers(len(others))] if others and r < her_share + named_share else None)
     while True:
-        g = games[rng.choice(her_games if use_her else gids)]
-        if use_her:
-            f = int(g.frame[rng.choice(np.flatnonzero(g.her))])
+        if anchor is not None:
+            g, i0 = _named_crop(games, anchor, rng)
+            f = int(g.frame[i0])
         else:
+            g = games[rng.choice(gids)]
             frames = list(g.grid)
             f = frames[rng.integers(len(frames))]
         here = [i for i in rng.permutation(g.grid[f]).tolist() if g.role[i] in PLAYER_ROLES]
-        here = ([i for i in here if g.her[i]] + [i for i in here if not g.her[i]])[:people_n]  # her first
+        named, seen = [], set()
+        for i in here:  # labelled first, one tracklet per player (two at once would be a labelling slip)
+            if g.player[i] >= 0 and g.player[i] not in seen:
+                named.append(i)
+                seen.add(int(g.player[i]))
+        here = (named + [i for i in here if g.player[i] < 0])[:people_n]
         if len(here) >= 2:
             break
     imgs, ids = [], []
-    all_her = [(gg, i) for gg in her_games for i in np.flatnonzero(games[gg].her).tolist()]
     for n, i in enumerate(here):
-        if g.her[i]:
-            pool = [all_her[j] for j in rng.choice(len(all_her), per, replace=len(all_her) < per)]
+        if g.player[i] >= 0:
+            pool = [_named_crop(games, int(g.player[i]), rng) for _ in range(per)]
         else:
             near = g.near(i)
             pool = [(g, j) for j in rng.choice(near, per, replace=len(near) < per)]
         for gg, j in pool:
-            gg = games[gg] if isinstance(gg, str) else gg
             imgs.append(_augment(gg.image(j), rng))
             ids.append(n)
     return imgs, np.array(ids)
@@ -444,41 +461,56 @@ def _mean(f: np.ndarray, idx: list[int]) -> np.ndarray:
     return v / max(np.linalg.norm(v), 1e-9)
 
 
+def _moments(g: Crops, player: int) -> list[int]:
+    """One crop per labelled stretch of the player (the middle of each run of their crops along a tracklet)."""
+    by_track: dict[int, list[int]] = {}
+    for i in g.named.get(player, []).tolist():
+        by_track.setdefault(int(g.track[i]), []).append(i)
+    out = []
+    for idx in by_track.values():
+        idx = sorted(idx, key=lambda i: g.frame[i])
+        for run in np.split(np.array(idx), np.flatnonzero(np.diff(g.frame[idx]) > CROP_EVERY) + 1):
+            out.append(int(run[len(run) // 2]))
+    return out
+
+
 def evaluate(games: dict[str, Crops], feats: dict[str, np.ndarray], test: list[str]) -> dict:
     """
-    For each test game, with her look = mean of her crops in the other games:
-      her_top1: at each of her labelled stretches (middle moment), her tracklet looks most like her
+    For each test game and each labelled player, with the player's look = mean of their crops in the
+    other games:
+      her_top1: at each of PLAYER's labelled stretches (middle moment), her tracklet looks most like her
                 among the teammates on screen then (each tracklet: mean of its crops within NEAR_S);
       her_auc:  her tracklets against those teammates, by likeness to her look;
       chance:   1 / (teammates on screen + 1);
+      mates_top1: the same as her_top1 for every other labelled player (pooled), with mates_chance;
       same_top1: an our-team tracklet's crops now (within NEAR_S) match its own crops 10-20 s later better
                 than the other teammates on screen then (labels come from the tracker, so a few are wrong).
     """
     out = {}
     for gid in test:
         g, f = games[gid], feats[gid]
-        others = [x for x in games if x != gid and games[x].her.any()]
-        theirs = np.vstack([feats[x][games[x].her] for x in others])
-        look = _mean(theirs, list(range(len(theirs))))
-        top1, chance, pos, neg = [], [], [], []
-        her_tracks = {}
-        for i in np.flatnonzero(g.her).tolist():
-            her_tracks.setdefault(int(g.track[i]), []).append(i)
-        # one moment per labelled stretch: the stretches are runs of her crops along a tracklet
-        for k, idx in her_tracks.items():
-            idx = sorted(idx, key=lambda i: g.frame[i])
-            runs = np.split(np.array(idx), np.flatnonzero(np.diff(g.frame[idx]) > CROP_EVERY) + 1)
-            for run in runs:
-                i = int(run[len(run) // 2])
+        res = {}
+        for player in g.named:
+            theirs = [feats[x][games[x].named[player]] for x in games if x != gid and player in games[x].named]
+            if not theirs:
+                continue
+            theirs = np.vstack(theirs)
+            look = _mean(theirs, list(range(len(theirs))))
+            top1, chance, pos, neg = [], [], [], []
+            for i in _moments(g, player):
                 mates = [j for j in g.grid[int(g.frame[i])] if g.role[j] == 0 and g.track[j] != g.track[i]]
                 if not mates:
                     continue
-                s_her = float(_mean(f, g.near(i)) @ look)
+                s_p = float(_mean(f, g.near(i)) @ look)
                 s_m = [float(_mean(f, g.near(j, same_label=False)) @ look) for j in mates]
-                top1.append(s_her > max(s_m))
+                top1.append(s_p > max(s_m))
                 chance.append(1 / (len(mates) + 1))
-                pos.append(s_her)
+                pos.append(s_p)
                 neg += s_m
+            res[player] = (top1, chance, pos, neg)
+        her = res.pop(PLAYER, ([], [], [], []))
+        mates = [x for v in res.values() for x in v[0]]
+        mates_chance = [x for v in res.values() for x in v[1]]
         rng = np.random.default_rng(0)
         same = []
         ours = np.flatnonzero(g.role == 0)
@@ -487,15 +519,17 @@ def evaluate(games: dict[str, Crops], feats: dict[str, np.ndarray], test: list[s
             if not later:
                 continue
             j = later[len(later) // 2]
-            mates = [m for m in g.grid[int(g.frame[j])] if g.role[m] == 0 and g.track[m] != g.track[i]]
-            if not mates:
+            others = [m for m in g.grid[int(g.frame[j])] if g.role[m] == 0 and g.track[m] != g.track[i]]
+            if not others:
                 continue
             q = _mean(f, g.near(i, same_label=False))
             s_self = float(_mean(f, g.near(j, same_label=False)) @ q)
-            same.append(s_self > max(float(_mean(f, g.near(m, same_label=False)) @ q) for m in mates))
-        out[gid] = {"stretches": len(top1), "her_top1": float(np.mean(top1)) if top1 else None,
-                    "chance": float(np.mean(chance)) if chance else None, "her_auc": _auc(pos, neg),
-                    "same_top1": float(np.mean(same)) if same else None, "same_n": len(same)}
+            same.append(s_self > max(float(_mean(f, g.near(m, same_label=False)) @ q) for m in others))
+        mean = lambda xs: float(np.mean(xs)) if xs else None  # noqa: E731
+        out[gid] = {"stretches": len(her[0]), "her_top1": mean(her[0]), "chance": mean(her[1]),
+                    "her_auc": _auc(her[2], her[3]), "mates_top1": mean(mates), "mates_chance": mean(mates_chance),
+                    "mates_n": len(mates), "mates_players": len(res),
+                    "same_top1": mean(same), "same_n": len(same)}
     return out
 
 
@@ -509,9 +543,9 @@ def folds(game_ids: list[str], n: int) -> list[list[str]]:
 
 def summary(results: dict) -> dict:
     """Means over games of each score, per model."""
-    keys = ("her_top1", "chance", "her_auc", "same_top1")
-    return {name: {k: float(np.nanmean([r[k] for r in per.values() if r[k] is not None])) for k in keys}
-            for name, per in results.items()}
+    keys = ("her_top1", "chance", "her_auc", "mates_top1", "mates_chance", "same_top1")
+    return {name: {k: float(np.nanmean([r[k] for r in per.values() if r.get(k) is not None] or [np.nan]))
+                   for k in keys} for name, per in results.items()}
 
 
 def run_experiment(folder: Path, stock: Path, out: Path, n_folds: int = 3, steps: int = 3000,
