@@ -681,7 +681,8 @@ def player_look(store: Store, player: int, skip: str | None = None) -> tuple[np.
 
 def suggest(store: Store, game: Game, player: int, limit: int = 20) -> dict:
     """
-    Our-team tracklets in the game that look most like `player` (their labelled crops in every game),
+    Our-team tracklets (by the current team split) in the game that look most like `player` (their labelled
+    crops in every game),
     best first, one per tracklet: {track, frame, x, y, score, start, end}. Left out: tracklets with any
     label in this game or a pick for this player, and anything on screen while the player is labelled
     elsewhere (one place at a time).
@@ -698,6 +699,12 @@ def suggest(store: Store, game: Game, player: int, limit: int = 20) -> dict:
     picks = people.load_picks(store, game)
     segs = people.segments(t, picks)
     skip = {x["track"] for x in segs} | {p["track"] for p in picks if p["player"] == player}
+    # our team as the team split has it now (the crops' roles date from when they were cut: in a game with
+    # no labels yet both teams were "team", and they split once she's labelled)
+    _, roles = people.roles_for(store, game)
+    ids, inv = np.unique(t.track, return_inverse=True)
+    theirs = np.bincount(inv, weights=roles >= 1, minlength=len(ids)) / np.bincount(inv, minlength=len(ids))
+    skip |= set(ids[theirs > 0.5].tolist())  # mostly opponents or others (unknown stays in)
     busy = sorted((x["start"], x["end"]) for x in segs if x["player"] == player)
     starts, ends = np.array([a for a, _ in busy], np.int64), np.array([b for _, b in busy], np.int64)
 
