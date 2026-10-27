@@ -31,6 +31,14 @@
   #debugStat { display: inline-block; min-width: 8.5em; }
   #markin { display: inline-block; min-width: 4em; }
   #peopleStat { display: inline-block; min-width: 11em; }
+  /* "who is this?": after clicking a player */
+  #picker { position: absolute; z-index: 3; max-width: 236px; padding: 6px; border-radius: 6px; background: rgba(20, 20, 20, 0.92);
+            box-shadow: 0 2px 12px #000a; display: flex; flex-wrap: wrap; gap: 4px; }
+  #picker .ptitle { flex-basis: 100%; color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+  #picker .ptitle b { color: var(--text); }
+  #picker button { min-width: 38px; padding: 2px 4px; }
+  #picker button.best { outline: 2px solid #ff9f40; }
+  #picker button.no { flex-basis: 100%; }
   /* help: one collapsible section per topic; closed ones share a line, an open one takes the full width */
   .help-secs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin-top: 6px; line-height: 1.7; }
   .help-secs details[open] { flex-basis: 100%; }
@@ -70,6 +78,7 @@
       <video id="v" preload="auto"></video>
       <canvas id="overlay"></canvas>
       <canvas id="loupe" width="240" height="240" hidden></canvas>
+      <div id="picker" hidden></div>
       <span id="flash"></span>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
@@ -115,9 +124,15 @@
         <li><kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person)</li>
         <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
         <li>The orange strip under the timeline = where they're labelled</li>
+        <li>Paused, <b>point at a player</b> (cyan box): <kbd>Y</kbd> / <kbd>X</kbd> answer for them: on a <i>#5?</i> guess, yes
+          it's #5 / no it isn't; on a labelled #5, <kbd>X</kbd> = not #5 from here on; on anyone else, <kbd>Y</kbd> = the player
+          you follow. <b>Click</b> them to pick any number (best guess outlined: click it, or <kbd>Enter</kbd>; or type a
+          number then <kbd>Enter</kbd>)</li>
+        <li><kbd>A</kbd> next automatic guess, any player (<kbd>Shift</kbd>+<kbd>A</kbd> back): jumps to a <i>#n?</i> and asks
+          (magenta box) · <kbd>Y</kbd> yes · <kbd>X</kbd> no, and on to the next · <kbd>A</kbd> again skips it</li>
         <li><kbd>G</kbd> next suggestion: jumps to an unlabelled teammate who looks like the player you follow (magenta box, best
-          match first) · <kbd>Y</kbd> yes, that's them (labels the tracklet) · <kbd>X</kbd> no · <kbd>G</kbd> again skips it.
-          Works for any player with a few labels; each answer makes the next suggestions better</li>
+          match first) · <kbd>Y</kbd> yes, that's them (labels the tracklet) · <kbd>X</kbd> no, and on to the next ·
+          <kbd>G</kbd> again skips it. Works for any player with a few labels; each answer makes the next suggestions better</li>
         <li>Dashed orange ring with <b>#38?</b> = where the player you follow probably is, by appearance (not yet labelled;
           the faint strip above the timeline's orange one) · paused on one, <kbd>Y</kbd> confirms it, <kbd>X</kbd> says no.
           A faint <i>#5?</i> = another player placed the same way</li>
@@ -653,10 +668,13 @@ function cycleLoupeZoom() {
   flash(`magnifier ${loupeZoom}×`);
 }
 stage.addEventListener("pointermove", (e) => {
-  const b = v.getBoundingClientRect();
+  const b = v.getBoundingClientRect(), r = videoRect();
   loupeAt = { x: e.clientX - b.left, y: e.clientY - b.top };
+  if (e.target.closest("#picker")) return;
+  hoverAt = { x: (loupeAt.x - r.x) / r.w, y: (loupeAt.y - r.y) / r.h };
+  hoverLive = true;
 });
-stage.addEventListener("pointerleave", () => (loupeAt = null));
+stage.addEventListener("pointerleave", () => { loupeAt = null; hoverAt = null; });
 $("loupeBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleLoupe(); });
 function drawLoupe() {
   const r = videoRect();
@@ -964,6 +982,10 @@ try { showPeople = localStorage.getItem("showPeople") === "1"; } catch {}
 let peopleLoading = null;  // the request for the players' summary, while it's on its way
 let autoLabels = null;  // {gameId, byPlayer: {player: [{track, start, end}]}}: where each player probably is (appearance)
 let autoHere = null;  // the followed player's automatic box in this frame: {track, frame, x, y}
+const autoDone = new Set();  // "game:player:track" answered here (until the automatic labels come back without them)
+let followNums = [];  // the numbers in the follow list (roster and clip players), for the "who is this?" box
+let hoverAt = null, hoverLive = false;  // the mouse over the picture (fractions); live = moved since the last jump
+let hoverBox = null;  // the player under the mouse while paused: what Y / X / a click act on
 function loadAuto() {
   if (!showPeople || !game) return;
   const id = game.id;
@@ -976,7 +998,9 @@ function autoAt(f) {
   const m = new Map();
   if (autoLabels?.gameId !== game?.id) return m;
   for (const [p, list] of Object.entries(autoLabels.byPlayer)) {
-    for (const sg of list) if (f >= sg.start && f < sg.end) m.set(sg.track, +p);
+    for (const sg of list) {
+      if (f >= sg.start && f < sg.end && !autoDone.has(`${game.id}:${p}:${sg.track}`)) m.set(sg.track, +p);
+    }
   }
   return m;
 }
@@ -1013,7 +1037,8 @@ function fillFollowWho() {
   try { keep ??= +localStorage.getItem("followWho") || null; } catch {}
   const pick = $("followWho");
   pick.length = 0;
-  for (const n of [...nums].sort((a, b) => a - b)) pick.append(new Option(`follow #${n}`, n));
+  followNums = [...nums].sort((a, b) => a - b);
+  for (const n of followNums) pick.append(new Option(`follow #${n}`, n));
   if (!nums.size) pick.append(new Option("follow: add a player number to a clip first", ""));
   followWho = nums.has(keep) ? keep : nums.has(defaultPlayer) ? defaultPlayer : nums.size ? +pick.options[0].value : null;
   pick.value = followWho ?? "";
@@ -1133,6 +1158,9 @@ function drawPeople(ctx) {
     for (let i = i0; i < i1; i++) {
       const o = i * STRIDE;
       if (rows[o + 1] !== suggestion.track) continue;
+      if (suggestion.x == null) {  // an automatic guess (A): its spot comes from the boxes
+        Object.assign(suggestion, { frame: f, x: (rows[o + 2] + rows[o + 4]) / 2, y: (rows[o + 3] + rows[o + 5]) / 2 });
+      }
       const x1 = r.x + rows[o + 2] * r.w, x2 = r.x + rows[o + 4] * r.w, y1 = r.y + rows[o + 3] * r.h, y2 = r.y + rows[o + 5] * r.h;
       ctx.lineWidth = 3; ctx.strokeStyle = "#ff40d0"; ctx.setLineDash([6, 3]);
       ctx.strokeRect(x1 - 3, y1 - 3, x2 - x1 + 6, y2 - y1 + 6);
@@ -1141,14 +1169,187 @@ function drawPeople(ctx) {
       ctx.fillText(`#${suggestion.player}?  Y / X`, (x1 + x2) / 2, y1 - 8);
     }
   }
+  // the player under the mouse (paused, once it has moved since the last jump): what Y / X / a click act on
+  hoverBox = boxUnder(f, i0, i1, rows, known, auto);
+  if (hoverBox) {
+    const [bx1, by1, bx2, by2] = hoverBox.box;
+    const x1 = r.x + bx1 * r.w, x2 = r.x + bx2 * r.w, y1 = r.y + by1 * r.h, y2 = r.y + by2 * r.h;
+    ctx.lineWidth = 2; ctx.strokeStyle = "#40e0ff";
+    ctx.strokeRect(x1 - 2, y1 - 2, x2 - x1 + 4, y2 - y1 + 4);
+    ctx.font = "bold 11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.fillStyle = "#40e0ff";
+    ctx.strokeText(targetHint(hoverBox), (x1 + x2) / 2, y2 + 14);
+    ctx.fillText(targetHint(hoverBox), (x1 + x2) / 2, y2 + 14);
+  }
   ctx.restore();
   $("peopleStat").textContent = suggestWaiting != null
     ? `players: finding teammates who look like #${suggestWaiting}…`
+    : hoverBox
+    ? `players: ${targetHint(hoverBox)} · click = pick a number`
+    : suggestion?.from === "queue"
+    ? `players: is this #${suggestion.player}? (guess ${suggestion.n} of ${suggestion.of} by appearance) Y yes · X no · A skip`
     : suggestion
     ? `players: is this #${suggestion.player}? (best match ${suggestion.n} of ${suggestion.of} unlabelled tracklets of our team)`
     : here ? `players: ${who} here`
     : autoHere ? `players: ${who} probably here (by appearance): Y yes · X no`
     : `players: ${who || "nobody followed"} not labelled here`;
+}
+function boxUnder(f, i0, i1, rows, known, auto) {
+  // the smallest box under the mouse as a Y / X target, or null (playing, mouse still since a jump, nothing there)
+  if (!hoverAt || !hoverLive || !v.paused) return null;
+  let best = -1, area = Infinity;
+  const s = 0.01, { x, y } = hoverAt;
+  for (let i = i0; i < i1; i++) {
+    const o = i * STRIDE;
+    if (x < rows[o + 2] - s || x > rows[o + 4] + s || y < rows[o + 3] - s || y > rows[o + 5] + s) continue;
+    const a = (rows[o + 4] - rows[o + 2]) * (rows[o + 5] - rows[o + 3]);
+    if (a < area) { area = a; best = o; }
+  }
+  if (best < 0) return null;
+  const o = best, tr = rows[o + 1], label = known.get(tr) ?? null;
+  const fromSuggestion = suggestion?.track === tr;
+  return {
+    track: tr, frame: f, x: (rows[o + 2] + rows[o + 4]) / 2, y: (rows[o + 3] + rows[o + 5]) / 2,
+    box: [rows[o + 2], rows[o + 3], rows[o + 4], rows[o + 5]], label,
+    guess: label != null ? null : fromSuggestion ? suggestion.player : auto.get(tr) ?? null,
+    from: fromSuggestion ? suggestion.from : "hover",
+  };
+}
+function targetHint(t) {
+  if (t.label != null) return `X = not #${t.label}`;
+  if (t.guess != null) return `Y = #${t.guess} · X = not #${t.guess}`;
+  return followWho == null ? "click = pick a number" : `Y = #${followWho}`;
+}
+function yxTarget() {
+  // what Y / X answer: the player under the mouse, else the suggestion or guess being asked about, else the
+  // followed player's dashed ring
+  if (hoverBox) return hoverBox;
+  if (suggestion) return { ...suggestion, label: null, guess: suggestion.player };
+  if (autoHere) return { ...autoHere, label: null, guess: followWho, from: "ring" };
+  return null;
+}
+async function postPick(player, kind, t) {
+  const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`,
+                      { frame: t.frame, player, kind, x: t.x, y: t.y, track: t.track });
+  setLabels(r);
+  autoDone.add(`${game.id}:${player}:${t.track}`);
+  suggestList = null;  // the answer changes the player's look and what's left
+  fetchSuggestions()?.catch(() => {});
+}
+function afterAnswer(t) {
+  // straight on to the next one when answering a run of suggestions (G) or guesses (A)
+  if (t.from === "queue") return nextAuto();
+  if (t.from === "suggestion") return nextSuggestion();
+  render();
+}
+async function answer(yes) {
+  if (!showPeople || !people) return flash("press V to show the players first", true);
+  const t = yxTarget();
+  if (!t) return flash("point at a player, or press G or A for one to answer", true);
+  if (t.x == null) return flash("players still loading…");
+  let player, kind;
+  if (t.label != null) {
+    if (yes) return flash(`already labelled #${t.label}`);
+    [player, kind] = [t.label, "not"];
+  } else if (t.guess != null) {
+    [player, kind] = [t.guess, yes ? "is" : "no"];
+  } else {
+    if (!yes) return flash("no guess on this player to turn down (click them to pick a number)", true);
+    if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
+    [player, kind] = [followWho, "is"];
+  }
+  await postPick(player, kind, t);
+  flash(kind === "is" ? `that's #${player}: tracklet labelled` : kind === "not" ? `#${player}'s label removed from here on` : `not #${player}`);
+  afterAnswer(t);
+}
+function nextAuto(back = false) {
+  // jump to the next (or previous) automatic guess, any player, and ask about it
+  if (!showPeople || !people) return flash("press V to show the players first", true);
+  if (autoLabels?.gameId !== game.id) return flash("automatic guesses still loading…");
+  const f = suggestion?.from === "queue" ? suggestion.frame : Math.round(v.currentTime * fps);
+  const items = Object.entries(autoLabels.byPlayer)
+    .flatMap(([p, list]) => list.map((sg) => ({ ...sg, player: +p })))
+    .filter((sg) => !autoDone.has(`${game.id}:${sg.player}:${sg.track}`))
+    .sort((a, b) => a.frame - b.frame);
+  const i = back ? items.findLastIndex((sg) => sg.frame < f) : items.findIndex((sg) => sg.frame > f);
+  if (i < 0) {
+    suggestion = null;
+    render();
+    return flash(items.length ? `no more guesses ${back ? "before" : "after"} here` : "no automatic guesses left in this game");
+  }
+  const sg = items[i];
+  suggestion = { track: sg.track, frame: sg.frame, player: sg.player, from: "queue", n: i + 1, of: items.length };
+  hoverLive = false;
+  v.pause();
+  seekTo(sg.frame / fps);
+  render();
+}
+let picker = null;  // {t, best, typed}: the "who is this?" box after clicking a player
+function openPicker(t) {
+  closePicker();
+  const best = t.label ?? t.guess ?? followWho;
+  const nums = [...new Set([best, ...followNums].filter((n) => n != null))];
+  const el = $("picker");
+  el.innerHTML = `<div class="ptitle">who is this? <b id="pickTyped"></b></div>` +
+    nums.map((n) => `<button data-n="${n}"${n === best ? ' class="best"' : ""}>#${n}</button>`).join("") +
+    ((t.label ?? t.guess) != null ? `<button class="no" data-no>✕ not #${t.label ?? t.guess}</button>` : "");
+  el.hidden = false;
+  picker = { t, best, typed: "" };
+  showTyped();
+  // beside the box, flipping to the other side near the edge
+  const r = videoRect(), [x1, y1, x2] = t.box;
+  let left = r.x + x2 * r.w + 10;
+  if (left + el.offsetWidth > stage.clientWidth) left = r.x + x1 * r.w - el.offsetWidth - 10;
+  el.style.left = `${Math.max(0, left)}px`;
+  el.style.top = `${Math.max(0, Math.min(r.y + y1 * r.h, stage.clientHeight - el.offsetHeight))}px`;
+}
+function closePicker() {
+  picker = null;
+  $("picker").hidden = true;
+}
+function showTyped() {
+  $("pickTyped").textContent = picker.typed ? `#${picker.typed}_` : picker.best != null ? `Enter = #${picker.best}` : "type a number";
+}
+async function pickerCommit(n) {
+  const t = picker.t;
+  closePicker();
+  if (n === t.label) return flash(`already #${n}`);
+  await postPick(n, "is", t);
+  flash(`that's #${n}: tracklet labelled`);
+  afterAnswer(t);
+}
+async function pickerReject() {
+  const t = picker.t, player = t.label ?? t.guess;
+  closePicker();
+  await postPick(player, t.label != null ? "not" : "no", t);
+  flash(t.label != null ? `#${player}'s label removed from here on` : `not #${player}`);
+  afterAnswer(t);
+}
+$("picker").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b || !picker) return;
+  if (b.dataset.n) pickerCommit(+b.dataset.n);
+  else if ("no" in b.dataset) pickerReject();
+});
+function pickerKey(e) {
+  // keys while the "who is this?" box is open; true if used
+  if (e.code.startsWith("Digit") && !e.shiftKey) {
+    picker.typed = (picker.typed + e.code.slice(5)).slice(-2);
+    showTyped();
+  } else if (e.key === "Backspace") {
+    picker.typed = picker.typed.slice(0, -1);
+    showTyped();
+  } else if (e.key === "Enter" || (e.key.toLowerCase() === "y" && !picker.typed)) {
+    const n = picker.typed ? +picker.typed : picker.best;
+    if (n != null) pickerCommit(n);
+  } else if (e.key === "Escape") {
+    closePicker();
+  } else {
+    closePicker();  // anything else closes it and does what it normally does
+    return false;
+  }
+  e.preventDefault();
+  return true;
 }
 function startPicking() {
   if (!showPeople) return flash("press V to show the players first", true);
@@ -1222,32 +1423,10 @@ async function nextSuggestion() {
   }
   const items = suggestList.items, i = items.findIndex((sg) => !skippedSuggestions.has(`${who}:${sg.track}`));
   if (i < 0) { suggestion = null; render(); return flash(`no more suggestions for #${who}`); }
-  suggestion = { ...items[i], player: who, n: i + 1, of: suggestList.candidates };
+  suggestion = { ...items[i], player: who, n: i + 1, of: suggestList.candidates, from: "suggestion" };
+  hoverLive = false;
   v.pause();
   seekTo(suggestion.frame / fps);
-  render();
-}
-async function answerAuto(yes) {
-  const a = autoHere;
-  const body = { frame: a.frame, player: followWho, kind: yes ? "is" : "no", x: a.x, y: a.y, track: a.track };
-  const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);
-  setLabels(r);
-  suggestList = null;
-  fetchSuggestions()?.catch(() => {});
-  flash(yes ? `that's #${body.player}: tracklet labelled` : `not #${body.player} here`);
-  render();
-}
-async function answerSuggestion(yes) {
-  if (!suggestion && autoHere && showPeople) return answerAuto(yes);
-  if (!suggestion) return flash("press G for a suggestion, or pause on a dashed ring, first", true);
-  const sg = suggestion;
-  const body = { frame: sg.frame, player: sg.player, kind: yes ? "is" : "no", x: sg.x, y: sg.y, track: sg.track };
-  const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);
-  setLabels(r);
-  suggestion = null;
-  suggestList = null;  // the answer changes the player's look and what's left
-  fetchSuggestions()?.catch(() => {});
-  flash(yes ? `that's #${sg.player}: tracklet labelled (G for the next)` : `not #${sg.player} (G for the next)`);
   render();
 }
 $("peopleBtn").addEventListener("click", (e) => { e.currentTarget.blur(); togglePeople(); });
@@ -1310,7 +1489,12 @@ function seekTo(t) {
 }
 v.addEventListener("ratechange", () => ($("rate").textContent = v.playbackRate));
 const toggleMute = setupMute(v);
-v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
+v.addEventListener("click", () => {
+  if (picker) return closePicker();
+  if (hoverBox) return openPicker(hoverBox);  // paused, on a player: who is this?
+  v.paused ? v.play() : v.pause();
+});
+v.addEventListener("play", closePicker);
 
 // Plain H well into the game is probably a forgotten Shift: ask before moving
 // the 1st half kickoff.
@@ -1346,6 +1530,7 @@ async function setKickoff(half) {
 document.addEventListener("keydown", (e) => {
   if (typingInField(e)) return;
   if (!game || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (picker && pickerKey(e)) return;
   if (placing && e.key === "Escape") { e.preventDefault(); cancelCallout(); return; }
   if (fixingBall && e.key === "Escape") { e.preventDefault(); stopBallFix(); return; }
   if (otherMode && e.key === "Escape") { e.preventDefault(); toggleOtherMode(false); return; }
@@ -1377,8 +1562,9 @@ document.addEventListener("keydown", (e) => {
     l: () => (e.shiftKey ? pickPlayer("not") : startPicking()),
     u: () => undoPick(),
     g: () => nextSuggestion(),
-    y: () => answerSuggestion(true),
-    x: () => answerSuggestion(false),
+    y: () => answer(true),
+    x: () => answer(false),
+    a: () => nextAuto(e.shiftKey),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),

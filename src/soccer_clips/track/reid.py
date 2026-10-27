@@ -795,7 +795,8 @@ def _look_without(store: Store, game: Game, player: int, hidden: list[dict]) -> 
 def auto_label(store: Store, game: Game, player: int, margin: float = AUTO_MARGIN, min_score: float = AUTO_MIN,
                hidden: list[dict] | None = None, others_compete: bool = False) -> list[dict]:
     """
-    Stretches where `player` is probably on screen and unlabelled: {track, start, end, margin}. A piece (~PIECE
+    Stretches where `player` is probably on screen and unlabelled: {track, start, end, frame, margin} (frame: a
+    crop frame of the tracklet in the middle of the stretch, for showing it). A piece (~PIECE
     crops of a tracklet) is claimed when it looks at least `min_score` like the player and more like them than
     every other unlabelled our-team piece on screen at the same time, by at least `margin`. Nothing is claimed
     while the player is labelled elsewhere, nor on stretches labelled as anyone, nor on tracklets turned
@@ -846,15 +847,19 @@ def auto_label(store: Store, game: Game, player: int, margin: float = AUTO_MARGI
     for j in np.flatnonzero((lead >= margin) & (score >= min_score)):
         p = idx[j]
         out.append({"track": int(pc["track"][p]), "start": int(pc["lo"][p]), "end": int(pc["hi"][p]) + CROP_EVERY,
-                    "margin": round(float(lead[j]), 4)})
+                    "frames": [int(pc["mid"][p])], "margin": round(float(lead[j]), 4)})
     out.sort(key=lambda x: x["start"])
     merged = []  # consecutive pieces of one tracklet become one stretch
     for x in out:
         if merged and merged[-1]["track"] == x["track"] and x["start"] <= merged[-1]["end"]:
             merged[-1]["end"] = max(merged[-1]["end"], x["end"])
             merged[-1]["margin"] = min(merged[-1]["margin"], x["margin"])
+            merged[-1]["frames"] += x["frames"]
         else:
             merged.append(dict(x))
+    for x in merged:
+        frames = x.pop("frames")
+        x["frame"] = frames[len(frames) // 2]
     return merged
 
 
