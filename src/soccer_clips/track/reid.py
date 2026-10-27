@@ -768,6 +768,41 @@ def suggest(store: Store, game: Game, player: int, limit: int = 20) -> dict:
     return {"suggestions": out, "look_crops": n, "candidates": len(first)}
 
 
+def guess(store: Store, game: Game, track: int, frame: int) -> dict:
+    """
+    Every player with labelled crops, ranked by how much `track` around `frame` (its nearest ~PIECE-crop piece,
+    else all its crops) looks like them: {players: [{player, score, busy, rejected}]}. busy = labelled on another
+    tracklet at `frame` (one place at a time); rejected = turned down for this tracklet; both ranked last.
+    """
+    from soccer_clips.track import people
+
+    pc = _pieces(store, game)
+    if pc is None:
+        return {"players": [], "note": "no appearance signatures for this game yet"}
+    on = np.flatnonzero(pc["track"] == track)
+    if len(on):
+        vec = pc["vec"][on[np.argmin(np.abs(pc["mid"][on] - frame))]]
+    else:  # too short for a piece: whatever crops it has
+        sg = load_sigs(store, game)
+        mine = sg["sig"][sg["track"] == track]
+        if not len(mine):
+            return {"players": [], "note": "no crops of this tracklet (too small or too short)"}
+        vec = mine.mean(0)
+        vec = vec / max(np.linalg.norm(vec), 1e-9)
+    totals: dict[int, np.ndarray] = {}
+    for g in store.list_games():
+        for p, (total, _) in player_sums(store, g).items():
+            totals[p] = totals.get(p, 0) + total
+    t = people.tracks(store, game)
+    picks = people.load_picks(store, game)
+    busy = {x["player"] for x in people.segments(t, picks) if x["start"] <= frame < x["end"] and x["track"] != track}
+    rejected = {p["player"] for p in picks if p["track"] == track and p["kind"] != "is"}
+    out = [{"player": p, "score": round(float(vec @ (v / max(np.linalg.norm(v), 1e-9))), 3), "busy": p in busy,
+            "rejected": p in rejected} for p, v in totals.items()]
+    out.sort(key=lambda x: (x["busy"] or x["rejected"], -x["score"]))
+    return {"players": out}
+
+
 # ---- automatic labels: where a player is, from appearance alone ----
 
 AUTO_MARGIN = 0.02  # a piece must beat every other unlabelled teammate on screen by this much (cosine)

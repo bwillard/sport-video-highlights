@@ -94,7 +94,7 @@ Turn many short, anonymous tracklets of our team into named players.
 - A player's look = mean signature of their labelled crops in every game (sums cached per game in `tracks/reid_looks.npz`). Any player with labels gets suggestions.
 - Candidates: our-team tracklets with no label in the game and no pick for that player, scored by their best ~10 s piece; anything on screen while the player is labelled elsewhere is left out.
 - Answers are picks: Y = "is", X = kind "no" (ends a label like "not" but isn't counted as a swap by `eval-labels`).
-- Labelling any player in the tagger (paused): the box under the mouse is the target for Y / X (a guess: yes / no; a label: X = "not" from there; anyone else: Y = the followed player); clicking it opens a "who is this?" box of the roster numbers (best guess first; type a number + Enter). A walks every automatic guess, any player, in time order; after a Y / X (or a number) from A or G it moves straight on to the next.
+- Labelling any player in the tagger (paused): the box under the mouse is the target for Y / X (a guess: yes / no; a label: X = "not" from there; anyone else: Y = whoever they look most like, `reid.guess` via /people/guess, leaving out players labelled elsewhere at that moment or turned down for the tracklet); clicking it opens a "who is this?" box of the roster numbers ("looks like": the closest three, best outlined; type a number + Enter). A walks every automatic guess, any player, in time order; after a Y / X (or a number) from A or G it moves straight on to the next.
 
 **Review UI:** a grid of tracklet thumbnails per player, "is this #38?" yes/no with one key, sorted by least confident first. Each answer is saved to the gallery.
 

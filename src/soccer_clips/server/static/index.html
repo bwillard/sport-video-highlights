@@ -125,9 +125,9 @@
         <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
         <li>The orange strip under the timeline = where they're labelled</li>
         <li>Paused, <b>point at a player</b> (cyan box): <kbd>Y</kbd> / <kbd>X</kbd> answer for them: on a <i>#5?</i> guess, yes
-          it's #5 / no it isn't; on a labelled #5, <kbd>X</kbd> = not #5 from here on; on anyone else, <kbd>Y</kbd> = the player
-          you follow. <b>Click</b> them to pick any number (best guess outlined: click it, or <kbd>Enter</kbd>; or type a
-          number then <kbd>Enter</kbd>)</li>
+          it's #5 / no it isn't; on a labelled #5, <kbd>X</kbd> = not #5 from here on; on anyone else, <kbd>Y</kbd> = whoever they look
+          most like (the hint under the box says who). <b>Click</b> them to pick any number ("looks like" = the closest three;
+          best guess outlined: click it, or <kbd>Enter</kbd>; or type a number then <kbd>Enter</kbd>)</li>
         <li><kbd>A</kbd> next automatic guess, any player (<kbd>Shift</kbd>+<kbd>A</kbd> back): jumps to a <i>#n?</i> and asks
           (magenta box) · <kbd>Y</kbd> yes · <kbd>X</kbd> no, and on to the next · <kbd>A</kbd> again skips it</li>
         <li><kbd>G</kbd> next suggestion: jumps to an unlabelled teammate who looks like the player you follow (magenta box, best
@@ -986,6 +986,26 @@ const autoDone = new Set();  // "game:player:track" answered here (until the aut
 let followNums = [];  // the numbers in the follow list (roster and clip players), for the "who is this?" box
 let hoverAt = null, hoverLive = false;  // the mouse over the picture (fractions); live = moved since the last jump
 let hoverBox = null;  // the player under the mouse while paused: what Y / X / a click act on
+const looks = new Map();  // "game:track" -> [{player, score}] who the tracklet looks like, best first (or "loading")
+function looksLike(tr, f) {
+  // the ranked guesses for a tracklet (players busy elsewhere or turned down for it left out); null while loading
+  const key = `${game.id}:${tr}`, got = looks.get(key);
+  if (Array.isArray(got)) return got;
+  if (got !== "loading") {
+    looks.set(key, "loading");
+    getJson(`/api/games/${encodeURIComponent(game.id)}/people/guess?track=${tr}&frame=${f}`)
+      .then((r) => looks.set(key, r.players.filter((x) => !x.busy && !x.rejected)))
+      .catch(() => looks.set(key, []))
+      .then(() => {  // an open "who is this?" box for it gets the guesses
+        if (picker?.t.track === tr && `${game.id}:${tr}` === key) {
+          const t = { ...picker.t, ranked: looks.get(key) };
+          if (t.label == null && t.guess == null) t.guess = t.ranked[0]?.player ?? null;
+          openPicker(t);
+        }
+      });
+  }
+  return null;
+}
 function loadAuto() {
   if (!showPeople || !game) return;
   const id = game.id;
@@ -1017,6 +1037,7 @@ function loadPeople() {
 function setLabels(r) {
   if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
   loadAuto();  // labels move the automatic ones
+  looks.clear();  // and the players' looks, and who's busy where
   boxChunks.clear();  // which kit is "ours" comes from the labels, so box teams may have changed
 }
 function togglePeople() {
@@ -1207,17 +1228,20 @@ function boxUnder(f, i0, i1, rows, known, auto) {
   }
   if (best < 0) return null;
   const o = best, tr = rows[o + 1], label = known.get(tr) ?? null;
-  const fromSuggestion = suggestion?.track === tr;
+  const fromSuggestion = suggestion?.track === tr, ranked = looksLike(tr, f);
   return {
     track: tr, frame: f, x: (rows[o + 2] + rows[o + 4]) / 2, y: (rows[o + 3] + rows[o + 5]) / 2,
-    box: [rows[o + 2], rows[o + 3], rows[o + 4], rows[o + 5]], label,
-    guess: label != null ? null : fromSuggestion ? suggestion.player : auto.get(tr) ?? null,
+    box: [rows[o + 2], rows[o + 3], rows[o + 4], rows[o + 5]], label, ranked,
+    // the guess Y / X answer: the one being asked about, else the automatic one, else the closest look
+    guess: label != null ? null : fromSuggestion ? suggestion.player : auto.get(tr) ?? ranked?.[0]?.player ?? null,
+    pending: label == null && !fromSuggestion && auto.get(tr) == null && ranked == null,
     from: fromSuggestion ? suggestion.from : "hover",
   };
 }
 function targetHint(t) {
   if (t.label != null) return `X = not #${t.label}`;
   if (t.guess != null) return `Y = #${t.guess} · X = not #${t.guess}`;
+  if (t.pending) return "who is this? …";
   return followWho == null ? "click = pick a number" : `Y = #${followWho}`;
 }
 function yxTarget() {
@@ -1247,6 +1271,7 @@ async function answer(yes) {
   const t = yxTarget();
   if (!t) return flash("point at a player, or press G or A for one to answer", true);
   if (t.x == null) return flash("players still loading…");
+  if (t.pending) return flash("still working out who this looks like…");
   let player, kind;
   if (t.label != null) {
     if (yes) return flash(`already labelled #${t.label}`);
@@ -1287,11 +1312,15 @@ function nextAuto(back = false) {
 let picker = null;  // {t, best, typed}: the "who is this?" box after clicking a player
 function openPicker(t) {
   closePicker();
-  const best = t.label ?? t.guess ?? followWho;
-  const nums = [...new Set([best, ...followNums].filter((n) => n != null))];
+  // the label, else the guess; the followed player only when there are no appearance guesses to be had
+  const best = t.label ?? t.guess ?? (Array.isArray(t.ranked) && !t.ranked.length ? followWho : null);
+  const close = (t.ranked || []).slice(0, 3);  // who they look like most
   const el = $("picker");
   el.innerHTML = `<div class="ptitle">who is this? <b id="pickTyped"></b></div>` +
-    nums.map((n) => `<button data-n="${n}"${n === best ? ' class="best"' : ""}>#${n}</button>`).join("") +
+    (close.length ? `<div class="ptitle">looks like:</div>` + close.map((x) =>
+      `<button data-n="${x.player}"${x.player === best ? ' class="best"' : ""} title="likeness ${x.score}">#${x.player}</button>`).join("") +
+      `<div class="ptitle">everyone:</div>` : "") +
+    followNums.map((n) => `<button data-n="${n}"${n === best && !close.some((x) => x.player === best) ? ' class="best"' : ""}>#${n}</button>`).join("") +
     ((t.label ?? t.guess) != null ? `<button class="no" data-no>✕ not #${t.label ?? t.guess}</button>` : "");
   el.hidden = false;
   picker = { t, best, typed: "" };
@@ -1308,7 +1337,8 @@ function closePicker() {
   $("picker").hidden = true;
 }
 function showTyped() {
-  $("pickTyped").textContent = picker.typed ? `#${picker.typed}_` : picker.best != null ? `Enter = #${picker.best}` : "type a number";
+  $("pickTyped").textContent = picker.typed ? `#${picker.typed}_` : picker.best != null ? `Enter = #${picker.best}`
+    : picker.t.ranked == null ? "(finding who they look like…)" : "type a number";
 }
 async function pickerCommit(n) {
   const t = picker.t;

@@ -636,6 +636,13 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         return reid.suggest(store, load(game_id), player, limit=min(max(limit, 1), 200))
 
+    @app.get("/api/games/{game_id}/people/guess")
+    def game_people_guess(game_id: str, track: int, frame: int) -> dict:
+        """Who the tracklet looks like at `frame` (reid.guess): {players: [{player, score, busy}]}, best first."""
+        from soccer_clips.track import reid
+
+        return reid.guess(store, load(game_id), track, frame)
+
     @app.get("/api/games/{game_id}/people/auto")
     def game_people_auto(game_id: str) -> dict:
         """Automatic labels (reid.auto_all): {player: [{track, start, end, margin}]} for every labelled player."""

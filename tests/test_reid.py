@@ -119,6 +119,11 @@ def test_suggestions_rank_lookalikes_and_respect_one_place_at_a_time(settings, m
     assert [s["track"] for s in got["suggestions"]] == [3, 2]
     assert got["suggestions"][0]["score"] > 0.5 > got["suggestions"][1]["score"]
     assert reid.suggest(store, game, 7)["note"] == "no labelled stretches of #7 yet"
+    # who a tracklet looks like: the look-alike is #38 first; one on screen while she's labelled elsewhere is
+    # "busy" for her
+    assert reid.guess(store, game, 3, 120)["players"][0] == {"player": 38, "score": pytest.approx(1, abs=0.2), "busy": False,
+                                                                 "rejected": False}
+    assert reid.guess(store, game, 4, 30)["players"][0]["busy"] is True
     # automatic labels: the look-alike while she isn't labelled; never the different-looking teammate, nor
     # the look-alike on screen while she's labelled elsewhere
     claims = reid.auto_label(store, game, 38, min_score=0.5)
@@ -130,3 +135,4 @@ def test_suggestions_rank_lookalikes_and_respect_one_place_at_a_time(settings, m
     assert [s["track"] for s in reid.suggest(store, game, 38)["suggestions"]] == [2]
     assert reid.auto_label(store, game, 38, min_score=0.5) == []  # nor claimed automatically
     assert people.label_points(store, game, 38)[1] == []
+    assert reid.guess(store, game, 3, 120)["players"][-1]["rejected"] is True  # #38 is now last for it
