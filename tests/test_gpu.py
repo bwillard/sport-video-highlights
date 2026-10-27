@@ -113,7 +113,10 @@ def test_pod_uses_the_volume_and_falls_back(store, monkeypatch):
 
     monkeypatch.setattr(gpu, "api", fake_api)
     monkeypatch.setattr(gpu.time, "sleep", lambda s: None)
-    runner = gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), ["4090"], 1, lambda m: None)
+    job = gpu.Job(name="t", uploads=[], script="", downloads=[], volume_files=["full/a.mp4"])
+    assert gpu.Runner(store, gpu.Job(name="t", uploads=["x"], script="", downloads=[]), ["4090"], 1,
+                      lambda m: None).volume is None  # nothing on the volume: any data centre
+    runner = gpu.Runner(store, job, ["4090"], 1, lambda m: None)
     assert runner.volume == vol
     runner.start_pod(wait_s=0)
     first, last = bodies[0], bodies[-1]
@@ -123,8 +126,7 @@ def test_pod_uses_the_volume_and_falls_back(store, monkeypatch):
     assert runner.volume is None  # so everything gets uploaded
     bodies.clear()
     with pytest.raises(RuntimeError, match="no instances"):
-        gpu.Runner(store, gpu.Job(name="t", uploads=[], script="", downloads=[]), ["4090"], 1, lambda m: None,
-                   fallback=False).start_pod(wait_s=0)
+        gpu.Runner(store, job, ["4090"], 1, lambda m: None, fallback=False).start_pod(wait_s=0)
 
 
 def test_s3_sync_uploads_only_what_is_missing(store, monkeypatch):

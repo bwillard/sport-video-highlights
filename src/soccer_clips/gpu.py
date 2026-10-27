@@ -223,7 +223,8 @@ class Runner:
                  countries: list[str] | None = None, use_volume: bool = True, fallback: bool = True):
         self.store, self.job, self.gpu_types, self.max_hours = store, job, gpu_types, max_hours
         self.countries = COUNTRIES if countries is None else countries
-        self.volume = load_volume(store) if use_volume else None
+        # a job with nothing on the volume (e.g. re-ID crops, all uploaded) runs in any data centre
+        self.volume = load_volume(store) if use_volume and job.volume_files else None
         self.fallback = fallback  # no GPU free in the volume's data centre: run elsewhere and upload
         self.run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + job.name
         self.dir = data_root(store) / "gpu" / self.run_id
