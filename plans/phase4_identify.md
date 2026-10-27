@@ -89,6 +89,12 @@ Turn many short, anonymous tracklets of our team into named players.
 - No naming of other players needed: two tracklets on screen at the same moment are different people, and a tracklet within 5 s is one person. Each batch is 16 players (ours and opponents) on screen at one moment, 4 crops each from within 5 s. Half the batches are at a moment when #38 is labelled; her crops then come from all her labelled stretches in all games, so she becomes one person across games. Supervised contrastive loss, light augmentation (flip, shift, zoom, brightness; never hue).
 - Yardstick (`reid.evaluate`, games held out 3-fold): at the middle of each of her labelled stretches, is her tracklet the teammate on screen that looks most like her (her look from the other games)? Plus, for everyone on our team: does a tracklet match itself 10–20 s later better than the teammates on screen then?
 
+**Suggestions (as built, `reid.suggest`, tagger G / Y / X)**
+- Signatures of our team's crops with the tuned model (`soccer-clips reid sigs`, or `gpu run reid-sigs`: 9 min, $0.14 for six games; this CPU does ~17 crops/s, ~3 h for six games). `tracks/reid_sigs.npz`.
+- A player's look = mean signature of their labelled crops in every game (sums cached per game in `tracks/reid_looks.npz`). Any player with labels gets suggestions.
+- Candidates: our-team tracklets with no label in the game and no pick for that player, scored by their best ~10 s piece; anything on screen while the player is labelled elsewhere is left out.
+- Answers are picks: Y = "is", X = kind "no" (ends a label like "not" but isn't counted as a swap by `eval-labels`).
+
 **Review UI:** a grid of tracklet thumbnails per player, "is this #38?" yes/no with one key, sorted by least confident first. Each answer is saved to the gallery.
 
 **Gallery** (`player_gallery/`): crops saved as image files, each with a line in `player_gallery/index.jsonl` (game, frame, box, player or team label, source = callout / correction / review / ocr). Teammates are hard negatives for each other. Append-only JSONL so it can grow to many thousands of entries.
