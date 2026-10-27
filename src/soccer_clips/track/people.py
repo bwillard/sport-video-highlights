@@ -798,6 +798,7 @@ def undo_answers(store: Store, game: Game, batch: str) -> int:
 OURS_RATE = 0.12  # a cluster is ours if its share of the player's boxes is at least this of the top cluster's
 # (2026-10-25: our clusters held >= 17% of the top one's share on PRSC, >= 97% on fc-1; theirs <= 7%)
 OURS_MIN_BOXES = 200  # labelled boxes needed to go by them (else by the labelled points)
+OURS_TEAM_RATE = 0.25  # likewise for everyone labelled together (a kit in light the labelled player is rarely in)
 SAME_KIT = 0.2  # kit.affinity above which two clusters are taken as the same kit
 
 
@@ -808,6 +809,9 @@ def team_roles(t: Tracks, picks: list[dict], game: Game, player: int | None) -> 
       at least OURS_RATE of the share they make up in their top cluster. She's one of ~9 in our kit,
       so our clusters all hold a steady share of her; the opponents' only a stray swap's worth.
       With few labelled boxes, the clusters under the labelled points (picks and callouts).
+      Also clusters where everyone labelled together makes up at least OURS_TEAM_RATE of their
+      share in their top cluster: a teammate-heavy patch of light (the far side in shade) can hold
+      too little of one player to pass on her alone.
     - "opponents": the biggest (by boxes) group of other clusters linked by shared tracklets (SAME_KIT).
     - "other": the rest (refs, keepers, spectators).
     Without labels: the two biggest such groups are "team".
@@ -841,6 +845,14 @@ def team_roles(t: Tracks, picks: list[dict], game: Game, player: int | None) -> 
                     votes[c] += 1
             if votes.sum():
                 ours = {c for c in range(k) if votes[c] >= max(2, 0.15 * votes.sum())} or {int(votes.argmax())}
+        team = np.zeros(len(t.track), bool)
+        for sg in segments(t, picks):
+            a, b = t.window(sg["start"], sg["end"])
+            team[a:b] |= t.track[a:b] == sg["track"]
+        if team.sum() >= OURS_MIN_BOXES:
+            tc = np.bincount(teams[team & (teams >= 0)], minlength=k)
+            rate = tc / np.maximum(counts, 1)
+            ours |= {c for c in range(k) if tc[c] and rate[c] >= OURS_TEAM_RATE * rate.max()}
 
     # groups of the remaining clusters linked by shared tracklets, biggest first
     groups, seen = [], set(ours)
@@ -902,6 +914,16 @@ def box_roles(t: Tracks, roles: dict[int, str], window: int = ROLE_WINDOW) -> np
     return out
 
 
+def labelled_ours(t: Tracks, picks: list[dict], role: np.ndarray) -> np.ndarray:
+    """box_roles with every box on a labelled stretch (any player: they're all ours) set to ours,
+    whatever its kit cluster says."""
+    role = role.copy()
+    for sg in segments(t, picks):
+        a, b = t.window(sg["start"], sg["end"])
+        role[a:b][t.track[a:b] == sg["track"]] = 0
+    return role
+
+
 _roles_cache: dict = {}
 
 
@@ -916,8 +938,9 @@ def roles_for(store: Store, game: Game, model: str = DEFAULT_MODEL) -> tuple[dic
            pp.stat().st_mtime if pp.exists() else 0, store.settings.default_player)
     if key not in _roles_cache:
         _roles_cache.clear()
-        roles = team_roles(t, load_picks(store, game), game, store.settings.default_player)
-        _roles_cache[key] = (roles, box_roles(t, roles))
+        picks = load_picks(store, game)
+        roles = team_roles(t, picks, game, store.settings.default_player)
+        _roles_cache[key] = (roles, labelled_ours(t, picks, box_roles(t, roles)))
     return _roles_cache[key]
 
 

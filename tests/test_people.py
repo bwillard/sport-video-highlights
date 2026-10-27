@@ -287,6 +287,9 @@ def test_team_roles_from_labelled_boxes(store, monkeypatch):
     t.affinity[:] = 0  # without the shared tracklets, only the biggest other cluster is the opponents
     assert people.team_roles(t, picks, game, 38) == {0: "ours", 1: "ours", 2: "opponents", 3: "other"}
     assert set(people.team_roles(t, [], game, 38).values()) == {"team", "other"}
+    # a teammate labelled on the right: her clusters are ours too, though #38 is never in them
+    mate = picks + [{"frame": 10, "x": 0.65, "y": 0.5, "player": 5, "kind": "is"}]
+    assert people.team_roles(t, mate, game, 38) == {0: "ours", 1: "ours", 2: "ours", 3: "ours"}
 
 
 def test_box_teams_follow_a_swap_inside_a_tracklet():
@@ -317,3 +320,7 @@ def test_box_roles_ride_out_flicker_but_follow_a_swap(store):
     t.box_team[on_left & (t.frame < 30)] = 0
     r = people.box_roles(t, roles, window=20)
     assert (r[on_left & (t.frame < 10)] == 0).all() and (r[on_left & (t.frame >= 60)] == 1).all()
+    # a labelled stretch is ours whatever its kit says
+    picks = [{"frame": 10, "x": 0.15, "y": 0.5, "player": 5, "kind": "is"}]
+    r = people.labelled_ours(t, picks, r)
+    assert (r[on_left] == 0).all() and (r[~on_left] == 1).all()
