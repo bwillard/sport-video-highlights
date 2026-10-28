@@ -31,7 +31,7 @@ Per game, in `tracks/`:
 - `pitch_cal.npz`: `H` (keyframes, 3, 3) keyframe pixels → pitch metres (NaN for keyframes the solve couldn't reach), plus fit residuals.
 - `pitch.npz`: pitch x, y for every row of `people_<model>.npz` (NaN where unplaced) and for every frame of the ball path, the camera's view outline on the pitch per sampled frame, and the counts it was made from (like `fixed.npz`'s `n_dets`) so it's rebuilt when tracks or calibration change.
 
-Per game in `game.json` (or a venue it points to): the field's length and width, and which markings it has.
+Per game in `game.json`: the field's length and width as the solve estimated them (or as entered, if you ever override them).
 
 ## 5.0 — Prerequisites
 - Register fcu (`soccer-clips ball fixed-objects gu11-black-vs-fcu-2026-10-25`, CPU, here).
@@ -39,27 +39,34 @@ Per game in `game.json` (or a venue it points to): the field's length and width,
 
 ## 5.1 — Pitch model
 `track/pitch.py`: the field in metres, origin at the centre spot, x along the length (toward the right-hand goal as the camera sees it), y across.
-- **Size:** length × width, entered per game (yards or metres). Saved as a named venue so a home field is entered once. Sources: the league's posted size, or Google Maps' measure tool. A wrong size stretches the map but keeps everyone's relative positions right.
-- **Landmarks** (points whose position follows from the size): 4 corners, 2 halfway-line ends, centre spot, goal posts (9v9 goal 18.5 ft wide). Penalty and goal area corners and penalty spots only if their sizes are entered, since they vary.
-- **Lines** (for "this click is somewhere on this line"): touchlines, goal lines, halfway line, centre circle (radius entered or the 9v9 default). Line clicks matter because many views show a stretch of line and no corner.
-- Drawing data for the map: the same lines, as polylines.
+- **Size is solved, not entered.** Sizes aren't posted and vary by venue, so length and width are unknowns of the calibration (5.2), starting from the middle of the 9v9 range (70–80 × 45–55 yd) with a soft pull toward it. What makes them solvable is the markings whose size *doesn't* change with the field. On 9v9 those are the centre circle's radius and the goal's width (18.5 ft), and probably the penalty and goal areas (sizes from US Soccer's 9v9 guidelines, checked on the first field). Each of those is a parameter too, starting at its standard value with a tight pull, so a field painted slightly off still fits.
+  - Corner and line clicks pin down where the field's edges are, and the circle and goals tell the solve how many metres that is. A circle has to come out round, which also fixes the length-to-width ratio.
+  - If a game shows neither the circle nor a goal clearly, the size stays near the 9v9 middle and the map is a little stretched. Everyone's positions relative to the lines are still right, which is what the map and heatmaps need. Only metre-based uses (near the ball in metres, distance run) are off, by the same few percent.
+  - The estimate (with how sure it is) is shown in the tagger and saved per game. A later game at the same field can start from it.
+- **Landmarks** (points the solve knows the position of, given the sizes): 4 corners, 2 halfway-line ends, centre spot, goal posts, penalty and goal area corners, penalty spots.
+- **Lines** (for "this click is somewhere on this line"): touchlines, goal lines, halfway line, centre circle, penalty and goal area edges. Line clicks matter because many views show a stretch of line and no corner.
+- Drawing data for the map: the same lines, as polylines, at the solved sizes.
 
 ## 5.2 — Solving the calibration
-Unknowns: `H_pitch[k]` for every keyframe k (8 numbers each; ~300 keyframes means ~2,400 unknowns). Residuals, solved together with `scipy.optimize.least_squares` (sparse Jacobian, robust loss):
-1. **Clicks:** each click is mapped into its keyframe with `world.place`, then through `H_pitch[k]`. For a point landmark the residual is the distance to the landmark; for a line it's the distance to the line or circle (metres).
-2. **Link consistency:** for each keyframe link (a, b, `link_H`), take a grid of pitch points that both keyframes show, put each into a's pixels (`H_pitch[a]⁻¹`) and on through `link_H` into b's, and compare with where b says they are (`H_pitch[b]⁻¹`), in pixels. Using pitch points (always on the ground) instead of image points avoids anything above the horizon. This is what spreads a few clicks across hundreds of keyframes.
+Unknowns: `H_pitch[k]` for every keyframe k (8 numbers each; ~300 keyframes means ~2,400 unknowns), plus the field's length and width and the marking sizes (5.1). Residuals, solved together with `scipy.optimize.least_squares` (sparse Jacobian, robust loss):
+1. **Clicks:** each click is mapped into its keyframe with `world.place`, then through `H_pitch[k]`. For a point landmark the residual is the distance to the landmark; for a line it's the distance to the line or circle (metres). Landmark positions are functions of the sizes, so the clicks also pull the sizes into place.
+2. **Size priors:** a gentle pull of length and width toward the 9v9 middle, and a tight pull of each marking size toward its standard value.
+3. **Link consistency:** for each keyframe link (a, b, `link_H`), take a grid of pitch points that both keyframes show, put each into a's pixels (`H_pitch[a]⁻¹`) and on through `link_H` into b's, and compare with where b says they are (`H_pitch[b]⁻¹`), in pixels. Using pitch points (always on the ground) instead of image points avoids anything above the horizon. This is what spreads a few clicks across hundreds of keyframes.
 
 **Start point:** a direct fit (DLT) on the keyframe with the most clicks, then outward along links, breadth-first, chaining `link_H`. Keyframes no link path reaches stay uncalibrated, so their frames get no positions, and each game's coverage is reported.
 
 **Fallback if far views come out wobbly:** model the camera physically, as one fixed point with each keyframe's pan, tilt and zoom (4 numbers per keyframe instead of 8, plus the camera's height and position). Fewer unknowns means fewer clicks and less freedom to bend. It isn't the first choice because a Veo view isn't an exact pinhole (two lenses stitched; still objects wobble ~30 px near a view's edge, 2026-10-24), and free homographies can absorb some of that.
 
-Tests: synthetic keyframes made from a known pitch and known camera rotations, plus noisy clicks. The solve should recover positions to within the noise, and keep uncalibrated keyframes NaN.
+**Clicks on the wrong set of lines** (PRSC's yellow field under our white one) disagree with the rest, so the robust loss mostly ignores them and they show with a large residual, flagged red, for you to delete.
 
-## 5.3 — Calibration page (`/pitch`)
-- Pick a game. The video plays as in the tagger, with a top-down pitch diagram beside it.
-- Pause on a frame showing a landmark. Click it in the video, then click the matching spot on the diagram (a landmark snaps to the nearest one; clicking a line means "somewhere on this line"). The page suggests frames with wide views toward each end and the middle (keyframes that between them cover the most of the field), so you don't have to hunt for them.
-- After 4+ points it solves in the background (seconds) and **draws the pitch lines over the video** for whatever frame is showing. Scrub around: where the drawn lines miss the painted ones, add a click there. Each click shows its residual, and you can delete it.
-- Same nav row as the other pages. Undo as on the roster page.
+Tests: synthetic keyframes made from a known pitch and known camera rotations, plus noisy clicks. The solve should recover positions and the field's size to within the noise, keep uncalibrated keyframes NaN, and flag a click placed on a second, offset set of lines.
+
+## 5.3 — Calibrating and correcting in the tagger
+No separate page: the map below the video (5.5) doubles as the diagram you click on, so calibrating and fixing are the same action, done where you already watch.
+- **Field lines layer** (a checkbox in 🔍 layers, alongside the ball detections): the solved field geometry drawn over the video for whatever frame is showing. This includes all the lines, the circle, the areas and the goal posts, in a colour that stands out from both white and yellow paint. Where the calibration is right the drawn lines sit on the painted ones; where it's off you see it straight away. Your clicks show as small markers on frames near where they were made.
+- **`Q` then click a spot in the video, then click where it is on the map below.** Clicking near a landmark on the map snaps to it; clicking a line means "somewhere on this line". It re-solves (seconds) and the overlay and map redraw. `Q` again or `Esc` stops. Clicking one of your own markers removes it, and `U` takes back the last click while in this mode.
+- **First calibration of a game:** the same, from scratch. The tagger offers "next wide view" jumps to a few frames that between them show most of the field (toward each end and the middle), so you don't have to hunt for corners. After 4+ clicks the overlay appears.
+- The field's estimated size (and how sure it is) shows next to the layer's checkbox.
 
 This overlay is also the main check on the calibration by eye.
 
@@ -77,7 +84,7 @@ A canvas panel, drawn in the same `requestVideoFrameCallback` loop that draws bo
 - A dot per player in view, coloured by team as the boxes are, our players' numbers on their dots, the followed player highlighted (the Player view's marker colour), and the ball.
 - **Players who leave the view fade out** at their last known position over ~5–10 s, then disappear.
 - Data: the tagger already streams boxes in 15 s binary chunks (`/api/games/{id}/people/boxes`); add pitch x, y (and the off-pitch flag) as extra columns, plus a small per-chunk array for the ball and view outline. The Player view gets the same columns on `/api/watch/boxes` (the followed player) and fetches everyone else's chunks.
-- Where: in the Player view first (it's where "where is she playing" matters most), then a toggle in the tagger. Beside the video on a wide screen, a corner overlay otherwise.
+- Where: **below the video**, in the Player view (where "where is she playing" matters most) and in the tagger (where it's also the calibration diagram, 5.3). It gets a show/hide toggle, and its height is kept fixed so the video never shifts.
 
 **What the map can't show:** the follow-cam typically shows a third to half of the field, so players far from the ball are often off camera, and the map only knows where they were last seen. If Veo's panorama ever becomes available as a download, the same pipeline would place everyone at once.
 
@@ -99,22 +106,26 @@ A canvas panel, drawn in the same `requestVideoFrameCallback` loop that draws bo
 - **Veo stitching wobble** (~30 px near view edges) could be metres on the far side. Mitigations: per-keyframe homographies absorb some of it, more clicks where the overlay misses, then the physical model or a smooth correction per keyframe.
 - **Far side at grazing angles:** 1 px of box bottom may be 0.2–0.5 m of depth. Smoothing helps; precision across the field's width will always be worse than along its length.
 - **Keyframes no link path reaches from the clicked ones:** rare given the dense links, but reported per game, and fixable with a click in that view.
-- **Field size unknown or wrong:** the map is stretched, but relative positions hold.
+- **Field size poorly constrained** (no circle or goal clicked): the map is a little stretched, but positions relative to the lines hold. The tagger shows how sure the size is, so you know to add a circle or goal-post click.
+- **Double-marked fields:** a click on the wrong set is flagged by its residual; the overlay shows which set the solve followed.
 
 ## Tasks
 - [ ] 5.0 Register fcu; spot-check `world.place` on player feet near frame edges
-- [ ] 5.1 Pitch model + venues (size, landmarks, lines), with tests
-- [ ] 5.2 Solver (clicks + link consistency, BFS start, coverage report), with synthetic tests
-- [ ] 5.3 `/pitch` calibration page with the live line overlay; calibrate one game end to end
+- [ ] 5.1 Pitch model (9v9 landmarks and lines as functions of the sizes; standard marking sizes confirmed), with tests
+- [ ] 5.2 Solver (clicks + size priors + link consistency, BFS start, coverage report, wrong-line flag), with synthetic tests
+- [ ] 5.3 + 5.5 Map below the tagger's video, the field lines layer, and `Q` clicks; calibrate one game end to end
 - [ ] 5.4 `pitch place`: player / ball positions, smoothing, view outline, off-pitch flag; yardsticks on that game
-- [ ] 5.5 Map panel in the Player view, then the tagger
+- [ ] 5.5 Players and ball on the map (tagger), then the map below the Player view's video
 - [ ] Calibrate the remaining games; record results in Findings
 - [ ] 5.6 items as separate follow-ups
 
+## Decided (2026-10-28)
+- **Field sizes** aren't posted and vary, so they're solved from the fixed-size markings (centre circle, goals, areas), with the 9v9 middle as the fallback.
+- **Map** goes below the video. The derived field geometry is drawn over the video as a layer in the tagger's 🔍 layers menu, and corrected in place with `Q`.
+- **Markings:** all games are on 9v9 fields, some double-marked. Clicks plus the residual flag handle the second set.
+
 ## Open questions
-- Field sizes: do the leagues post them, or measure each venue on a map?
-- Map placement: beside the video, or a corner overlay on it?
-- 9v9 markings at every venue, or are some games on fields marked for something else (as at PRSC)? Affects which landmarks to offer.
+- Confirm the 9v9 penalty / goal area sizes and centre circle radius the leagues use (on the first calibrated field, the solve's estimate will show whether they match).
 
 ## Findings
 - **2026-10-28** — Planning check: six of seven games have `world.npz` (128–341 keyframes, 974–3124 links, every sampled frame placed); fcu has none yet. Sample frames: fc-1's lines are faint on grass, and PRSC's turf has white and yellow line sets on top of each other. That's why calibration starts with clicks.
