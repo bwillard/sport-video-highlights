@@ -78,8 +78,8 @@ Detect and track every person (and the ball, see [Phase 4.1](phase4_identify.md#
 - [x] Bench run on RunPod (2026-10-24): callout stretches × YOLO11m / YOLO26m / l / x → YOLO11m, default tracker settings (see Findings)
 - [x] Whole-game detection with YOLO11m (2026-10-25: six games, $6.12) and tracking here (52 min)
 - [ ] Pitch filter (drop sideline spectators) — after looking at real tracks; team split (4.2) may do most of it
-- [ ] Gap interpolation + smoothing
-- [ ] Track store (`run.json`, `boxes.npz`, `tracklets.json`) + API returning boxes for a time window and player/tracklet
+- [x] Gap interpolation + smoothing — for the player marker only (2026-10-28, Player view): boxes averaged over 5 frames along a tracklet, gaps up to 10 frames bridged; tracklets themselves are joined across ≤ 1 s gaps in the same kit (4.2)
+- [x] Track store + API (as built: `tracks/people_<model>.npz` with picks in `people_picks.json`; `GET /api/games/{id}/people/boxes` for a window, `GET /api/watch/boxes` for one player's whole game) — the `run.json` / `boxes.npz` / `tracklets.json` design was dropped
 
 ## 3.3 — Live highlight during playback
 Draw a marker that follows the chosen player while the video plays, in the tagger and on the reel page. Nothing is re-encoded, so changing who's highlighted, or the style, is instant.
@@ -103,7 +103,10 @@ Draw a marker that follows the chosen player while the video plays, in the tagge
 - [x] Canvas overlay with the followed player's ring (requestAnimationFrame, like the ball ring)
 - [x] Click-to-pick a tracklet; follow picker by number
 - [x] Correction (Shift+L: wrong person from here) + undo + timeline strip of where they're labelled
-- [ ] Interpolation across short gaps between tracklets, and fade-out instead of vanishing
+- [x] Interpolation across short gaps (Player view: up to 10 frames; longer gaps leave the marker off rather than guessing) · [ ] fade-out instead of vanishing
+- [x] Automatic labels by appearance (Phase 4.3, 2026-10-27): dashed ring / `#n?` where the followed or any player is probably on screen, `Y` / `X` / `A` / `G` to answer; a #number over everyone labelled; names with numbers (🔍 layers)
+- [x] `W` only them (2026-10-28): playback skips to the followed player's next stretch
+- [x] **Player view** (`/watch`, 2026-10-28): one player's games with everything else skipped, and a configurable marker (ring / box / arrow / spotlight / name; colour, size, dimming, smoothing; dashed where placed by appearance), `H` on / off. See [phase4_identify.md](phase4_identify.md) 4.3b.
 - [ ] Same overlay on the reel page (reel time → game time via the segment map)
 - [ ] Measure correction clicks per clip on a real game
 

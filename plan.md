@@ -6,10 +6,10 @@
 > - Log meaningful decisions/findings in **Decisions & Findings Log** (dated).
 > - Each phase has its own detailed doc in [plans/](plans/) — refine those as we build, and keep this doc as the summary.
 
-## Status (last updated 2026-10-24)
-**Current phase:** Phase 3.2 (player tracking, option B) has whole-game data: every game has person boxes (YOLO11m at 1920, RunPod) and tracklets made here (`tracks/people_yolo11m.npz`, 21–25k tracklets a game, ~6 s each on average). At the 83 callouts on #38 a box is under her 99% of the time and her tracklet covers a median 75% of the clip. Phase 3.3 first slice built: follow a player in the tagger (`V`, `L`, `Shift+L`, `U`). Phase 4.2 built: kit colour per box keeps tracks on their own kit, cuts and joins tracklets, and names teams. Phase 4.1 (ball tracking) built and in use; Phases 0–2 done, 3.1 done. Every game has a whole-game ball track too, shown as a ring in the tagger (`B`), with fixes while watching (`K`) that become training labels; game ball found 66%, wrong 10%, missed 24% (`soccer-clips ball eval-games`). 107 unit tests pass.
-**Next action:** Check each game's suggested game time in the tagger (Game time box: jump to each time, fix with H / J; ebu needs its 1st half end set), then "cut video to game time…" per game. Then jersey number reading (PARSeq, needs your OK to run code downloaded from GitHub), naming tracklets by number, and carrying names to unread time with linking + appearance. Meanwhile: keep fixing ball mistakes; fine-tune the ball model again when enough fixes have piled up (RunPod, needs your go). Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
-**Decision pending:** none. ML runs on rented RunPod GPUs, each launch with your approval ([plans/hardware.md](plans/hardware.md)).
+## Status (last updated 2026-10-28)
+**Current phase:** Phase 4.3 (naming players) in daily use, and Phase 4.4's first form built as the **Player view**. All seven games are cut to game time and have whole-game ball and player tracks. Players are named by appearance: a fine-tuned OSNet-AIN picks the right player 89% of the time on games it never saw (12 labelled players; stock 28%), automatic `#n?` guesses in the tagger at an adjustable threshold, and a roster page (`/roster`) to name, sort and fix every player's pictures across games. Retraining the recognition and ball models, and re-tracking every game's ball, are buttons in the app (RunPod, detached, pods delete themselves). The Player view (`/watch`) plays one player's games with everything else skipped, optionally only near the ball, with a configurable marker on them; the tagger's `W` does the same within a game. Every page shares a nav row. 135 unit tests pass.
+**Next action:** Keep labelling and sorting pictures on the roster page (unassigned / doubtful), retrain recognition when a good batch of labels has come in, and fix ball mistakes while watching, then retrain the ball model and re-track. Candidates next: suggested clips from the near-ball moments (4.4: score each moment, accept / reject into normal clips), the marker burned into reels (3.4), a follow-crop on the player (3.5), and jersey number reading (PARSeq, needs your OK to run code downloaded from GitHub). Always call the env's pip/python by full path: plain `python` resolves to forbeck_env even under `conda run`.
+**Decision pending:** none. ML runs on rented RunPod GPUs, each launch with your approval (the retrain buttons count as approval for that run) ([plans/hardware.md](plans/hardware.md)).
 **Blocked on:** nothing.
 
 ## Goals
@@ -30,28 +30,32 @@
 - **JSON files** for all state (no database): one `game.json` per game (game info + its clips), one `reel.json` per reel, per-game track data (boxes in a compact `.npz` array file, labels in JSON), and JSONL for append-heavy data. **Pydantic** models are the schema. All reads/writes go through one `store.py` module (atomic writes, per-file locks), so swapping in SQLite later would stay cheap.
 - **ffmpeg** (≥ 6, installed from conda-forge into the project env; the 4.2 in miniconda's base env is too old) for all cutting, encoding and reel rendering.
 - **Players (Phase 3.2):** stock YOLO at full 1920 resolution on a rented GPU saves raw person boxes once per model (`tracks/people_raw_<model>.npz`); BoT-SORT runs here on the saved boxes with our own camera steps (from `ball_raw.npz`) in place of its image-based motion step, so tracking can be re-tuned for free (`tracks/people_<model>.npz`). The ball uses a **YOLO26x fine-tuned on our labels**, run on the centre crop on a rented GPU, then a **temporal filter** here (camera motion cancelled, tracklets, best chain by dynamic programming, still balls ignored unless kicked) and **fixed-object blocking** (frames registered to keyframes, so a spot that never moves all game can be found despite the panning).
-- **Re-ID embeddings** (OSNet via BoxMOT, or DINOv2) + jersey-number OCR to name players.
-- **Live highlights** are drawn in the browser on a `<canvas>` over the `<video>`, synced per frame with `requestVideoFrameCallback`; reels burn the same marker in.
+- **Naming players (Phase 4.3):** crops of every our-team tracklet (`tracks/reid_crops.npz`), OSNet-AIN fine-tuned on our labels on a rented GPU, signatures per game here (`tracks/reid_sigs.npz`); each player's look is the mean of their labelled signatures across games, and a stretch is claimed for the player it looks most like when it's clearly ahead (automatic labels). Labels are clicks (`tracks/people_picks.json`) matched to tracklets each time, so they survive re-tracking; the roster page (`track/gallery.py`) works on every game's stretches at once. Jersey-number OCR is not built (stock PARSeq read none of 40 crops of her; see the Phase 4 doc).
+- **Player view (`track/watch.py`, `/watch`):** a list of runs (stretches of the game video) computed on the fly from labels, automatic labels and, for the ⚽ filter, the ball path against the player's boxes; the page plays them from the game videos with two `<video>` elements (the next run parked in the hidden one), so nothing is rendered.
+- **Live highlights** are drawn in the browser on a `<canvas>` over the `<video>` each animation frame (tagger: boxes, rings, guesses; player view: the configurable marker). Burning a marker into reels (3.4) is still to do; reels have the freeze-frame callout.
+- **Cloud jobs:** `gpu.py` runs every RunPod job (upload, run, download, delete); `retrain.py` / `ball_retrain.py` run the app's retrain buttons as detached processes with status files, and the server sweeps pods past their deadline.
 
-### Repo layout (proposed)
+### Repo layout
 ```
 ~/soccer-clips/
   plan.md                  # this doc
   plans/                   # per-phase detailed docs
-  .env                     # machine-specific paths, NOT committed (gitignored)
+  .env                     # machine-specific paths and keys, NOT committed (gitignored)
   .env.example             # committed template with placeholder values
   environment.yml          # conda env (python, ffmpeg, heavy deps)
   pyproject.toml           # package metadata; installed with pip install -e .
   src/soccer_clips/
-    config.py              # loads .env (paths, host/port), ffmpeg path, presets
-    models.py              # Pydantic models (Game, Clip, Reel, Track, ...)
-    store.py               # JSON load/save: atomic writes, per-file locks
-    ingest.py              # Phase 0
-    export.py              # Phase 1 clip export
-    server/                # FastAPI app + static web page
-    reel/                  # Phase 2 rendering
-    track/                 # Phase 3 tracking + overlays
-    autotag/               # Phase 4
+    cli.py                 # the soccer-clips command
+    config.py, models.py, store.py   # .env settings, Pydantic models, JSON load/save
+    scan.py, encode.py, export.py, ffmpeg.py, jobs.py   # ingest, clip export, background jobs
+    gametime.py            # half times, cutting videos to game time
+    roster.py              # numbers and names (roster.json)
+    gpu.py                 # RunPod jobs
+    retrain.py, ball_retrain.py      # the app's retrain / re-track buttons
+    reel/                  # Phase 2 rendering + 3.1 callouts
+    server/app.py, static/ # FastAPI + the pages (index = tagger, watch, roster, reel, label-ball, review-balls)
+    track/                 # ball (ball_*, camera, world), players (people, kit), names (reid, gallery),
+                           # player view (watch), benchmark (bench, benchmark)
   tests/
 ```
 
@@ -66,10 +70,19 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
   <year>/<game_id>/
     game.json                                    # game info + clips (tags, rating, players, team, callout)
     probe.json                                   # raw ffprobe output
-    tracks/run.json, boxes.npz, tracklets.json, ball.npz   # Phase 3/4 whole-game tracking
+    tracks/ball_raw.npz, ball.npz, ball_fixes.json, world.npz, fixed.npz   # ball detections, path, fixes
+    tracks/people_raw_<model>.npz, people_<model>.npz, people_picks.json  # person boxes, tracklets, labels
+    tracks/reid_crops.npz, reid_sigs.npz, reid_looks.npz                   # crops, signatures, players' looks
 <SOCCER_REELS_DIR>/<reel_id>/reel.json, *.mp4    # reel definitions + renders
-<SOCCER_GAMES_DIR>/roster.json                   # Phase 4 team roster (number → name)
-<SOCCER_GALLERY_DIR>/index.jsonl, crops/         # Phase 4 labelled crops of each player
+<SOCCER_GAMES_DIR>/roster.json                   # team roster (number → name); never in the repo
+next to the games folder (same root):
+  cut/<year>/<game_id>.mp4                       # videos cut to game time (SOCCER_CUT_DIR to move it)
+  backup/                                        # what each cut replaced
+  bench/                                         # benchmark clips and results
+  labels/                                        # ball labels (ball.jsonl), tasks, dataset
+  models/                                        # model weights (ball_yolo26x.pt, reid_osnet_ain.pt, stock)
+  gpu/<run id>/, retrain.json, ball-retrain.json # RunPod runs and the retrain buttons' status
+<SOCCER_GALLERY_DIR>                             # required in .env, not used yet
 ```
 - The `game_id` is the video's filename without `.mp4`, e.g. `gu11-vs-saa-2026-10-10`. The game date is parsed from the trailing `YYYY-MM-DD`.
 - In `.env`, all six directories are siblings under one root folder on the data drive: `full/`, `proxy/`, `clips/`, `games/`, `reels/`, `player_gallery/`.
@@ -79,7 +92,7 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 |---|---|
 | Project repo | `~/soccer-clips` |
 | Data directories | Set in `.env` (see `.env.example`) |
-| Full-game videos | `<SOCCER_FULL_DIR>/<year>/*.mp4` — 5 games from 2026 so far |
+| Full-game videos | `<SOCCER_FULL_DIR>/<year>/*.mp4` — 7 games from 2026 so far (all cut to game time in `cut/`) |
 | Phase docs | [plans/](plans/) |
 | Hardware options for ML | [plans/hardware.md](plans/hardware.md) |
 
@@ -91,9 +104,9 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - [x] **Phase 2 — Highlight reel** → [plans/phase2_reel.md](plans/phase2_reel.md)
   Order clips, render with hard cuts and a title card, landscape. Watch reels in the app, jump back to the full game, download. (Fades, music, vertical, speed/slow-mo: future ideas.)
 - [ ] **Phase 3 — Track & highlight players** → [plans/phase3_highlight.md](plans/phase3_highlight.md)
-  3.1 freeze-frame callout (done) → 3.2 whole-game tracking job (done) → 3.3 live highlight (first slice built) during playback (click a player, correct by clicking) → 3.4 marker burned into reels → 3.5 follow-crop (later).
+  3.1 freeze-frame callout (done) → 3.2 whole-game tracking job (done) → 3.3 live highlight during playback (built: follow and label in the tagger; a configurable marker in the Player view) → 3.4 marker burned into reels → 3.5 follow-crop (later).
 - [ ] **Phase 4 — Identify players & track the ball** → [plans/phase4_identify.md](plans/phase4_identify.md)
-  4.1 ball tracking (built: whole-game tracks for every game, ring + fixes in the tagger) → 4.2 team split by kit colour (built; also used in tracking) → 4.3 name our players (re-ID + jersey OCR + confirm/reject) → 4.4 suggested clips where a chosen player is near the ball.
+  4.1 ball tracking (built: whole-game tracks for every game, ring + fixes in the tagger, retrain / re-track from the app) → 4.2 team split by kit colour (built; also used in tracking) → 4.3 name our players (built by appearance: fine-tuned re-ID, automatic labels, roster page, retrain from the app; jersey OCR not built) → 4.4 near-the-ball moments (built as the Player view's ⚽ filter; suggested clips with accept / reject still to do).
 
 **Milestones**
 - Phases 0–2 give a usable tool: tag a game and produce a shareable reel.
@@ -165,3 +178,7 @@ Data lives on the large data drive (20 TB, 14 TB free). **Every directory is con
 - **2026-10-25** — Kit colour (Phase 4.2, pulled forward because tracks broke or swapped where she crossed opponents and the ref: 85 of 128 of her labelled stretches ended overlapping another box). Torso colour histogram per detected box (`people kit`, 39 min for all six games here), used three ways in tracking: a gate stops a track taking a box in a different kit (in both matching passes), tracklets are cut where their kit changes, and gaps up to 1 s are joined in the same kit near where the player would be. New yardstick from your #38 labels (`people eval-labels`): her tracklets hold 23.1 s (median) vs 18.2, wrong swaps 5/29 left vs 15/29, conflicts 45 vs 60. Teams: tracklet kits clustered per game (6 clusters); the ones under her labels are 'ours', the biggest other 'opponents', the rest 'other'; boxes coloured by it in the tagger.
 - **2026-10-25** — Teams revised after PRSC showed their royal blue players as ours. Our white kit has big blue numbers on the back and turns blue-tinted in shade, so: the kit now covers shirt and shorts (white vs blue shorts), colours have a vivid level (their blue: saturation ~228; our shaded white: ~98), 10 clusters of colour shares, a team per box from its tracklet's colour over half a second, clusters sharing tracklets grouped as one kit, 'ours' = the clusters holding a steady share of #38's labelled boxes (thousands, every light) instead of the clusters under her labelled points, and each box's team smoothed over ±5 s of its tracklet. PRSC at 36:30.9 and 25:00 and fc-1 at 14:01 now come out right player by player. Tracking re-tuned for the new kit (gate 0.65, cut 0.45): holds 21.7 s, 45 conflicts, 8/29 swaps (torso-only kit: 23.1 s, 45, 5/29).
 - **2026-10-25** — Game time (side quest before number reading): a game's two halves are stored as `kickoff_1h_s`/`end_1h_s`/`kickoff_2h_s`/`end_2h_s` (set with H / Shift+H and the new J / Shift+J; non-game time shaded on the timeline). `soccer-clips gametime suggest` (or "suggest times" in the tagger's Game time box) proposes them from the player tracks: not in play = too few players on the pitch, a crowd, everyone standing about, or only small distant players (each signal catches different games); found sensible halves (31–37 min) in 5 of 6 games, ebu's half time needs setting by hand. "Cut video to game time" (or `gametime cut <game> --yes`) copies each half plus 10 s either side out of the original without re-encoding (keyframe to keyframe: Veo has one every 2.5 s and no B-frames), joins them into `cut/<year>/<game>.mp4` (originals stay in `full/`), checks frames against the original, backs up everything to `backup/<time>-cut-<game>/`, then moves every stored time and frame onto the new timeline: clips and callouts, half times, ball detections / path / camera motion / fixes / fixed objects / registration, player boxes / kit colours / tracklets / labels, ball labels / tasks / other balls / guesses / cached frames / training set, bench clips, and reels' jump-back maps; anything in non-game time is dropped and reported. "undo cut" (`gametime restore`) puts it all back. Suggested times stored for all six games; nothing cut yet.
+- **2026-10-26** — Naming players by appearance, not numbers first: stock PARSeq read her number on none of 40 close-up crops (most show the sponsor logo on the front; a number is readable in about one big crop in eight), while OSNet-AIN (a re-ID model made for telling people apart) trained on our labels told her from teammates best (AUC 0.85; DINOv2 brought nothing). Fine-tuned on RunPod with every labelled player as one person across games: her top-1 31% → 62% on held-out games. Details in [plans/phase4_identify.md](plans/phase4_identify.md).
+- **2026-10-27** — Labelling at scale: automatic labels (a stretch claimed when it looks ≥ 0.90 like a player and clearly more than anyone else, never while they're labelled elsewhere), `A` / `G` / `Y` / `X` in the tagger, and the roster page (`/roster`, replacing `/players`) to name numbers and assign, unlabel, split or reject pictures from every game at once, with undo. Labelled stretches are always our team (fixed #11 / #28 showing as "other" in fcu's shade).
+- **2026-10-27** — Retraining from the app instead of through Claude: buttons on the roster page (recognition) and ball labels page (ball model; re-track every game), run as detached processes so a server restart doesn't stop them. Overrun protection: each pod deletes itself through RunPod's API at its time limit (the API key goes to the pod for this, into a root-only file), and the server deletes overdue pods every 10 minutes. Scores that don't single out #38 (each player's top-1, averaged) and the last three runs shown side by side. First run: 73% → 89% ($1.61).
+- **2026-10-28** — Player view (`/watch`): one player's games played from the game videos with everything else skipped, decided on the fly rather than pre-rendered (30–70 jumps a game for #38; a second hidden `<video>` makes each jump seamless). Then a configurable marker on the player, the ⚽ filter (ball within N of their heights, with before / after seconds), `W` in the tagger for the same within a game, and a shared nav row (the tagger's toolbar had pushed its page links out of reach).

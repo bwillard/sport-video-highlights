@@ -633,7 +633,7 @@ def main() -> None:
     run_gpu.add_argument("--no-volume", action="store_true", help="upload everything instead of using the volume")
     run_gpu.add_argument("--no-fallback", action="store_true",
                          help="with a volume: wait for its data centre instead of running elsewhere")
-    run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also stops itself after this")
+    run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also deletes itself after this")
     g_sub.add_parser("cleanup", help="delete every soccer-clips pod")
     rr = g_sub.add_parser("retrain-reid", help="fine-tune the recognition model, keep it if it scores as well, re-sign "
                           "every game (what the roster page's Retrain button starts)")

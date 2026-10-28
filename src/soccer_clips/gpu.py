@@ -3,13 +3,16 @@ Cloud GPU jobs on RunPod: start a pod, upload, run, download, delete the pod.
 
 `soccer-clips gpu run <job>` does it all from this machine and deletes the pod
 whatever happens (success, error, timeout, Ctrl-C). As a second line of
-defence the pod stops its own container after the time limit, so GPU billing
-ends even if this machine dies mid-run; `soccer-clips gpu pods` / `cleanup`
-list and delete any leftovers.
+defence the pod deletes itself after the time limit (and stops its container if
+that fails), so billing ends even if this machine dies mid-run; the server also
+deletes overdue pods every 10 minutes (`soccer-clips gpu sweep`), and
+`soccer-clips gpu` / `gpu cleanup` list and delete any leftovers.
 
-The API key (RUNPOD_API_KEY in .env) is only used here; it is never sent to
-the pod. Code goes up with `git archive HEAD`, so only committed files (never
-.env) leave the machine. Each run gets a folder <data root>/gpu/<run id>/ with
+The API key (RUNPOD_API_KEY in .env) goes to the pod for one thing only: the
+self-delete script (arm_dead_mans_switch), sent over ssh into a root-only file,
+never on a command line or in the uploaded code, and gone with the pod. Code
+goes up with `git archive HEAD`, so only committed files (never .env) leave the
+machine. Each run gets a folder <data root>/gpu/<run id>/ with
 its log, the pod's details and the results.
 """
 
