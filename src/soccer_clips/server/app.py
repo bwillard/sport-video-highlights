@@ -899,6 +899,16 @@ def create_app(store: Store | None = None) -> FastAPI:
         ms = None if min_score is None else min(max(min_score, 0.5), 1.0)
         return watch.playlist(store, games, player, guesses, ms)
 
+    @app.get("/api/watch/boxes")
+    def watch_boxes(player: int, game: str, guesses: bool = True, min_score: float | None = None) -> Response:
+        """Where #player is in each frame of the game, for the player view's highlight (watch.boxes): little-endian
+        float32 rows of frame, x1, y1, x2, y2 (fractions of the frame), guessed (0 labelled, 1 by appearance)."""
+        from soccer_clips.track import watch
+
+        ms = None if min_score is None else min(max(min_score, 0.5), 1.0)
+        rows = watch.boxes(store, load(game), player, guesses, ms)
+        return Response(rows.astype("<f4").tobytes(), media_type="application/octet-stream")
+
     @app.get("/label-ball")
     def label_ball_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "label-ball.html")

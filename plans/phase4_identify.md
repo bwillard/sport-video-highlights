@@ -119,6 +119,7 @@ One player's game(s) played straight from the game videos with everything else s
 - The page keeps two `<video>`s: the next run is loaded and parked in the hidden one, and swapped in at the cut (seamless in headless Chrome, also across games; keyframes every 2.5 s in the cut copies, so a cold jump is a short seek).
 - First load of a game ~5 s (auto labels + segments, then cached per game); every game ~20 s cold, 0.05 s warm. `reid.auto_all` now caches per game (it held one game, so the tagger and the view evicted each other).
 - Next: "only when the ball is near" = 4.4's per-frame proximity as frame spans, `watch.intersect`ed with `watch.stretches` before `runs` (the boxes come from the same labelled / guessed tracklets). Maybe a ring on the player during playback (the wide Veo view makes a far player hard to pick out).
+- 2026-10-28 — Highlight (H, settings kept per browser): ring / box / arrow / spotlight / name, colour, size, dimming, smoothing; dashed where placed by appearance. Boxes per game from `watch.boxes` (their labelled + guessed tracklets, 5-frame mean; ~2 MB a game, fetched as the game first plays or is parked next); gaps up to 10 frames bridged, longer ones left unmarked.
 
 ## 4.4 — Clips where a player is near the ball
 For a chosen player, find the stretches of a game where they're involved with the ball and offer them as clips.

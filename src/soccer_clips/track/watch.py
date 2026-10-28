@@ -14,6 +14,8 @@ A later rule (e.g. only while the ball is near them) narrows `stretches` before 
 with frame ranges from the ball track and the player's boxes.
 """
 
+import numpy as np
+
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
@@ -121,3 +123,36 @@ def playlist(store: Store, games: list[Game], player: int, guesses: bool = True,
                       "duration_s": g.duration_s, "fps": g.fps,
                       "kickoff_1h_s": g.kickoff_1h_s, "kickoff_2h_s": g.kickoff_2h_s}
     return {"runs": out, "games": info, "total_s": round(sum(r["end_s"] - r["start_s"] for r in out), 1)}
+
+
+SMOOTH = 5  # frames averaged for a box (detections jitter a few pixels frame to frame)
+
+
+def boxes(store: Store, game: Game, player: int, guesses: bool = True, min_score: float | None = None) -> np.ndarray:
+    """Where to draw `player` in the player view: float32 rows (frame, x1, y1, x2, y2, guessed), boxes as
+    fractions of the frame, smoothed along each tracklet, sorted by frame (a labelled box before a guessed one)."""
+    from soccer_clips.track import people, reid
+
+    spans = [(s["track"], s["start"], s["end"], 0.0) for s in _segments(store, game) if s["player"] == player]
+    if guesses:
+        auto = reid.auto_all(store, game, reid.AUTO_MIN if min_score is None else min_score)
+        spans += [(c["track"], c["start"], c["end"], 1.0) for c in auto.get(player, [])]
+    t = people.tracks(store, game) if spans else None
+    if t is None:
+        return np.zeros((0, 6), np.float32)
+    parts = []
+    for track, start, end, guessed in spans:
+        a, b = t.window(start, end)
+        i = a + np.flatnonzero(t.track[a:b] == track)
+        if not len(i):
+            continue
+        box = t.box[i].astype(np.float64)
+        if len(i) >= SMOOTH:
+            k = np.ones(SMOOTH)
+            norm = np.convolve(np.ones(len(i)), k, "same")
+            box = np.column_stack([np.convolve(box[:, c], k, "same") / norm for c in range(4)])
+        parts.append(np.column_stack([t.frame[i], box, np.full(len(i), guessed)]))
+    if not parts:
+        return np.zeros((0, 6), np.float32)
+    rows = np.concatenate(parts)
+    return rows[np.lexsort((rows[:, 5], rows[:, 0]))].astype(np.float32)

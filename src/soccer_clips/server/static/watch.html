@@ -25,6 +25,15 @@
   #runs .gh:hover { background: none; }
   .guess { color: var(--warn); font-size: 11px; }
   label.opt { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
+  #hl { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #hlBox .row { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
+  #hlBox label { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font-size: 13px; }
+  #hlBox label:has(input:checked) { color: var(--text); }
+  #hlBox .slide { display: grid; grid-template-columns: 70px 1fr 34px; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+  #hlBox .slide b { color: var(--text); font-weight: 400; font-variant-numeric: tabular-nums; text-align: right; }
+  #hlBox input[type=color] { width: 34px; height: 22px; padding: 0 2px; }
+  #hlBox h3 label { font-size: 14px; color: var(--text); }
+  #hlBox.off .body { opacity: 0.4; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -41,6 +50,7 @@
     <div id="stage">
       <video id="v0" playsinline preload="auto"></video>
       <video id="v1" class="standby" playsinline preload="auto" muted></video>
+      <canvas id="hl"></canvas>
       <div class="msg" id="msg">Pick a player.</div>
     </div>
     <div class="ctl">
@@ -59,14 +69,33 @@
     <div class="box">
       <h3 id="sumTitle">Stretches</h3>
       <div class="stat" id="summary"></div>
-      <ul class="list" id="runs" style="max-height: 60vh; margin-top: 6px"></ul>
+      <ul class="list" id="runs" style="max-height: max(180px, calc(100vh - 640px)); margin-top: 6px"></ul>
+    </div>
+    <div class="box" id="hlBox">
+      <h3><label title="Mark the player on the video (H)"><input type="checkbox" id="hlOn"> Highlight them <span class="hk">H</span></label></h3>
+      <div class="body">
+        <div class="row">
+          <label title="An ellipse on the ground at their feet"><input type="checkbox" data-hl="ring"> ring</label>
+          <label title="A box around them"><input type="checkbox" data-hl="box"> box</label>
+          <label title="An arrow over their head"><input type="checkbox" data-hl="arrow"> arrow</label>
+          <label title="Dim everything but a circle around them"><input type="checkbox" data-hl="spot"> spotlight</label>
+          <label title="Their number and first name over them"><input type="checkbox" data-hl="name"> name</label>
+          <label title="Draw dashed where they're placed by appearance rather than labelled (the 'likely' stretches), so you can tell a guess"><input type="checkbox" data-hl="dash"> dashed when guessed</label>
+        </div>
+        <div class="slide"><span>colour</span><input type="color" id="hlColour" aria-label="colour"><span></span></div>
+        <div class="slide"><span>size</span><input type="range" id="hlSize" min="0.5" max="2.5" step="0.1" aria-label="size"><b id="hlSizeV"></b></div>
+        <div class="slide"><span>dim others</span><input type="range" id="hlDim" min="0.2" max="0.9" step="0.05" aria-label="spotlight dimming"><b id="hlDimV"></b></div>
+        <div class="slide"><span>smoothing</span><input type="range" id="hlLag" min="0" max="0.9" step="0.05" aria-label="smoothing" title="Steadier marker (it trails a fast run a little) ← → twitchier (follows every detection)"><b id="hlLagV"></b></div>
+      </div>
     </div>
     <div class="box help">
       Plays straight from the game video, skipping the time the player isn't on screen: a stretch is where they're
       labelled (or, with <i>likely too</i>, where the appearance model is sure it's them), with a second of lead-in
       and lead-out, and gaps under 3 s played through.<br>
       <kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> 5 s · <kbd>[</kbd> <kbd>]</kbd> previous / next stretch ·
-      <kbd>M</kbd> sound · <kbd>F</kbd> full screen · <kbd>T</kbd> open in the tagger
+      <kbd>M</kbd> sound · <kbd>F</kbd> full screen · <kbd>T</kbd> open in the tagger · <kbd>H</kbd> highlight on / off<br>
+      The highlight goes where the tracking has them (labelled, or placed by appearance); where the tracker lost them
+      for a moment it's left off rather than guessed.
     </div>
   </aside>
 </div>
@@ -105,6 +134,7 @@ function prepare(j) {
   ready = -1;
   if (j >= runs.length) return;
   const my = ticket;
+  boxesFor(runs[j].game);
   seekTo(sb, runs[j].game, runs[j].start_s).then(() => { if (my === ticket && sb === vids[1 - act]) ready = j; });
 }
 
@@ -149,7 +179,7 @@ function check() {
     else if (!v.seeking) startRun(cur + 1);  // the next one isn't parked yet (just jumped): load it here
   }
 }
-function loop() { if (playing) check(); drawHead(); requestAnimationFrame(loop); }
+function loop() { if (playing) check(); drawHead(); drawHighlight(); requestAnimationFrame(loop); }
 vids.forEach((v) => v.addEventListener("timeupdate", () => { if (v === vids[act] && playing) check(); }));  // rAF stops in a hidden tab
 
 function setPlaying(on) {
@@ -286,6 +316,9 @@ async function loadRuns() {
   if (game) q.set("game", game);
   const am = parseFloat(store.get("autoMin"));  // the tagger's "auto-label at" setting
   if (am) q.set("min_score", am);
+  const bq = new URLSearchParams({ player: who, guesses });
+  if (am) bq.set("min_score", am);
+  if (bq.toString() !== boxQuery) { boxQuery = bq.toString(); boxCache.clear(); shown = null; }
   let got;
   try { got = await getJson(`/api/watch?${q}`); } catch { return; } finally { clearTimeout(slow); }
   if (+$("who").value !== who || $("game").value !== game || $("guesses").checked !== guesses) return;  // changed meanwhile
@@ -320,6 +353,141 @@ async function init() {
   $("guesses").checked = (h.guesses ?? store.get("watchGuesses")) !== "0";
   loadRuns();
 }
+
+// ---- highlighting the player ---------------------------------------------------------------------------
+// Their boxes per game (watch.boxes): rows of frame, x1, y1, x2, y2, guessed; fetched when a game first plays.
+const HL_DEFAULT = { on: true, ring: true, box: false, arrow: true, spot: false, name: false, dash: true,
+                     colour: "#ff8a3d", size: 1, dim: 0.55, lag: 0.5 };
+let hl = { ...HL_DEFAULT };
+try { Object.assign(hl, JSON.parse(store.get("watchHighlight") || "{}")); } catch {}
+const boxCache = new Map();  // game id -> {frames: Int32Array, rows: Float32Array} | "loading"
+let boxQuery = "";            // the runs these boxes go with (player, guesses, threshold)
+let shown = null;             // the marker as drawn last frame (smoothed): {x1, y1, x2, y2, guessed, f, game}
+function boxesFor(game) {
+  const got = boxCache.get(game);
+  if (got && got !== "loading") return got;
+  if (!got) {
+    boxCache.set(game, "loading");
+    const q = boxQuery;
+    fetch(`/api/watch/boxes?${q}&game=${encodeURIComponent(game)}`).then((r) => r.ok ? r.arrayBuffer() : Promise.reject(r.status))
+      .then((buf) => {
+        if (q !== boxQuery) return;
+        const all = new Float32Array(buf), n = all.length / 6, frames = new Int32Array(n);
+        for (let i = 0; i < n; i++) frames[i] = all[i * 6];
+        boxCache.set(game, { frames, rows: all });
+      }).catch(() => { if (q === boxQuery) boxCache.delete(game); });
+  }
+  return null;
+}
+function boxAt(game, f) {
+  // their box at frame f; across a gap of up to 10 frames in the tracking, in between the two sides
+  const b = boxesFor(game);
+  if (!b) return null;
+  const fr = b.frames, r = b.rows;
+  let lo = 0, hi = fr.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (fr[m] < f) lo = m + 1; else hi = m; }
+  const get = (i) => ({ x1: r[i * 6 + 1], y1: r[i * 6 + 2], x2: r[i * 6 + 3], y2: r[i * 6 + 4], guessed: r[i * 6 + 5] > 0.5 });
+  if (lo < fr.length && fr[lo] === f) return get(lo);
+  const a = lo - 1, c = lo;
+  if (a < 0 || c >= fr.length || fr[c] - fr[a] > 10) return null;
+  const k = (f - fr[a]) / (fr[c] - fr[a]), A = get(a), C = get(c);
+  return { x1: A.x1 + (C.x1 - A.x1) * k, y1: A.y1 + (C.y1 - A.y1) * k, x2: A.x2 + (C.x2 - A.x2) * k, y2: A.y2 + (C.y2 - A.y2) * k,
+           guessed: A.guessed || C.guessed };
+}
+function drawHighlight() {
+  const c = $("hl"), ctx = sizeCanvas(c), W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!hl.on || cur < 0) { shown = null; return; }
+  const v = vids[act], r = runs[cur];
+  if (!v.videoWidth || v.dataset.game !== r.game) return;
+  const f = Math.round(v.currentTime * games[r.game].fps);
+  const b = boxAt(r.game, f);
+  if (!b) { shown = null; return; }
+  // ease towards the new box (a fresh start after a jump, a swap or a gap)
+  const fresh = !shown || shown.game !== r.game || Math.abs(f - shown.f) > 3;
+  const keep = fresh ? 0 : hl.lag;
+  const s = fresh ? { ...b } : shown;
+  for (const k of ["x1", "y1", "x2", "y2"]) s[k] = s[k] * keep + b[k] * (1 - keep);
+  Object.assign(s, { guessed: b.guessed, f, game: r.game });
+  shown = s;
+  // the video's picture inside the canvas (letterboxed)
+  const sc = Math.min(W / v.videoWidth, H / v.videoHeight), vw = v.videoWidth * sc, vh = v.videoHeight * sc;
+  const ox = (W - vw) / 2, oy = (H - vh) / 2;
+  const x1 = ox + s.x1 * vw, x2 = ox + s.x2 * vw, y1 = oy + s.y1 * vh, y2 = oy + s.y2 * vh;
+  const cx = (x1 + x2) / 2, bh = y2 - y1, bw = x2 - x1, z = hl.size, px = devicePixelRatio;
+  const lw = Math.max(2, 2.5 * z * px);
+  ctx.setLineDash(hl.dash && s.guessed ? [6 * px, 5 * px] : []);
+  ctx.strokeStyle = ctx.fillStyle = hl.colour;
+  ctx.lineWidth = lw;
+  if (hl.spot) {
+    const rad = Math.max(bh * 1.1, 30 * px) * z, cy = (y1 + y2) / 2;
+    ctx.save();
+    ctx.fillStyle = `rgba(0,0,0,${hl.dim})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "destination-out";
+    const g = ctx.createRadialGradient(cx, cy, rad * 0.75, cx, cy, rad);
+    g.addColorStop(0, "rgba(0,0,0,1)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI); ctx.fill();
+    ctx.restore();
+  }
+  ctx.shadowColor = "rgba(0,0,0,0.7)";
+  ctx.shadowBlur = 3 * px;
+  if (hl.ring) {
+    const rx = Math.max(bw * 0.85, 9 * px) * z;
+    ctx.beginPath(); ctx.ellipse(cx, y2, rx, rx * 0.38, 0, 0, 2 * Math.PI); ctx.stroke();
+  }
+  if (hl.box) {
+    const pad = 3 * px * z;
+    ctx.strokeRect(x1 - pad, y1 - pad, bw + 2 * pad, bh + 2 * pad);
+  }
+  let top = y1 - 4 * px;
+  if (hl.arrow) {
+    const a = Math.max(bh * 0.3, 10 * px) * z, tip = y1 - 5 * px;
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(cx, tip); ctx.lineTo(cx - a * 0.55, tip - a); ctx.lineTo(cx + a * 0.55, tip - a); ctx.closePath();
+    if (hl.dash && s.guessed) ctx.stroke(); else ctx.fill();
+    top = tip - a - 3 * px;
+  }
+  if (hl.name) {
+    const who = +$("who").value, name = firstNames[who];
+    ctx.font = `600 ${Math.round(13 * px * Math.max(z, 0.8))}px system-ui, sans-serif`;
+    const text = `#${who}${name ? " " + name : ""}${s.guessed ? "?" : ""}`, tw = ctx.measureText(text).width;
+    const fh = 16 * px * Math.max(z, 0.8);
+    ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    // kept inside the picture: under their feet if there's no room above
+    const ty = top - fh < oy ? y2 + (hl.ring ? 10 * px * z : 4 * px) + fh : top;
+    ctx.fillText(text, Math.min(Math.max(cx, ox + tw / 2 + 4), ox + vw - tw / 2 - 4), ty);
+  }
+  ctx.shadowBlur = 0;
+  ctx.setLineDash([]);
+}
+function showHl() {
+  $("hlOn").checked = hl.on;
+  $("hlBox").classList.toggle("off", !hl.on);
+  for (const el of document.querySelectorAll("[data-hl]")) el.checked = !!hl[el.dataset.hl];
+  $("hlColour").value = hl.colour;
+  $("hlSize").value = hl.size; $("hlSizeV").textContent = `${(+hl.size).toFixed(1)}×`;
+  $("hlDim").value = hl.dim; $("hlDimV").textContent = `${Math.round(hl.dim * 100)}%`;
+  $("hlLag").value = hl.lag; $("hlLagV").textContent = (+hl.lag).toFixed(2);
+}
+function setHl(changes) {
+  Object.assign(hl, changes);
+  store.set("watchHighlight", JSON.stringify(hl));
+  showHl();
+}
+$("hlBox").addEventListener("input", (e) => {
+  const el = e.target;
+  if (el.id === "hlOn") setHl({ on: el.checked });
+  else if (el.dataset.hl) setHl({ [el.dataset.hl]: el.checked });
+  else if (el.id === "hlColour") setHl({ colour: el.value });
+  else if (el.id === "hlSize") setHl({ size: +el.value });
+  else if (el.id === "hlDim") setHl({ dim: +el.value });
+  else if (el.id === "hlLag") setHl({ lag: +el.value });
+});
+$("hlBox").addEventListener("change", (e) => e.target.blur());
+showHl();
 
 // ---- controls --------------------------------------------------------------------------------------------
 for (const id of ["who", "game", "guesses"]) $(id).addEventListener("change", (e) => { e.target.blur(); loadRuns(); });
@@ -375,6 +543,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "[") prevRun();
   else if (k === "m" || k === "M") toggleSound();
   else if (k === "t" || k === "T") openTagger();
+  else if (k === "h" || k === "H") setHl({ on: !hl.on });
   else if (k === "f" || k === "F") document.fullscreenElement ? document.exitFullscreen() : $("stage").requestFullscreen();
   else return;
   e.preventDefault();

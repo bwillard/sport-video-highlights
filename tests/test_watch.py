@@ -35,3 +35,29 @@ def test_watch_api(settings):
     assert got["total_s"] == round(got["runs"][0]["end_s"] - got["runs"][0]["start_s"], 1)
     one = client.get("/api/watch", params={"player": 38, "game": game.id}).json()
     assert one["runs"][0]["labelled"] < 1
+
+
+def test_boxes_for_the_highlight(settings):
+    import numpy as np
+
+    store, game = four_tracklets(settings)
+    only = watch.boxes(store, game, 38, guesses=False)
+    assert only.shape == (90, 6) and (only[:, 0] == np.arange(90)).all() and (only[:, 5] == 0).all()
+    assert np.allclose(only[:, 1], 0.1) and np.allclose(only[:, 3], 0.2)  # tracklet 1 (smoothing keeps a still box still)
+    both = watch.boxes(store, game, 38)
+    guessed = both[both[:, 5] == 1]
+    assert len(guessed) == 90 and guessed[0, 0] == 90 and np.allclose(guessed[:, 1], 0.5)  # the look-alike, after her
+    assert (np.diff(both[:, 0]) >= 0).all()
+    assert watch.boxes(store, game, 7).shape == (0, 6)
+
+
+def test_boxes_api(settings):
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    from soccer_clips.server.app import create_app
+
+    store, game = four_tracklets(settings)
+    r = TestClient(create_app(store)).get("/api/watch/boxes", params={"player": 38, "game": game.id, "guesses": False})
+    rows = np.frombuffer(r.content, "<f4").reshape(-1, 6)
+    assert len(rows) == 90 and rows[0, 0] == 0
