@@ -61,3 +61,24 @@ def test_boxes_api(settings):
     r = TestClient(create_app(store)).get("/api/watch/boxes", params={"player": 38, "game": game.id, "guesses": False})
     rows = np.frombuffer(r.content, "<f4").reshape(-1, 6)
     assert len(rows) == 90 and rows[0, 0] == 0
+
+
+def test_near_ball(settings):
+    import numpy as np
+
+    from soccer_clips.track import ball_game
+
+    store, game = four_tracklets(settings)  # her box: x 0.1-0.2, y 0.2-0.6, frames 0-89
+    frame = np.arange(180)
+    x = np.where((frame >= 30) & (frame < 40), 0.15, 0.9)  # at her feet for 10 frames, else across the pitch
+    y = np.where((frame >= 30) & (frame < 40), 0.62, 0.5)
+    ball_game.save_npz(ball_game.tracks_dir(store, game) / "ball.npz", frame=frame.astype(np.int32), x=x.astype(np.float32),
+                       y=y.astype(np.float32), r=np.full(180, 0.005, np.float32), conf=np.ones(180, np.float32),
+                       kind=np.ones(180, np.uint8), ranges=np.array([[0, 180]], np.int32))
+    assert watch.near_ball(store, game, 38, 0.25, guesses=False) == [[30, 40]]
+    assert watch.near_ball(store, game, 7, 5) == []
+    far = watch.near_ball(store, game, 38, 4, guesses=False)  # 0.7 of the frame's width away = ~3.1 heights
+    assert far[0][0] == 0
+    r = watch.runs(store, game, 38, guesses=False, ball=0.25)
+    fps = game.fps
+    assert len(r) == 1 and r[0]["start_s"] == 0 and abs(r[0]["end_s"] - (40 / fps + watch.BALL_AFTER_S)) < 0.05

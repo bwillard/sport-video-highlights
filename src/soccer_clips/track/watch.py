@@ -10,8 +10,8 @@ loading the next run in a second, hidden video while the current one plays, so e
 - `runs`: those padded, merged across short gaps (the tracking briefly losing them, or the camera
   glancing away), and short leftovers dropped.
 
-A later rule (e.g. only while the ball is near them) narrows `stretches` before `runs`: `intersect` it
-with frame ranges from the ball track and the player's boxes.
+- `near_ball` (the "ball within" filter): instead, only the moments the game ball is within so many of their
+  heights of them (`boxes` against the ball path), with a few seconds of build-up before and a little after.
 """
 
 import numpy as np
@@ -92,15 +92,50 @@ def _minus(span: list[int], holes: list[list[int]]) -> list[list[int]]:
     return out
 
 
+BALL_BEFORE_S = 3.0  # with the ball filter: the build-up before the ball reaches them
+BALL_AFTER_S = 2.0  # and what they did with it
+BALL_GAP_S = 1.0  # moments near the ball this close count as one
+BALL_MIN_FRAMES = 3  # a ball near them for fewer frames is more likely a wrong ball on the path
+
+
+def near_ball(store: Store, game: Game, player: int, within: float, guesses: bool = True,
+              min_score: float | None = None) -> list[list[int]]:
+    """Frames where the game ball is at most `within` of their box heights from their box (0 = touching it:
+    at their feet, or in front of them), merged across BALL_GAP_S; nothing if the game isn't ball-tracked."""
+    from soccer_clips.track import ball_game
+
+    path = ball_game.load_path(store, game)
+    rows = boxes(store, game, player, guesses, min_score)
+    if path is None or not len(rows) or not len(path["frame"]):
+        return []
+    bf = path["frame"]
+    i = np.minimum(np.searchsorted(bf, rows[:, 0]), len(bf) - 1)
+    both = bf[i] == rows[:, 0]
+    rows, i = rows[both], i[both]
+    bx, by = path["x"][i], path["y"][i]
+    W, H = game.width, game.height
+    dx = np.maximum.reduce([rows[:, 1] - bx, np.zeros(len(bx)), bx - rows[:, 3]]) * W
+    dy = np.maximum.reduce([rows[:, 2] - by, np.zeros(len(by)), by - rows[:, 4]]) * H
+    height = np.maximum((rows[:, 4] - rows[:, 2]) * H, 1.0)
+    near = np.unique(rows[np.hypot(dx, dy) / height <= within, 0].astype(np.int64))
+    spans = merge([(f, f + 1) for f in near.tolist()], round(BALL_GAP_S * game.fps))
+    return [[a, b] for a, b in spans if b - a >= BALL_MIN_FRAMES]
+
+
 def runs(store: Store, game: Game, player: int, guesses: bool = True, min_score: float | None = None,
-         pad_s: float = PAD_S, gap_s: float = GAP_S, min_s: float = MIN_S) -> list[dict]:
+         pad_s: float = PAD_S, gap_s: float = GAP_S, min_s: float = MIN_S, ball: float | None = None) -> list[dict]:
     """The runs to play: [{start_s, end_s, labelled}] in the game video's seconds; labelled = the share of the
-    run's on-screen time that comes from labels (the rest is guesses)."""
+    run's on-screen time that comes from labels (the rest is guesses). ball: only where the ball comes within
+    that many of their heights (near_ball), with build-up before and a little after."""
     labelled, guessed = stretches(store, game, player, guesses, min_score)
     fps, last = game.fps, game.frame_at(game.duration_s)
-    pad = round(pad_s * fps)
+    before = after = round(pad_s * fps)
+    spans = labelled + guessed
+    if ball is not None:
+        spans = near_ball(store, game, player, ball, guesses, min_score)
+        before, after, min_s = round(BALL_BEFORE_S * fps), round(BALL_AFTER_S * fps), 0
     out = []
-    for a, b in merge([(max(0, a - pad), min(last, b + pad)) for a, b in labelled + guessed], round(gap_s * fps)):
+    for a, b in merge([(max(0, a - before), min(last, b + after)) for a, b in spans], round(gap_s * fps)):
         if b - a < min_s * fps:
             continue
         lab = sum(y - x for x, y in intersect([[a, b]], labelled))
@@ -111,11 +146,11 @@ def runs(store: Store, game: Game, player: int, guesses: bool = True, min_score:
 
 
 def playlist(store: Store, games: list[Game], player: int, guesses: bool = True,
-             min_score: float | None = None) -> dict:
+             min_score: float | None = None, ball: float | None = None) -> dict:
     """Runs across games, in game order: {runs: [{game, start_s, end_s, labelled}], games: {id: {...}}}."""
     out, info = [], {}
     for g in games:  # one at a time: people.tracks holds one game, so threads would keep reloading each other's
-        rs = runs(store, g, player, guesses, min_score)
+        rs = runs(store, g, player, guesses, min_score, ball=ball)
         if not rs:
             continue
         out += [{"game": g.id, **r} for r in rs]
@@ -128,14 +163,32 @@ def playlist(store: Store, games: list[Game], player: int, guesses: bool = True,
 SMOOTH = 5  # frames averaged for a box (detections jitter a few pixels frame to frame)
 
 
+_boxes: dict = {}  # (game, player, guesses, min_score) -> (segments, auto labels, rows): reused while those are
+
+
 def boxes(store: Store, game: Game, player: int, guesses: bool = True, min_score: float | None = None) -> np.ndarray:
     """Where to draw `player` in the player view: float32 rows (frame, x1, y1, x2, y2, guessed), boxes as
     fractions of the frame, smoothed along each tracklet, sorted by frame (a labelled box before a guessed one)."""
-    from soccer_clips.track import people, reid
+    from soccer_clips.track import reid
 
-    spans = [(s["track"], s["start"], s["end"], 0.0) for s in _segments(store, game) if s["player"] == player]
-    if guesses:
-        auto = reid.auto_all(store, game, reid.AUTO_MIN if min_score is None else min_score)
+    segs = _segments(store, game)
+    auto = reid.auto_all(store, game, reid.AUTO_MIN if min_score is None else min_score) if guesses else None
+    key = (game.id, player, guesses, min_score)
+    hit = _boxes.get(key)
+    if hit and hit[0] is segs and hit[1] is auto:  # the same objects: nothing relabelled since
+        return hit[2]
+    rows = _boxes_of(store, game, player, segs, auto)
+    if len(_boxes) >= 16:
+        _boxes.pop(next(iter(_boxes)))
+    _boxes[key] = (segs, auto, rows)
+    return rows
+
+
+def _boxes_of(store: Store, game: Game, player: int, segs: list[dict], auto: dict | None) -> np.ndarray:
+    from soccer_clips.track import people
+
+    spans = [(s["track"], s["start"], s["end"], 0.0) for s in segs if s["player"] == player]
+    if auto is not None:
         spans += [(c["track"], c["start"], c["end"], 1.0) for c in auto.get(player, [])]
     t = people.tracks(store, game) if spans else None
     if t is None:
