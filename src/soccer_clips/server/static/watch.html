@@ -27,6 +27,7 @@
   label.opt { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
   #ballOpt input { width: 110px; }
   #ballOpt b { color: var(--text); font-weight: 400; min-width: 150px; }
+  #padOpt { display: inline-flex; gap: 10px; }
   #hl { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #hlBox .row { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
   #hlBox label { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font-size: 13px; }
@@ -44,8 +45,14 @@
   <select id="game" aria-label="game" title="One game, or every game back to back"></select>
   <label class="opt" title="Also play the stretches the appearance model is sure are them but nobody has labelled yet (the dashed #n? guesses in the tagger, at the tagger's 'auto-label at' setting). Off = only stretches you labelled.">
     <input type="checkbox" id="guesses" checked> likely too</label>
-  <label class="opt" id="ballOpt" title="Only the moments the game ball comes this close to them, measured in their own heights (so near and far players count alike; 0 = touching them), with 3 s of build-up before and 2 s after. Leftmost = any time they're on screen.&#10;Needs the game to be ball-tracked; where the ball path is wrong or missing, moments are missed or extra.">
+  <label class="opt" id="ballOpt" title="Only the moments the game ball comes this close to them, measured in their own heights (so near and far players count alike; 0 = touching them), each with the build-up before and a little after (set beside it). Leftmost = any time they're on screen.&#10;Needs the game to be ball-tracked; where the ball path is wrong or missing, moments are missed or extra.">
     ⚽ <input type="range" id="ball" min="0" max="7" step="1" aria-label="ball within"> <b id="ballV"></b></label>
+  <span class="opt" id="padOpt" hidden>
+    <label class="opt" title="How much of the build-up to show before the ball reaches them">before
+      <select id="before" aria-label="seconds before"></select></label>
+    <label class="opt" title="How long to keep playing after the ball leaves them">after
+      <select id="after" aria-label="seconds after"></select></label>
+  </span>
   <button id="sound">🔇 sound off</button>
   <span id="flash"></span>
 </div>
@@ -96,7 +103,7 @@
       Plays straight from the game video, skipping the time the player isn't on screen: a stretch is where they're
       labelled (or, with <i>likely too</i>, where the appearance model is sure it's them), with a second of lead-in
       and lead-out, and gaps under 3 s played through. With ⚽ set, only the moments the ball comes that close (in
-      their own heights: about 1 = an arm's reach and a step), with 3 s of build-up before and 2 s after.<br>
+      their own heights: about 1 = an arm's reach and a step), with some build-up before and a little after (<i>before</i> / <i>after</i>, 3 s and 2 s to start).<br>
       <kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> 5 s · <kbd>[</kbd> <kbd>]</kbd> previous / next stretch ·
       <kbd>M</kbd> sound · <kbd>F</kbd> full screen · <kbd>T</kbd> open in the tagger · <kbd>H</kbd> highlight on / off<br>
       The highlight goes where the tracking has them (labelled, or placed by appearance); where the tracker lost them
@@ -308,8 +315,11 @@ function drawList() {
 // the ball filter's steps: off, then within this many of their heights
 const BALL_STEPS = [null, 0.25, 0.5, 1, 1.5, 2, 3, 5];
 const ballWithin = () => BALL_STEPS[+$("ball").value];
+const PAD_STEPS = [0, 1, 2, 3, 4, 5, 8, 10, 15];
+for (const id of ["before", "after"]) $(id).innerHTML = PAD_STEPS.map((s) => `<option value="${s}">${s} s</option>`).join("");
 function showBall() {
   const w = ballWithin();
+  $("padOpt").hidden = w == null;
   $("ballV").textContent = w == null ? "any time on screen" : w <= 0.25 ? "ball at them" : `ball within ${w} height${w === 1 ? "" : "s"}`;
 }
 $("ball").addEventListener("input", showBall);
@@ -319,7 +329,10 @@ async function loadRuns() {
   const who = +$("who").value;
   if (!who) return;
   const game = $("game").value, guesses = $("guesses").checked, ball = ballWithin();
-  history.replaceState(null, "", makeHash({ player: who, game: game || "all", guesses: guesses ? null : "0", ball }));
+  const before = +$("before").value, after = +$("after").value;
+  history.replaceState(null, "", makeHash({ player: who, game: game || "all", guesses: guesses ? null : "0", ball,
+                                            before: ball == null ? null : before, after: ball == null ? null : after }));
+  store.set("watchBefore", before); store.set("watchAfter", after);
   store.set("watchWho", who); store.set("watchGame", game || "all"); store.set("watchGuesses", guesses ? "1" : "0");
   store.set("watchBall", ball ?? "");
   setPlaying(false);
@@ -329,7 +342,7 @@ async function loadRuns() {
   $("msg").hidden = false; $("msg").textContent = "";
   const q = new URLSearchParams({ player: who, guesses });
   if (game) q.set("game", game);
-  if (ball != null) q.set("ball", ball);
+  if (ball != null) { q.set("ball", ball); q.set("before", before); q.set("after", after); }
   const am = parseFloat(store.get("autoMin"));  // the tagger's "auto-label at" setting
   if (am) q.set("min_score", am);
   const bq = new URLSearchParams({ player: who, guesses });
@@ -337,7 +350,8 @@ async function loadRuns() {
   if (bq.toString() !== boxQuery) { boxQuery = bq.toString(); boxCache.clear(); shown = null; }
   let got;
   try { got = await getJson(`/api/watch?${q}`); } catch { return; } finally { clearTimeout(slow); }
-  if (+$("who").value !== who || $("game").value !== game || $("guesses").checked !== guesses || ballWithin() !== ball) return;  // changed meanwhile
+  if (+$("who").value !== who || $("game").value !== game || $("guesses").checked !== guesses || ballWithin() !== ball ||
+      +$("before").value !== before || +$("after").value !== after) return;  // changed meanwhile
   runs = got.runs; games = got.games; total = 0;
   starts = runs.map((r) => { const s = total; total += r.end_s - r.start_s; return s; });
   const name = firstNames[who] ? ` ${firstNames[who]}` : "";
@@ -369,6 +383,10 @@ async function init() {
   $("guesses").checked = (h.guesses ?? store.get("watchGuesses")) !== "0";
   const b = parseFloat(h.ball ?? store.get("watchBall"));
   $("ball").value = Math.max(0, BALL_STEPS.indexOf(Number.isNaN(b) ? null : b));
+  for (const [id, saved, dflt] of [["before", "watchBefore", 3], ["after", "watchAfter", 2]]) {
+    const x = +(h[id] ?? store.get(saved) ?? dflt);
+    $(id).value = PAD_STEPS.includes(x) ? x : dflt;
+  }
   showBall();
   loadRuns();
 }
@@ -509,7 +527,7 @@ $("hlBox").addEventListener("change", (e) => e.target.blur());
 showHl();
 
 // ---- controls --------------------------------------------------------------------------------------------
-for (const id of ["who", "game", "guesses", "ball"]) $(id).addEventListener("change", (e) => { e.target.blur(); loadRuns(); });
+for (const id of ["who", "game", "guesses", "ball", "before", "after"]) $(id).addEventListener("change", (e) => { e.target.blur(); loadRuns(); });
 $("play").addEventListener("click", (e) => { e.target.blur(); setPlaying(!playing); });
 $("prev").addEventListener("click", (e) => { e.target.blur(); prevRun(); });
 $("next").addEventListener("click", (e) => { e.target.blur(); startRun(cur + 1); });

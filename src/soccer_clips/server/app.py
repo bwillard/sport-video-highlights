@@ -891,15 +891,18 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.get("/api/watch")
     def watch_runs(player: int, game: str | None = None, guesses: bool = True, min_score: float | None = None,
-                   ball: float | None = None) -> dict:
+                   ball: float | None = None, before: float | None = None, after: float | None = None) -> dict:
         """The player view (watch.playlist): the runs of the game video where #player is on screen, in one game
         or (no game) all of them; guesses: include the stretches the appearance model claims, at min_score;
-        ball: only where the game ball comes within that many of their heights (watch.near_ball)."""
+        ball: only where the game ball comes within that many of their heights (watch.near_ball), each moment
+        with `before` seconds of build-up and `after` seconds after."""
         from soccer_clips.track import watch
 
         games = [load(game)] if game else sorted(store.list_games(), key=lambda g: (g.played_on is None, g.played_on, g.id))
         ms = None if min_score is None else min(max(min_score, 0.5), 1.0)
-        return watch.playlist(store, games, player, guesses, ms, None if ball is None else min(max(ball, 0.0), 10.0))
+        secs = lambda x, default: default if x is None else min(max(x, 0.0), 30.0)
+        return watch.playlist(store, games, player, guesses, ms, None if ball is None else min(max(ball, 0.0), 10.0),
+                              secs(before, watch.BALL_BEFORE_S), secs(after, watch.BALL_AFTER_S))
 
     @app.get("/api/watch/boxes")
     def watch_boxes(player: int, game: str, guesses: bool = True, min_score: float | None = None) -> Response:

@@ -63,18 +63,25 @@ def test_boxes_api(settings):
     assert len(rows) == 90 and rows[0, 0] == 0
 
 
-def test_near_ball(settings):
+def with_ball(settings):
+    """four_tracklets, and a game ball at her feet on frames 30-39 (her box: x 0.1-0.2, y 0.2-0.6, frames 0-89),
+    across the pitch otherwise."""
     import numpy as np
 
     from soccer_clips.track import ball_game
 
-    store, game = four_tracklets(settings)  # her box: x 0.1-0.2, y 0.2-0.6, frames 0-89
+    store, game = four_tracklets(settings)
     frame = np.arange(180)
     x = np.where((frame >= 30) & (frame < 40), 0.15, 0.9)  # at her feet for 10 frames, else across the pitch
     y = np.where((frame >= 30) & (frame < 40), 0.62, 0.5)
     ball_game.save_npz(ball_game.tracks_dir(store, game) / "ball.npz", frame=frame.astype(np.int32), x=x.astype(np.float32),
                        y=y.astype(np.float32), r=np.full(180, 0.005, np.float32), conf=np.ones(180, np.float32),
                        kind=np.ones(180, np.uint8), ranges=np.array([[0, 180]], np.int32))
+    return store, game
+
+
+def test_near_ball(settings):
+    store, game = with_ball(settings)
     assert watch.near_ball(store, game, 38, 0.25, guesses=False) == [[30, 40]]
     assert watch.near_ball(store, game, 7, 5) == []
     far = watch.near_ball(store, game, 38, 4, guesses=False)  # 0.7 of the frame's width away = ~3.1 heights
@@ -82,3 +89,16 @@ def test_near_ball(settings):
     r = watch.runs(store, game, 38, guesses=False, ball=0.25)
     fps = game.fps
     assert len(r) == 1 and r[0]["start_s"] == 0 and abs(r[0]["end_s"] - (40 / fps + watch.BALL_AFTER_S)) < 0.05
+
+
+def test_ball_lead_in_and_out(settings):
+    from fastapi.testclient import TestClient
+
+    from soccer_clips.server.app import create_app
+    store, game = with_ball(settings)
+    fps = game.fps
+    r = watch.runs(store, game, 38, guesses=False, ball=0.25, before_s=0.5, after_s=0)
+    assert len(r) == 1 and abs(r[0]["start_s"] - (30 / fps - 0.5)) < 0.05 and abs(r[0]["end_s"] - 40 / fps) < 0.05
+    got = TestClient(create_app(store)).get("/api/watch", params={"player": 38, "guesses": False, "ball": 0.25,
+                                                                  "before": 0.5, "after": 0}).json()
+    assert [(x["start_s"], x["end_s"]) for x in got["runs"]] == [(r[0]["start_s"], r[0]["end_s"])]

@@ -123,17 +123,18 @@ def near_ball(store: Store, game: Game, player: int, within: float, guesses: boo
 
 
 def runs(store: Store, game: Game, player: int, guesses: bool = True, min_score: float | None = None,
-         pad_s: float = PAD_S, gap_s: float = GAP_S, min_s: float = MIN_S, ball: float | None = None) -> list[dict]:
+         pad_s: float = PAD_S, gap_s: float = GAP_S, min_s: float = MIN_S, ball: float | None = None,
+         before_s: float = BALL_BEFORE_S, after_s: float = BALL_AFTER_S) -> list[dict]:
     """The runs to play: [{start_s, end_s, labelled}] in the game video's seconds; labelled = the share of the
     run's on-screen time that comes from labels (the rest is guesses). ball: only where the ball comes within
-    that many of their heights (near_ball), with build-up before and a little after."""
+    that many of their heights (near_ball), with before_s of build-up and after_s after each moment."""
     labelled, guessed = stretches(store, game, player, guesses, min_score)
     fps, last = game.fps, game.frame_at(game.duration_s)
     before = after = round(pad_s * fps)
     spans = labelled + guessed
     if ball is not None:
         spans = near_ball(store, game, player, ball, guesses, min_score)
-        before, after, min_s = round(BALL_BEFORE_S * fps), round(BALL_AFTER_S * fps), 0
+        before, after, min_s = round(before_s * fps), round(after_s * fps), 0
     out = []
     for a, b in merge([(max(0, a - before), min(last, b + after)) for a, b in spans], round(gap_s * fps)):
         if b - a < min_s * fps:
@@ -146,11 +147,12 @@ def runs(store: Store, game: Game, player: int, guesses: bool = True, min_score:
 
 
 def playlist(store: Store, games: list[Game], player: int, guesses: bool = True,
-             min_score: float | None = None, ball: float | None = None) -> dict:
+             min_score: float | None = None, ball: float | None = None, before_s: float = BALL_BEFORE_S,
+             after_s: float = BALL_AFTER_S) -> dict:
     """Runs across games, in game order: {runs: [{game, start_s, end_s, labelled}], games: {id: {...}}}."""
     out, info = [], {}
     for g in games:  # one at a time: people.tracks holds one game, so threads would keep reloading each other's
-        rs = runs(store, g, player, guesses, min_score, ball=ball)
+        rs = runs(store, g, player, guesses, min_score, ball=ball, before_s=before_s, after_s=after_s)
         if not rs:
             continue
         out += [{"game": g.id, **r} for r in rs]
