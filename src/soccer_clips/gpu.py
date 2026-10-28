@@ -451,10 +451,13 @@ kill -TERM 1
 
 # ---- jobs ----
 
-def ball_train_job(store: Store, stock: list[str], train_bases: list[str], epochs: int, batch: int = 4) -> Job:
+def ball_train_job(store: Store, stock: list[str], train_bases: list[str], epochs: int, batch: int = 4,
+                   current: str | None = None, subset: str | None = None) -> Job:
     """
     Optionally score `stock` bases on the bench frames, fine-tune `train_bases` (plus the best
     other stock base, when stock bases are given), and score the fine-tuned models on the bench.
+    current: a model in models/ (the one in use) also scored on the bench, for comparison; subset: a
+    frames file under the data root (JSON [[game_id, frame], ...]) every model is also scored on.
     """
     from soccer_clips.track import ball_labels
 
@@ -485,11 +488,27 @@ PY
 )
 echo "best other stock base: $BEST"
 """
+    if current:  # before training: it overwrites models/ball_<base>.pt
+        script += f"soccer-clips ball eval {current} --json $W/out/current.json {quiet}\n"
+        if subset:
+            script += f"soccer-clips ball eval {current} --frames-file $W/{subset} --json $W/out/current_subset.json {quiet}\n"
     script += f"""
 soccer-clips ball train {fixed} $BEST --epochs {epochs} --batch {batch} {quiet}
 soccer-clips ball eval $(for b in {fixed} $BEST; do echo ball_$b; done) --json $W/out/finetuned.json {quiet}
 """
+    if subset:
+        script += (f"soccer-clips ball eval $(for b in {fixed} $BEST; do echo ball_$b; done) --frames-file $W/{subset} "
+                   f"--json $W/out/finetuned_subset.json {quiet}\n")
     uploads = games + ["labels/ball_tasks.json", "labels/ball.jsonl", "labels/dataset"] + frames
+    if current:
+        from soccer_clips.track.benchmark import models_dir
+
+        uploads.append(str((models_dir(store) / f"{current}.pt").relative_to(root)))
+    if subset:
+        uploads.append(subset)
+        wanted = [tuple(x) for x in json.loads((root / subset).read_text())]
+        uploads += sorted({str(ball_labels.frame_image(store, store.load_game(g), f).relative_to(root)) for g, f in wanted}
+                          - set(uploads))
     if (root / "labels/ball_others.json").exists():
         uploads.append("labels/ball_others.json")
     return Job(
@@ -503,26 +522,27 @@ soccer-clips ball eval $(for b in {fixed} $BEST; do echo ball_$b; done) --json $
 
 
 def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 6,
-                   log=print) -> Job:
+                   log=print, model: str = "ball_yolo26x", fresh: bool = False) -> Job:
     """
     Game-ball paths for games: 'clips' uploads just the tagged-clip stretches still to do
     (cut here into segments), 'all' uploads the original videos. Games go one after another,
     each split into chunks detected by `workers` processes at once (one CPU core each for
     decoding and camera motion was the limit: the GPU sat idle with one). Brings back each
-    game's tracks/ folder.
+    game's tracks/ folder. model: the ball model in models/ (a new name for new weights: the volume
+    only notices a changed file by its size); fresh: redo every frame (a new model), not just what's missing.
     """
     from soccer_clips.track import ball_game
     from soccer_clips.track.benchmark import models_dir
 
     root = data_root(store)
     uploads = []
-    big = [str((models_dir(store) / "ball_yolo26x.pt").relative_to(root))]  # kept on the volume if there is one
+    big = [str((models_dir(store) / f"{model}.pt").relative_to(root))]  # kept on the volume if there is one
     for gid in game_ids:
         game = store.load_game(gid)
         game_dir = store.game_dir(game.year, game.id)
         uploads.append(str((game_dir / "game.json").relative_to(root)))
         raw = game_dir / "tracks" / "ball_raw.npz"
-        if raw.exists():  # what's done already: the pod only does the rest
+        if raw.exists() and not fresh:  # what's done already: the pod only does the rest
             uploads.append(str(raw.relative_to(root)))
         if mode == "clips":
             big += [str(p.relative_to(root)) for p in ball_game.prepare_segments(store, game, mode, log)]
@@ -533,7 +553,7 @@ def ball_games_job(store: Store, game_ids: list[str], mode: str, workers: int = 
     script = f"""
 for g in {ids}; do
   # one game failing mustn't stop the others (the setup runs with pipefail)
-  soccer-clips ball track-game $g --mode {mode} --workers {workers} {quiet} || echo "FAILED: $g"
+  soccer-clips ball track-game $g --mode {mode} --workers {workers} --model {model} {quiet} || echo "FAILED: $g"
 done
 """
     return Job(name=f"ball-games-{mode}", uploads=uploads, volume_files=big, script=script, downloads=["games"],

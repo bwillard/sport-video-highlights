@@ -175,6 +175,11 @@ class AssignIn(RequestBody):
     stretches: list[StretchIn] = Field(max_length=2000)
 
 
+class RetrainIn(RequestBody):
+    kind: Literal["reid", "ball"] = "reid"
+    action: Literal["train", "retrack"] = "train"
+
+
 class SplitIn(RequestBody):
     game: str
     track: int
@@ -798,34 +803,37 @@ def create_app(store: Store | None = None) -> FastAPI:
         return {"roster": roster.model_dump(exclude_none=True)["players"]}
 
     @app.get("/api/retrain")
-    def retrain_get() -> dict:
-        """The recognition model in use (when trained, on how much), what a retrain costs, and the current or last
-        retrain."""
+    def retrain_get(kind: Literal["reid", "ball"] = "reid") -> dict:
+        """A model's state for its panel: in use since when, how it scores, what retraining costs, the last runs and
+        the current or last job (reid: the recognition model; ball: the ball detector, ball_retrain.overview)."""
         from soccer_clips import retrain
 
+        if kind == "ball":
+            from soccer_clips import ball_retrain
+
+            return ball_retrain.overview(store)
         return {"model": retrain.model_info(store), "estimate": retrain.estimate(store), "status": retrain.status(store),
-                "history": retrain.history(store),
-                "runpod": bool(os.environ.get("RUNPOD_API_KEY"))}
+                "history": retrain.history(store), "runpod": bool(os.environ.get("RUNPOD_API_KEY"))}
 
     @app.post("/api/retrain")
-    def retrain_start() -> dict:
-        """Start a retrain (RunPod; runs on its own, detached from the server)."""
+    def retrain_start(body: RetrainIn | None = None) -> dict:
+        """Start a job on RunPod (detached from the server): retrain a model, or re-track the games' balls."""
         from soccer_clips import retrain
 
+        body = body or RetrainIn()
         try:
-            return {"status": retrain.start(store)}
+            return {"status": retrain.start(store, body.kind, body.action)}
+        except KeyError:
+            raise HTTPException(422, f"no {body.action} for {body.kind}")
         except RuntimeError as e:  # one running already, or RunPod not set up (ConfigError)
             raise HTTPException(409, str(e))
 
     @app.get("/api/retrain/log")
-    def retrain_log(lines: int = 40) -> dict:
-        """The end of the current or last retrain's log."""
+    def retrain_log(kind: Literal["reid", "ball"] = "reid", lines: int = 40) -> dict:
+        """The end of the current or last job's log."""
         from soccer_clips import retrain
 
-        st = retrain.status(store) or {}
-        p = retrain.status_path(store).parent / st.get("log", "-")
-        text = p.read_text(errors="replace").splitlines()[-min(max(lines, 1), 400):] if st.get("log") and p.exists() else []
-        return {"lines": text}
+        return {"lines": retrain.log_tail(store, kind, min(max(lines, 1), 400))}
 
     @app.get("/api/roster/pictures")
     def roster_pictures(view: Literal["player", "probable", "unassigned", "unsure"], player: int | None = None,

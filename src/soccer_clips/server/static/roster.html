@@ -70,32 +70,6 @@
   #splitBox .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   #typed { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #23272e; border: 1px solid var(--accent);
            padding: 8px 16px; border-radius: 6px; font-size: 16px; display: none; z-index: 10; }
-  .model { padding: 4px 12px 16px; font-size: 12px; line-height: 1.6; color: var(--muted); }
-  .model b { color: var(--text); font-weight: 600; }
-  .model button { margin: 6px 0 2px; }
-  .model .run { color: var(--warn); }
-  .model .bad { color: var(--bad); }
-  .model > div { margin-bottom: 6px; }
-  .model .big { font-size: 20px; font-weight: 700; color: var(--in); }
-  .model .meters { margin: 2px 0 8px; }
-  .model .meter { display: flex; align-items: center; gap: 6px; font-size: 11px; }
-  .model .meter .lbl { width: 90px; flex: none; }
-  .model .meter .track { flex: 1; height: 8px; background: #2a2a2a; border-radius: 4px; overflow: hidden; }
-  .model .meter .fill { display: block; height: 100%; }
-  .model .meter .fill.tuned { background: var(--in); }
-  .model .meter .fill.stock { background: #777; }
-  .model .meter .fill.chance { background: #444; }
-  .model .meter .v { width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
-  .model .news { color: var(--warn); }
-  .model .msg { color: var(--muted); }
-  .model details { margin-top: 6px; }
-  .model summary { cursor: pointer; }
-  .model table { border-collapse: collapse; margin: 4px 0; font-variant-numeric: tabular-nums; width: 100%; }
-  .model th { font-weight: 400; text-align: left; font-size: 11px; padding: 0 4px 2px 0; }
-  .model td { padding: 1px 4px 1px 0; white-space: nowrap; }
-  .model tr.use td { color: var(--text); }
-  .model td small { color: var(--muted); }
-  .model pre { font-size: 10px; max-height: 180px; overflow: auto; background: #151515; padding: 4px; white-space: pre-wrap; margin: 4px 0 0; }
   .keys { color: var(--muted); font-size: 12px; line-height: 1.8; padding: 10px 12px; }
 </style>
 </head>
@@ -150,6 +124,7 @@
 </div></div>
 
 <script src="/static/common.js"></script>
+<script src="/static/retrain.js"></script>
 <script>
 // The roster: names for numbers, and the pictures (tracklet stretches: crops from the start, middle and end)
 // that go with each player, from every game. Select pictures and type a number or drop them on a name to
@@ -563,111 +538,55 @@ $("splitSave").addEventListener("click", saveSplit);
 $("splitCancel").addEventListener("click", closeSplit);
 $("splitBox").addEventListener("click", (e) => { if (e.target === $("splitBox")) closeSplit(); });
 
-// ---- the recognition model: when it was trained, and retraining it on RunPod ----
-let retrain = null, retrainTimer = null;
-const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "?";
-const pct = (x) => x == null ? "?" : `${Math.round(x * 100)}%`;
-
-let retrainBusy = false;
-async function loadRetrain() {
-  if (retrainBusy) return;  // one at a time
-  retrainBusy = true;
-  try { await loadRetrainNow(); } finally { retrainBusy = false; }
-}
-async function loadRetrainNow() {
-  try { retrain = await getJson("/api/retrain"); } catch (e) { $("model").textContent = String(e.message || e); return; }
-  const st = retrain.status, running = st?.state === "running";
-  let logText = "";
-  if (running || $("model").querySelector("details[data-k=log][open]")) {
-    try { logText = (await getJson("/api/retrain/log?lines=30")).lines.join("\n"); } catch { /* not yet */ }
-  }
-  renderRetrain(logText);
-  clearTimeout(retrainTimer);
-  if (running) retrainTimer = setTimeout(loadRetrain, 15000);
-  else if (st?.state === "done" && retrain._wasRunning) { loadRoster(); load(); }  // new signatures: new guesses
-  retrain._wasRunning = running;
-}
-
-function renderRetrain(logText) {
-  const m = retrain.model, est = retrain.estimate, st = retrain.status, running = st?.state === "running";
-  const runs = retrain.history || [], cur = runs.find((r) => r.in_use) || null;
-  const top = (sc) => sc?.player_top1 ?? sc?.all_top1;  // each player counting the same where the run has it
-  const day = (iso) => iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }) : "?";
-  const thenMin = m?.labelled_minutes ? Object.values(m.labelled_minutes).reduce((a, b) => a + b, 0) : null;
-  const nowMin = Object.values(stats.players).reduce((a, p) => a + p.seconds, 0) / 60;
-  const newGames = m?.games ? games.size - m.games.length : 0;
-  const parts = [];
-
-  // the model in use, as one number with what it's compared against
-  if (m && cur) {
-    const tuned = top(cur.tuned), stock = top(cur.stock), chance = cur.tuned.all_chance;
-    parts.push(`<div>Gets the right player <span class="big">${pct(tuned)}</span> of the time</div>
-      <div class="meters" title="Tested on games the model wasn't trained on">
-        ${[["this model", tuned, "tuned"], ["before training", stock, "stock"], ["random guess", chance, "chance"]].map(([t, v, c]) =>
-          `<div class="meter"><span class="lbl">${t}</span><span class="track"><span class="fill ${c}" style="width:${Math.round((v || 0) * 100)}%"></span></span><span class="v">${pct(v)}</span></div>`).join("")}
-      </div>
-      <div>Trained ${day(m.trained_at)} on ${m.games ? m.games.length + " games and " : ""}${thenMin != null ? Math.round(thenMin) + " min of labels" : "your labels"}.</div>`);
-    if (thenMin != null && nowMin > thenMin * 1.2 || newGames > 0) {
-      parts.push(`<div class="news">Since then: ${nowMin > thenMin ? `<b>+${Math.round(nowMin - thenMin)} min</b> of labels` : ""}${newGames > 0 ? `${nowMin > thenMin ? " and " : ""}<b>${newGames} new game${newGames > 1 ? "s" : ""}</b>` : ""}. Retraining should help.</div>`);
+// ---- the recognition model: when it was trained, and retraining it on RunPod (retrain.js) ----
+const pct = retrainPct;
+const topScore = (sc) => sc?.player_top1 ?? sc?.all_top1;  // each player counting the same where the run has it
+const panel = retrainPanel($("model"), {
+  kind: "reid",
+  onDone: () => { loadRoster(); load(); },  // new signatures: new guesses
+  summary: (r) => {
+    const m = r.model, runs = r.history || [], cur = runs.find((x) => x.in_use) || null;
+    const thenMin = m?.labelled_minutes ? Object.values(m.labelled_minutes).reduce((a, b) => a + b, 0) : null;
+    const nowMin = Object.values(stats.players).reduce((a, p) => a + p.seconds, 0) / 60;
+    const newGames = m?.games ? games.size - m.games.length : 0;
+    const parts = [];
+    if (m && cur) {
+      parts.push(`<div>Gets the right player <span class="big">${pct(topScore(cur.tuned))}</span> of the time</div>
+        ${retrainMeters([["this model", topScore(cur.tuned), "tuned"], ["before training", topScore(cur.stock), "stock"], ["random guess", cur.tuned.all_chance, "chance"]],
+                        "Tested on games the model wasn't trained on")}
+        <div>Trained ${retrainDay(m.trained_at)} on ${m.games ? m.games.length + " games and " : ""}${thenMin != null ? Math.round(thenMin) + " min of labels" : "your labels"}.</div>`);
+      if (thenMin != null && nowMin > thenMin * 1.2 || newGames > 0) {
+        parts.push(`<div class="news">Since then: ${nowMin > thenMin ? `<b>+${Math.round(nowMin - thenMin)} min</b> of labels` : ""}${newGames > 0 ? `${nowMin > thenMin ? " and " : ""}<b>${newGames} new game${newGames > 1 ? "s" : ""}</b>` : ""}. Retraining should help.</div>`);
+      }
+    } else {
+      parts.push("<div>No trained model yet: using the stock one.</div>");
     }
-  } else {
-    parts.push("<div>No trained model yet: using the stock one.</div>");
-  }
-
-  // a retrain going on, or how the last one ended
-  if (st) {
-    const cls = st.state === "running" ? "run" : st.state === "failed" ? "bad" : "";
-    const label = st.state === "running" ? `Retraining (${st.step}), started ${when(st.started)}` : st.state === "failed" ? `The last retrain failed (${when(st.finished || st.updated)})` : `Last retrain finished ${when(st.finished)}`;
-    parts.push(`<div class="${cls}">${esc(label)}${st.dollars ? ` · $${st.dollars.toFixed(2)} spent` : ""}${st.message ? `<br><span class="msg">${esc(st.message)}</span>` : ""}</div>`);
-  }
-
-  // earlier runs, one line each
-  const earlier = runs.filter((r) => !r.in_use);
-  if (earlier.length) {
-    parts.push(`<div class="earlier">Earlier runs:${earlier.map((r) => `<br>${day(r.date)}: ${pct(top(r.tuned))} right (before training ${pct(top(r.stock))})${r.labelled_minutes != null ? `, ${r.labelled_minutes} min of labels` : ""}${r.installed === false ? " · <i>not used: no better</i>" : ""}`).join("")}</div>`);
-  }
-
-  parts.push(retrain.runpod
-    ? `<button id="retrainBtn" ${running ? "disabled" : ""}>${running ? "Retraining…" : `Retrain now · about ${est.minutes} min, $${est.dollars.toFixed(2)}`}</button>`
-    : `<div>Retraining needs RunPod (RUNPOD_API_KEY in .env).</div>`);
-  parts.push(`<details data-k="how"><summary>How is this measured?</summary><div class="msg">
-    For every labelled moment of every player, the test asks: among our players on screen right then, does her tracklet look
-    most like her? Her “look” comes from her labels in the other games, and each game is tested with a model that never
-    trained on it. Each player's hit rate counts the same in the average (players with at least 5 moments)${runs.some((r) => r.tuned.player_top1 == null) ? "; older runs counted every moment, so players with more labels weighed more" : ""}.
-    “Before training” is the stock model on the same test, which shows how hard that test was: the gap between the two is
-    what training added. A new model is only used if it does about as well as the one in use (within 5 points).
-    ${cur?.tuned.same_top1 != null ? `<br>Also: a player matches herself 10–20 s later ${pct(cur.tuned.same_top1)} of the time (${pct(cur.stock.same_top1)} before training).` : ""}
-  </div></details>`);
-  if (st?.log) parts.push(`<details data-k="log" ${running ? "open" : ""}><summary>log</summary><pre>${esc(logText || "…")}</pre></details>`);
-  // a redraw keeps each fold-out as the viewer left it
-  const open = Object.fromEntries([...$("model").querySelectorAll("details[data-k]")].map((d) => [d.dataset.k, d.open]));
-  $("model").innerHTML = parts.join("");
-  for (const d of $("model").querySelectorAll("details[data-k]")) if (d.dataset.k in open) d.open = open[d.dataset.k];
-  const pre = $("model").querySelector("pre");
-  if (pre) pre.scrollTop = pre.scrollHeight;
-}
-
-$("model").addEventListener("click", async (e) => {
-  if (e.target.id !== "retrainBtn") return;
-  const est = retrain.estimate;
-  if (!confirm(`Retrain the recognition model on RunPod?\n\nAbout ${est.minutes} min and $${est.dollars.toFixed(2)}. ` +
-               `Player crops (small pictures, not the videos) and your labels are sent to the RunPod machine and deleted after.\n\n` +
-               `It runs on its own: closing this page or restarting the server doesn't stop it. Each machine deletes itself ` +
-               `after its time limit (3 h in all, at most about $${est.max_dollars.toFixed(2)}) even if this computer is off.`)) return;
-  try {
-    await api("POST", "/api/retrain");
-    flash("retrain started");
-  } catch (err) { flash(String(err.message || err), true); }
-  loadRetrain();
-});
-// opening the log fetches it now; only a click on it does (redraws open and close fold-outs too, and their
-// toggle events would set off another fetch, and so on)
-$("model").addEventListener("click", (e) => {
-  const d = e.target.closest("summary")?.parentElement;
-  if (d?.dataset.k === "log" && !d.open) setTimeout(loadRetrain, 0);
+    const earlier = runs.filter((x) => !x.in_use);
+    if (earlier.length) {
+      parts.push(`<div>Earlier runs:${earlier.map((x) => `<br>${retrainDay(x.date)}: ${pct(topScore(x.tuned))} right (before training ${pct(topScore(x.stock))})${x.labelled_minutes != null ? `, ${x.labelled_minutes} min of labels` : ""}${x.installed === false ? " · <i>not used: no better</i>" : ""}`).join("")}</div>`);
+    }
+    return parts.join("");
+  },
+  actions: (r) => [{
+    action: "train",
+    label: `Retrain now · about ${r.estimate.minutes} min, $${r.estimate.dollars.toFixed(2)}`,
+    confirm: `Retrain the recognition model on RunPod?\n\nAbout ${r.estimate.minutes} min and $${r.estimate.dollars.toFixed(2)}. ` +
+             `Player crops (small pictures, not the videos) and your labels are sent to the RunPod machine and deleted after.\n\n` +
+             `It runs on its own: closing this page or restarting the server doesn't stop it. Each machine deletes itself ` +
+             `after its time limit (3 h in all, at most about $${r.estimate.max_dollars.toFixed(2)}) even if this computer is off.`,
+  }],
+  how: (r) => {
+    const runs = r.history || [], cur = runs.find((x) => x.in_use);
+    return `For every labelled moment of every player, the test asks: among our players on screen right then, does her tracklet look
+      most like her? Her “look” comes from her labels in the other games, and each game is tested with a model that never
+      trained on it. Each player's hit rate counts the same in the average (players with at least 5 moments)${runs.some((x) => x.tuned.player_top1 == null) ? "; older runs counted every moment, so players with more labels weighed more" : ""}.
+      “Before training” is the stock model on the same test, which shows how hard that test was: the gap between the two is
+      what training added. A new model is only used if it does about as well as the one in use (within 5 points).
+      ${cur?.tuned.same_top1 != null ? `<br>Also: a player matches herself 10–20 s later ${pct(cur.tuned.same_top1)} of the time (${pct(cur.stock.same_top1)} before training).` : ""}`;
+  },
 });
 
-init().then(loadRetrain);
+init().then(panel.load);
 </script>
 </body>
 </html>

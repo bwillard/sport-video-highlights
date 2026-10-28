@@ -99,10 +99,15 @@
       A blurred streak is still <b>visible</b>: click its middle. A ball in the air counts too.
       Spare balls lying by the sideline are <b>not</b> the game ball: add them with <kbd>O</kbd> instead.
     </div>
+    <div class="box">
+      <h3>Ball model</h3>
+      <div id="ballModel" class="model">…</div>
+    </div>
   </aside>
 </div>
 
 <script src="/static/common.js"></script>
+<script src="/static/retrain.js"></script>
 <script>
 const view = $("view"), ctx = view.getContext("2d");
 const loupe = $("loupe"), lctx = loupe.getContext("2d");
@@ -405,7 +410,63 @@ document.addEventListener("keyup", (e) => {
 });
 window.addEventListener("blur", () => { if (peeking != null) unpeek(); });
 
+// ---- the ball model: when it was trained, retraining it and re-tracking the games on RunPod (retrain.js) ----
+const ballPanel = retrainPanel($("ballModel"), {
+  kind: "ball",
+  summary: (r) => {
+    const m = r.model, sc = m?.scores, L = r.labels, T = r.tracks, runs = r.history || [];
+    const parts = [];
+    if (sc) {
+      parts.push(`<div>Finds <span class="big">${retrainPct(sc.found)}</span> of the balls in the test frames</div>
+        ${retrainMeters([["balls found", sc.found, "tuned"], ["finds that are real", sc.real, "stock"]],
+                        "On the benchmark frames (never trained on), at confidence 0.25")}
+        <div>Trained ${retrainDay(m.trained_at)}${m.labels ? ` on ${m.labels.train} labelled frames` : ""}.</div>`);
+    } else {
+      parts.push(m ? `<div>Model from ${retrainDay(m.trained_at)} (no scores on record).</div>` : "<div>No fine-tuned ball model yet.</div>");
+    }
+    if (L.train_new + L.bench_new >= 10) {
+      parts.push(`<div class="news">Since then: <b>${L.train_new + L.bench_new}</b> new labelled frames (${L.train_new} to train on, ${L.bench_new} to test on), mostly your fixes. Retraining should help.</div>`);
+    }
+    const last = runs[0];
+    if (last?.old) {  // the last run scored both models on the same test frames
+      parts.push(`<div>Last retrain (${retrainDay(last.date)}): new model found ${retrainPct(last.new.found)}, the one before ${retrainPct(last.old.found)}${last.new_fixed && last.old_fixed ? `; on the ${last.new_fixed.frames} balls you fixed: ${retrainPct(last.new_fixed.found)} vs ${retrainPct(last.old_fixed.found)}` : ""}${last.installed === false ? " · <i>not used: no better</i>" : ""}.</div>`);
+    }
+    const earlier = runs.filter((x) => !x.in_use && !(x === last && x.old));  // the rest, beside the headline and that line
+    if (earlier.length) {
+      parts.push(`<div>Earlier runs:${earlier.map((x) => `<br>${retrainDay(x.date)}: found ${retrainPct(x.new.found)}, ${retrainPct(x.new.real)} real${x.installed === false ? " · <i>not used</i>" : ""}`).join("")}</div>`);
+    }
+    parts.push(T.older ? `<div class="news">${T.older} of ${T.games} games were tracked with an older model: re-track them to see this one in the tagger.</div>`
+                       : `<div>All ${T.tracked} game tracks use this model.</div>`);
+    return parts.join("");
+  },
+  actions: (r) => {
+    const e = r.estimate, safe = "It runs on its own: closing this page or restarting the server doesn't stop it, and the machine " +
+      "deletes itself at its time limit even if this computer is off";
+    return [{
+      action: "train",
+      label: `Retrain · about ${e.train_minutes} min, $${e.train_dollars.toFixed(2)}`,
+      confirm: `Retrain the ball model on RunPod?\n\nAbout ${e.train_minutes} min and $${e.train_dollars.toFixed(2)}. ` +
+               `The labelled frames (stills, not the videos) are sent to the RunPod machine and deleted after. ` +
+               `The new model is only used if it does at least as well as the one in use; the game tracks stay as they are ` +
+               `until you re-track.\n\n${safe} (at most about $${e.train_max_dollars.toFixed(2)}).`,
+    }, {
+      action: "retrack",
+      label: `Re-track all ${e.games} games · about ${(e.retrack_minutes / 60).toFixed(1)} h, $${e.retrack_dollars.toFixed(2)}`,
+      confirm: `Re-track every game's ball with the model in use?\n\nAbout ${(e.retrack_minutes / 60).toFixed(1)} hours and ` +
+               `$${e.retrack_dollars.toFixed(2)}, from the game videos already on the RunPod storage. Every frame is done again; ` +
+               `your fixes are put back afterwards.\n\n${safe} (at most about $${e.retrack_max_dollars.toFixed(2)}).`,
+    }];
+  },
+  how: () => `The test frames are the benchmark set: one in five labelled frames, including one in five of your fixes, and
+    never trained on. “Balls found” is the share of visible game balls the model detects (at confidence 0.25); “finds
+    that are real” is the share of its detections that are a real ball (the game ball, or a spare: those count).
+    A retrain scores the new model and the one in use on today's test frames, and on just the ones labelled since the
+    model in use was made (mostly balls it missed), and keeps the new one unless it does worse. Earlier runs were
+    tested on the frames there were then, so compare them loosely.`,
+});
+
 init();
+ballPanel.load();
 </script>
 </body>
 </html>

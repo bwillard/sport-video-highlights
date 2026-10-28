@@ -1,5 +1,8 @@
 """
-Retraining the player recognition model from the app (roster page): fine-tune on RunPod (gpu.reid_train_job),
+Retraining models from the app on RunPod: the player recognition model here ("reid", roster page), the ball
+detector in ball_retrain.py ("ball", ball labels page); the running, status and safety parts are shared.
+
+The player recognition model: fine-tune on RunPod (gpu.reid_train_job),
 keep the new model only if it scores about as well as the one in use, then recompute every game's appearance
 signatures with it (gpu.reid_sigs_job).
 
@@ -33,8 +36,12 @@ def _gpu_dir(store: Store) -> Path:
     return gpu.data_root(store) / "gpu"
 
 
-def status_path(store: Store) -> Path:
-    return _gpu_dir(store) / "retrain.json"
+STATUS_FILES = {"reid": "retrain.json", "ball": "ball-retrain.json"}  # one job of each kind at a time
+COMMANDS = {("reid", "train"): ["retrain-reid"], ("ball", "train"): ["retrain-ball"], ("ball", "retrack"): ["retrack-balls"]}
+
+
+def status_path(store: Store, kind: str = "reid") -> Path:
+    return _gpu_dir(store) / STATUS_FILES[kind]
 
 
 def _model_info_path(store: Store) -> Path:
@@ -136,9 +143,9 @@ def _alive(pid: int | None) -> bool:
         return True
 
 
-def status(store: Store) -> dict | None:
-    """The current or last retrain (gpu/retrain.json); a "running" one whose process has gone is "failed"."""
-    p = status_path(store)
+def status(store: Store, kind: str = "reid") -> dict | None:
+    """The current or last job of a kind (gpu/retrain.json, ...); a "running" one whose process has gone is "failed"."""
+    p = status_path(store, kind)
     if not p.exists():
         return None
     st = json.loads(p.read_text())
@@ -147,8 +154,8 @@ def status(store: Store) -> dict | None:
     return st
 
 
-def _save_status(store: Store, **fields) -> dict:
-    p = status_path(store)
+def _save_status(store: Store, kind: str = "reid", **fields) -> dict:
+    p = status_path(store, kind)
     st = json.loads(p.read_text()) if p.exists() else {}
     st.update(fields, updated=datetime.now().isoformat(timespec="seconds"))
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -156,22 +163,31 @@ def _save_status(store: Store, **fields) -> dict:
     return st
 
 
-def start(store: Store) -> dict:
-    """Start a retrain in its own process (detached: it outlives the server). Raises RuntimeError if one is running."""
-    st = status(store)
+def start(store: Store, kind: str = "reid", action: str = "train") -> dict:
+    """Start a job in its own process (detached: it outlives the server). Raises RuntimeError if one of the kind
+    is running, or KeyError for an unknown kind / action."""
+    cmd = COMMANDS[(kind, action)]
+    st = status(store, kind)
     if st and st.get("state") == "running":
-        raise RuntimeError("a retrain is already running")
+        raise RuntimeError("one is already running")
     gpu._api_key()  # fail now, not in the background, if RunPod isn't set up
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log = _gpu_dir(store) / f"retrain-{stamp}.log"
+    log = _gpu_dir(store) / f"{cmd[0]}-{stamp}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(status_path(store), json.dumps({"state": "running", "step": "starting", "started": datetime.now().isoformat(timespec="seconds"),
-                                                      "log": log.name}, indent=1) + "\n")
+    atomic_write_text(status_path(store, kind), json.dumps({"state": "running", "action": action, "step": "starting",
+                                                            "started": datetime.now().isoformat(timespec="seconds"), "log": log.name}, indent=1) + "\n")
     with open(log, "ab") as out:
-        proc = subprocess.Popen([sys.executable, "-m", "soccer_clips.cli", "gpu", "retrain-reid", "--log-name", log.name],
+        proc = subprocess.Popen([sys.executable, "-m", "soccer_clips.cli", "gpu", *cmd, "--log-name", log.name],
                                 stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                                 cwd=str(Path(__file__).resolve().parents[2]))
-    return _save_status(store, pid=proc.pid)
+    return _save_status(store, kind, pid=proc.pid)
+
+
+def log_tail(store: Store, kind: str, lines: int) -> list[str]:
+    """The end of the current or last job's log."""
+    st = status(store, kind) or {}
+    p = _gpu_dir(store) / st.get("log", "-")
+    return p.read_text(errors="replace").splitlines()[-lines:] if st.get("log") and p.exists() else []
 
 
 def _better_enough(new: dict | None, stock: dict | None, old: dict | None) -> tuple[bool, str]:

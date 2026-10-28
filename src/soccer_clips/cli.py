@@ -209,10 +209,11 @@ def cmd_ball(store: Store, args: argparse.Namespace) -> None:
         from soccer_clips.track.benchmark import models_dir
 
         scores = {}
+        frames = [tuple(x) for x in json.loads(Path(args.frames_file).read_text())] if args.frames_file else None
         for name in args.models:
             weights = Path(name) if Path(name).exists() else models_dir(store) / f"{name}.pt"
             label = name + ("" if args.full else "-centre")
-            scores[label] = ball_train.evaluate(store, weights, crop=not args.full, imgsz=args.imgsz)
+            scores[label] = ball_train.evaluate(store, weights, crop=not args.full, imgsz=args.imgsz, frames=frames)
             print(ball_labels.score_table({label: scores[label]}).split("\n", 1)[1], flush=True)
             if args.json:
                 Path(args.json).write_text(json.dumps(scores, indent=2))
@@ -442,6 +443,11 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
         from soccer_clips import retrain
 
         retrain.run(store, log=lambda m: print(m, flush=True), log_name=args.log_name)
+    elif args.gpu_command in ("retrain-ball", "retrack-balls"):
+        from soccer_clips import ball_retrain
+
+        step = ball_retrain.run_train if args.gpu_command == "retrain-ball" else ball_retrain.run_retrack
+        step(store, log=lambda m: print(m, flush=True), log_name=args.log_name)
     elif args.gpu_command == "sweep":
         from soccer_clips import retrain
 
@@ -528,6 +534,7 @@ def main() -> None:
     ev.add_argument("--full", action="store_true", help="whole frame instead of the centre crop")
     ev.add_argument("--imgsz", type=int, default=1280)
     ev.add_argument("--json", help="also write the scores to this file")
+    ev.add_argument("--frames-file", help="score on these labelled frames instead: JSON [[game_id, frame], ...]")
     score = ball_sub.add_parser("score", help="score benchmark ball detections against the bench labels")
     score.add_argument("--results", default="results", help="results folder in bench/ (e.g. results-l4)")
     pp = sub.add_parser("people", help="person boxes and tracklets per game (Phase 3.2)")
@@ -631,6 +638,9 @@ def main() -> None:
     rr = g_sub.add_parser("retrain-reid", help="fine-tune the recognition model, keep it if it scores as well, re-sign "
                           "every game (what the roster page's Retrain button starts)")
     rr.add_argument("--log-name", help=argparse.SUPPRESS)
+    for name, about in (("retrain-ball", "fine-tune the ball model, keep it if it scores as well (the ball labels page's Retrain)"),
+                        ("retrack-balls", "every game's ball track again with the ball model in use, hand fixes kept")):
+        g_sub.add_parser(name, help=about).add_argument("--log-name", help=argparse.SUPPRESS)
     g_sub.add_parser("sweep", help="delete soccer-clips pods past their deadline")
     vol = g_sub.add_parser("volume", help="network volume for game videos and models (status with no subcommand)")
     vol_sub = vol.add_subparsers(dest="volume_command")
