@@ -568,7 +568,13 @@ let retrain = null, retrainTimer = null;
 const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "?";
 const pct = (x) => x == null ? "?" : `${Math.round(x * 100)}%`;
 
+let retrainBusy = false;
 async function loadRetrain() {
+  if (retrainBusy) return;  // one at a time
+  retrainBusy = true;
+  try { await loadRetrainNow(); } finally { retrainBusy = false; }
+}
+async function loadRetrainNow() {
   try { retrain = await getJson("/api/retrain"); } catch (e) { $("model").textContent = String(e.message || e); return; }
   const st = retrain.status, running = st?.state === "running";
   let logText = "";
@@ -654,7 +660,12 @@ $("model").addEventListener("click", async (e) => {
   } catch (err) { flash(String(err.message || err), true); }
   loadRetrain();
 });
-$("model").addEventListener("toggle", (e) => { if (e.target.open && e.target.dataset.k === "log") loadRetrain(); }, true);  // fetch the log
+// opening the log fetches it now; only a click on it does (redraws open and close fold-outs too, and their
+// toggle events would set off another fetch, and so on)
+$("model").addEventListener("click", (e) => {
+  const d = e.target.closest("summary")?.parentElement;
+  if (d?.dataset.k === "log" && !d.open) setTimeout(loadRetrain, 0);
+});
 
 init().then(loadRetrain);
 </script>
