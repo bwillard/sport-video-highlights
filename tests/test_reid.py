@@ -72,6 +72,17 @@ def test_train_and_evaluate(tmp_path):
     assert r["stretches"] == 1 and r["chance"] == pytest.approx(1 / 6)
     assert 0 <= r["her_auc"] <= 1 and r["same_n"] > 0
     assert r["mates_players"] == 1 and r["mates_n"] == 1
+    assert set(r["players"]) == {"38", "5"} and reid.summary({"tuned": {"a": r}})["tuned"]["pooled_all_n"] == 2
+
+
+def test_pooled_scores_count_each_player_the_same():
+    per_game = {"a": {"players": {"38": [9, 10, 1.0], "5": [1, 5, 1.0], "7": [1, 1, 0.5]}, "same_top1": 0.8, "same_n": 10},
+                "b": {"players": {"38": [10, 10, 1.0], "5": [4, 5, 1.0]}, "same_top1": 0.6, "same_n": 30}}
+    p = reid.pooled(per_game)
+    assert p["player_top1"] == pytest.approx((19 / 20 + 5 / 10) / 2) and p["players"] == 2  # #7: too few moments
+    assert p["all_top1"] == pytest.approx(25 / 31) and p["all_n"] == 31 and p["same_top1"] == pytest.approx(0.65)
+    old = reid.pooled({"a": {"stretches": 10, "her_top1": 0.9, "chance": 0.1, "mates_n": 10, "mates_top1": 0.5, "mates_chance": 0.1}})
+    assert "player_top1" not in old and old["all_top1"] == pytest.approx(0.7) and old["all_chance"] == pytest.approx(0.1)
 
 
 def test_every_nth_frame_is_exact(settings):

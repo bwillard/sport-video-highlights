@@ -60,6 +60,11 @@
   .model button { margin: 6px 0 2px; }
   .model .run { color: var(--warn); }
   .model .bad { color: var(--bad); }
+  .model table { border-collapse: collapse; margin: 4px 0; font-variant-numeric: tabular-nums; width: 100%; }
+  .model th { font-weight: 400; text-align: left; font-size: 11px; padding: 0 4px 2px 0; }
+  .model td { padding: 1px 4px 1px 0; white-space: nowrap; }
+  .model tr.use td { color: var(--text); }
+  .model td small { color: var(--muted); }
   .model pre { font-size: 10px; max-height: 180px; overflow: auto; background: #151515; padding: 4px; white-space: pre-wrap; margin: 4px 0 0; }
   .keys { color: var(--muted); font-size: 12px; line-height: 1.8; padding: 10px 12px; }
 </style>
@@ -488,7 +493,6 @@ function renderRetrain(logText) {
   const lines = [];
   if (m) {
     lines.push(`Trained <b>${when(m.trained_at)}</b>${m.games ? ` on ${m.games.length} games` : ""}${m.train_dollars != null ? ` ($${m.train_dollars.toFixed(2)})` : ""}.`);
-    if (m.scores) lines.push(`On games it didn't see: #38 picked out ${pct(m.scores.her_top1)}, teammates ${pct(m.scores.mates_top1)} of the time.`);
     if (thenMin != null) lines.push(`Labels then <b>${Math.round(thenMin)} min</b>, now <b>${Math.round(nowMin)} min</b>${m.games && games.size > m.games.length ? `, and ${games.size - m.games.length} new game(s)` : ""}.`);
   } else {
     lines.push("No fine-tuned model yet (using the stock one).");
@@ -497,6 +501,17 @@ function renderRetrain(logText) {
     const cls = st.state === "running" ? "run" : st.state === "failed" ? "bad" : "";
     const label = st.state === "running" ? `Retraining: ${st.step}… since ${when(st.started)}` : st.state === "failed" ? `Last retrain failed ${when(st.finished || st.updated)}` : `Last retrain ${when(st.finished)}`;
     lines.push(`<span class="${cls}">${esc(label)}${st.dollars ? ` · $${st.dollars.toFixed(2)} so far` : ""}</span>${st.message ? `<br>${esc(st.message)}` : ""}`);
+  }
+  const runs = retrain.history || [];
+  if (runs.length) {
+    // each player counting the same where the run has per-player counts, else every labelled moment (older runs)
+    const top = (sc) => sc.player_top1 ?? sc.all_top1;
+    const row = (r) => `<tr class="${r.in_use ? "use" : ""}" title="${esc(r.run)}${r.why ? ": " + esc(r.why) : ""}">
+      <td>${r.in_use ? "▸ " : ""}${when(r.date)}</td><td>${r.labelled_minutes != null ? r.labelled_minutes + "m" : "?"}</td>
+      <td>${pct(top(r.tuned))}${r.tuned.player_top1 == null ? "*" : ""} <small>(${pct(top(r.stock))})</small></td>
+      <td>${pct(r.tuned.same_top1)}</td><td>${r.installed === false ? "<small>kept old</small>" : ""}</td></tr>`;
+    lines.push(`<table title="Scored on games each model never saw (3-fold). Picked out: at each labelled moment, is that player's tracklet the one on our team most like them (their look from the other games)? Each player counts the same; * older run: every labelled moment, so players with more labels weigh more. In brackets: the stock model on the same test. Chance about ${pct(runs[0].tuned.all_chance)}. Same girl: a tracklet matches itself 10-20 s later better than the teammates on screen (no labels needed).">
+      <tr><th>Trained</th><th>Labels</th><th>Picked out</th><th>Same girl</th><th></th></tr>${runs.map(row).join("")}</table>`);
   }
   const btn = retrain.runpod
     ? `<button id="retrainBtn" ${running ? "disabled" : ""} title="Fine-tune on RunPod with every label so far, keep the new model if it scores as well, then recompute every game's signatures">${running ? "Retraining…" : `Retrain (~${est.minutes} min, ~$${est.dollars.toFixed(2)})`}</button>`

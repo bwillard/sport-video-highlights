@@ -484,7 +484,8 @@ def evaluate(games: dict[str, Crops], feats: dict[str, np.ndarray], test: list[s
       chance:   1 / (teammates on screen + 1);
       mates_top1: the same as her_top1 for every other labelled player (pooled), with mates_chance;
       same_top1: an our-team tracklet's crops now (within NEAR_S) match its own crops 10-20 s later better
-                than the other teammates on screen then (labels come from the tracker, so a few are wrong).
+                than the other teammates on screen then (labels come from the tracker, so a few are wrong);
+      players:  every labelled player's [hits, moments, sum of chance] (PLAYER too), for pooled().
     """
     out = {}
     for gid in test:
@@ -508,6 +509,7 @@ def evaluate(games: dict[str, Crops], feats: dict[str, np.ndarray], test: list[s
                 pos.append(s_p)
                 neg += s_m
             res[player] = (top1, chance, pos, neg)
+        per_player = {str(p): [int(sum(v[0])), len(v[0]), float(sum(v[1]))] for p, v in res.items() if v[0]}
         her = res.pop(PLAYER, ([], [], [], []))
         mates = [x for v in res.values() for x in v[0]]
         mates_chance = [x for v in res.values() for x in v[1]]
@@ -529,7 +531,7 @@ def evaluate(games: dict[str, Crops], feats: dict[str, np.ndarray], test: list[s
         out[gid] = {"stretches": len(her[0]), "her_top1": mean(her[0]), "chance": mean(her[1]),
                     "her_auc": _auc(her[2], her[3]), "mates_top1": mean(mates), "mates_chance": mean(mates_chance),
                     "mates_n": len(mates), "mates_players": len(res),
-                    "same_top1": mean(same), "same_n": len(same)}
+                    "same_top1": mean(same), "same_n": len(same), "players": per_player}
     return out
 
 
@@ -541,11 +543,56 @@ def folds(game_ids: list[str], n: int) -> list[list[str]]:
     return [game_ids[i::n] for i in range(n)]
 
 
+MIN_PLAYER_MOMENTS = 5  # a player counts in player_top1 with at least this many test moments
+
+
+def pooled(per_game: dict) -> dict:
+    """
+    Scores that don't single out one player, from evaluate()'s per-game results:
+      player_top1: each player's top-1 over all the test games, averaged over players (each counts the same;
+                   those with >= MIN_PLAYER_MOMENTS moments), with player_chance and players (how many);
+      all_top1:    top-1 over every labelled moment of anyone (players with more labels weigh more), all_chance;
+      same_top1:   same girl later, over every test game.
+    Older results (no per-player counts) give only all_top1 and same_top1, from the #38 and teammates scores.
+    """
+    rs = [r for r in per_game.values() if isinstance(r, dict)]
+    out: dict = {}
+    if rs and all("players" in r for r in rs):
+        tot: dict[str, list[float]] = {}
+        for r in rs:
+            for p, (h, n, c) in r["players"].items():
+                t = tot.setdefault(p, [0, 0, 0.0])
+                t[0] += h
+                t[1] += n
+                t[2] += c
+        enough = [t for t in tot.values() if t[1] >= MIN_PLAYER_MOMENTS]
+        if enough:
+            out.update(player_top1=float(np.mean([h / n for h, n, _ in enough])),
+                       player_chance=float(np.mean([c / n for _, n, c in enough])), players=len(enough))
+        n = sum(t[1] for t in tot.values())
+        hits, chance = sum(t[0] for t in tot.values()), sum(t[2] for t in tot.values())
+    else:
+        n = hits = chance = 0.0
+        for r in rs:
+            for top, ch, k in (("her_top1", "chance", "stretches"), ("mates_top1", "mates_chance", "mates_n")):
+                if r.get(top) is not None and r.get(k):
+                    n += r[k]
+                    hits += r[top] * r[k]
+                    chance += (r.get(ch) or 0) * r[k]
+    if n:
+        out.update(all_top1=hits / n, all_chance=chance / n, all_n=int(n))
+    same_n = sum(r.get("same_n") or 0 for r in rs)
+    if same_n:
+        out["same_top1"] = sum((r.get("same_top1") or 0) * (r.get("same_n") or 0) for r in rs) / same_n
+    return out
+
+
 def summary(results: dict) -> dict:
-    """Means over games of each score, per model."""
+    """Means over games of each score, per model, and the pooled scores (pooled())."""
     keys = ("her_top1", "chance", "her_auc", "mates_top1", "mates_chance", "same_top1")
-    return {name: {k: float(np.nanmean([r[k] for r in per.values() if r.get(k) is not None] or [np.nan]))
-                   for k in keys} for name, per in results.items()}
+    return {name: {**{k: float(np.nanmean([r[k] for r in per.values() if r.get(k) is not None] or [np.nan])) for k in keys},
+                   **{f"pooled_{k}": v for k, v in pooled(per).items()}}
+            for name, per in results.items() if name != "summary"}
 
 
 def run_experiment(folder: Path, stock: Path, out: Path, n_folds: int = 3, steps: int = 3000,

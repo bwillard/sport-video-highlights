@@ -392,6 +392,8 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
                             log=lambda m: print(m, flush=True), countries=args.countries,
                             use_volume=not args.no_volume, fallback=not args.no_fallback)
         print(f"run folder: {runner.dir}", flush=True)
+        if args.job == "reid-train":  # what it learns from, for the roster page's run history
+            shutil.copy(gpu.data_root(store) / "reid" / "index.json", runner.dir / "bundle_index.json")
         try:
             results = runner.run()
         finally:  # install whatever came back, even from a run that failed part-way

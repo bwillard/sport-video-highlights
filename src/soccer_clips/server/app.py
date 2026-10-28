@@ -797,6 +797,7 @@ def create_app(store: Store | None = None) -> FastAPI:
         from soccer_clips import retrain
 
         return {"model": retrain.model_info(store), "estimate": retrain.estimate(store), "status": retrain.status(store),
+                "history": retrain.history(store),
                 "runpod": bool(os.environ.get("RUNPOD_API_KEY"))}
 
     @app.post("/api/retrain")

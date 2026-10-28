@@ -24,7 +24,8 @@ from soccer_clips.store import Store, atomic_write_text
 
 TRAIN_HOURS = 2.0  # hard limit on the training pod (runs so far: 52-54 min)
 SIGS_HOURS = 1.0  # and on the signatures pod (9-10 min)
-WORSE_BY = 0.05  # keep the old model if the new one is this much worse on either score (top-1, held-out games)
+WORSE_BY = 0.05  # keep the old model if the new one picks out players this much less often (held-out games)
+HISTORY = 3  # training runs shown side by side
 SWEEP_GRACE_S = 600  # a pod this long past its deadline is deleted by the server
 
 
@@ -70,6 +71,17 @@ def _labelled_minutes(index: dict) -> dict[str, float]:
     return {p: round(m, 1) for p, m in sorted(out.items(), key=lambda x: int(x[0]))}
 
 
+def _scores(run_dir: Path) -> dict | None:
+    """A training run's held-out scores, {"stock": ..., "tuned": ...} (reid.pooled: not about any one player)."""
+    from soccer_clips.track import reid
+
+    f = run_dir / "results" / "out" / "reid_results.json"
+    if not f.exists():
+        return None
+    r = json.loads(f.read_text())
+    return {m: reid.pooled(r.get(m, {})) for m in ("stock", "tuned")}
+
+
 def model_info(store: Store) -> dict | None:
     """When the model in use was trained, on what, how it scored and what it cost. Written when a retrain installs
     a model; for an older model, worked out from its run folder."""
@@ -84,9 +96,9 @@ def model_info(store: Store) -> dict | None:
     if not model.exists() or run is None:
         return None
     info = {"trained_at": datetime.fromtimestamp(model.stat().st_mtime).isoformat(timespec="minutes"), "run": run.name}
-    res = run / "results" / "out" / "reid_results.json"
-    if res.exists():
-        info["scores"] = json.loads(res.read_text())["summary"].get("tuned")
+    sc = _scores(run)
+    if sc:
+        info["scores"], info["stock_scores"] = sc["tuned"], sc["stock"]
     idx = gpu.data_root(store) / "reid" / "index.json"  # the bundle it was trained on (until the next one)
     if idx.exists() and idx.stat().st_mtime <= model.stat().st_mtime:
         index = json.loads(idx.read_text())
@@ -162,15 +174,52 @@ def start(store: Store) -> dict:
     return _save_status(store, pid=proc.pid)
 
 
-def _better_enough(new: dict | None, old: dict | None) -> tuple[bool, str]:
-    if not new:
+def _better_enough(new: dict | None, stock: dict | None, old: dict | None) -> tuple[bool, str]:
+    """Keep the new model unless it's no better than stock, or picks out players WORSE_BY less often than the
+    model in use (each player counting the same where both runs have that; else every labelled moment)."""
+    if not new or "all_top1" not in new:
         return False, "the run brought back no scores"
-    if not old:
-        return True, "no earlier scores to compare with"
-    worse = [k for k in ("her_top1", "mates_top1") if new.get(k, 0) < old.get(k, 0) - WORSE_BY]
-    msg = (f"#38 top-1 {old.get('her_top1', 0):.0%} → {new.get('her_top1', 0):.0%}, "
-           f"teammates {old.get('mates_top1', 0):.0%} → {new.get('mates_top1', 0):.0%}")
-    return not worse, msg
+    key = "player_top1" if old and "player_top1" in old and "player_top1" in new else "all_top1"
+    msg = f"players picked out {new[key]:.0%} (stock {(stock or {}).get(key, 0):.0%})"
+    if stock and new[key] <= stock.get(key, 0):
+        return False, msg + ": no better than the stock model"
+    if not old or key not in old:
+        return True, msg
+    msg = f"players picked out {old[key]:.0%} → {new[key]:.0%} (stock {(stock or {}).get(key, 0):.0%})"
+    return new[key] >= old[key] - WORSE_BY, msg
+
+
+def history(store: Store, n: int = HISTORY) -> list[dict]:
+    """The last n training runs that brought back scores, newest first: when, games, labels, held-out scores of the
+    stock and tuned models, whether its model was installed (and is in use), and what it cost."""
+    use = (model_info(store) or {}).get("run")
+    out = []
+    for d in sorted(_gpu_dir(store).glob("*-reid-train"), reverse=True):
+        sc = _scores(d)
+        if not sc:
+            continue
+        r = json.loads((d / "results" / "out" / "reid_results.json").read_text())
+        try:
+            date = datetime.strptime(d.name[:15], "%Y%m%d-%H%M%S").isoformat(timespec="minutes")
+        except ValueError:  # not a run folder name
+            date = None
+        row = {"run": d.name, "date": date,
+               "games": len(r.get("tuned", {})), **sc, "in_use": d.name == use}
+        idx = d / "bundle_index.json"
+        if idx.exists():
+            row["labelled_minutes"] = round(sum(_labelled_minutes(json.loads(idx.read_text())).values()))
+        elif d.name == use and (model_info(store) or {}).get("labelled_minutes"):
+            row["labelled_minutes"] = round(sum(model_info(store)["labelled_minutes"].values()))
+        v = d / "verdict.json"
+        if v.exists():
+            row.update(json.loads(v.read_text()))
+        cost = _run_cost(d)
+        if cost:
+            row["dollars"] = cost[1]
+        out.append(row)
+        if len(out) >= n:
+            break
+    return out
 
 
 def run(store: Store, log=print, log_name: str | None = None) -> None:
@@ -186,16 +235,18 @@ def run(store: Store, log=print, log_name: str | None = None) -> None:
         index = json.loads((gpu.data_root(store) / "reid" / "index.json").read_text())
         runner = gpu.Runner(store, job, gpu_types=gpu.GPU_TYPES, max_hours=TRAIN_HOURS, log=log)
         _save_status(store, train_run=runner.run_id)
+        atomic_write_text(runner.dir / "bundle_index.json", json.dumps(index) + "\n")  # what it learned from
         try:
             results = runner.run()
         finally:
             spent += (_run_cost(runner.dir) or (0, 0))[1]
             _save_status(store, dollars=round(spent, 2))
-        res = results / "out" / "reid_results.json"
-        scores = json.loads(res.read_text())["summary"] if res.exists() else {}
-        ok, why = _better_enough(scores.get("tuned"), (old or {}).get("scores"))
+        scores = _scores(runner.dir) or {}
+        ok, why = _better_enough(scores.get("tuned"), scores.get("stock"), (old or {}).get("scores"))
         new_model = results / "out" / reid.TUNED
-        if not ok or not new_model.exists():
+        ok = ok and new_model.exists()
+        atomic_write_text(runner.dir / "verdict.json", json.dumps({"installed": ok, "why": why}) + "\n")
+        if not ok:
             _save_status(store, state="done", step="kept the old model", message=f"kept the model in use: {why}",
                          finished=datetime.now().isoformat(timespec="seconds"), scores=scores)
             log(f"kept the old model: {why}")

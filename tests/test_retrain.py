@@ -29,21 +29,29 @@ def test_estimate_and_model_info_from_old_runs(settings):
     from soccer_clips.track.benchmark import models_dir
 
     (run / "results" / "out").mkdir(parents=True)
-    (run / "results" / "out" / "reid_results.json").write_text(json.dumps({"summary": {"tuned": {"her_top1": 0.7, "mates_top1": 0.8}}}))
+    old_style = {"g": {"stretches": 30, "her_top1": 0.7, "chance": 0.1, "mates_n": 10, "mates_top1": 0.9, "mates_chance": 0.2}}
+    (run / "results" / "out" / "reid_results.json").write_text(json.dumps({"stock": old_style, "tuned": old_style}))
     (gpu.data_root(store) / "reid").mkdir()
     (gpu.data_root(store) / "reid" / "index.json").write_text(json.dumps({"g": {"fps": 30, "named": [[1, 0, 1800, 38], [2, 0, 900, 5]]}}))
     models_dir(store).mkdir(parents=True, exist_ok=True)
     (models_dir(store) / reid.TUNED).write_bytes(b"x")
     info = retrain.model_info(store)
-    assert info["run"] == run.name and info["scores"]["mates_top1"] == 0.8 and info["train_dollars"] == 1.03
+    assert info["run"] == run.name and info["scores"]["all_top1"] == pytest.approx(0.75) and info["train_dollars"] == 1.03
+    hist = retrain.history(store)
+    assert [h["run"] for h in hist] == [run.name] and hist[0]["in_use"] and hist[0]["labelled_minutes"] == 2
     assert info["games"] == ["g"] and info["labelled_minutes"] == {"5": 0.5, "38": 1.0}
 
 
 def test_keeps_the_old_model_only_if_the_new_one_is_clearly_worse():
-    old = {"her_top1": 0.70, "mates_top1": 0.82}
-    assert retrain._better_enough({"her_top1": 0.68, "mates_top1": 0.90}, old)[0]
-    assert not retrain._better_enough({"her_top1": 0.60, "mates_top1": 0.90}, old)[0]
-    assert retrain._better_enough({"her_top1": 0.1}, None)[0] and not retrain._better_enough(None, old)[0]
+    stock = {"all_top1": 0.3, "player_top1": 0.3}
+    old = {"all_top1": 0.73}  # an older run: no per-player score, so every labelled moment is compared
+    assert retrain._better_enough({"all_top1": 0.70, "player_top1": 0.8}, stock, old)[0]
+    assert not retrain._better_enough({"all_top1": 0.60, "player_top1": 0.9}, stock, old)[0]
+    old = {"all_top1": 0.73, "player_top1": 0.85}
+    ok, why = retrain._better_enough({"all_top1": 0.60, "player_top1": 0.83}, stock, old)
+    assert ok and why == "players picked out 85% → 83% (stock 30%)"
+    assert not retrain._better_enough({"all_top1": 0.3, "player_top1": 0.25}, stock, None)[0]  # no better than stock
+    assert retrain._better_enough({"all_top1": 0.5}, None, None)[0] and not retrain._better_enough(None, stock, old)[0]
 
 
 def test_status_notices_a_dead_process(settings):
@@ -103,7 +111,7 @@ def test_run_installs_a_good_model_and_resigns(settings, monkeypatch):
 
     class FakeRunner:
         def __init__(self, store, job, gpu_types, max_hours, log):
-            self.run_id = f"x-{job.name}"
+            self.run_id = f"20261028-0{len(ran)}0000-{job.name}"
             self.dir = gpu.data_root(store) / "gpu" / self.run_id
             self.job = job
             ran.append((job.name, max_hours))
@@ -114,7 +122,8 @@ def test_run_installs_a_good_model_and_resigns(settings, monkeypatch):
             (self.dir / "log.txt").write_text("total 50 min, about $1.00\n")
             if self.job.name == "reid-train":
                 (out / reid.TUNED).write_bytes(b"new")
-                (out / "reid_results.json").write_text(json.dumps({"summary": {"tuned": {"her_top1": 0.8, "mates_top1": 0.9}}}))
+                per = lambda h: {"g": {"players": {"38": [h, 10, 1.0], "5": [h, 10, 1.0]}, "same_top1": 0.9, "same_n": 5}}
+                (out / "reid_results.json").write_text(json.dumps({"stock": per(3), "tuned": per(9)}))
             return self.dir / "results"
 
     def train_job(store, ids):
@@ -131,4 +140,6 @@ def test_run_installs_a_good_model_and_resigns(settings, monkeypatch):
     assert (models_dir(store) / "reid_osnet_ain.prev.pt").read_bytes() == b"old"
     st = retrain.status(store)
     assert st["state"] == "done" and st["dollars"] == 2.0
-    assert retrain.model_info(store)["scores"]["mates_top1"] == 0.9
+    assert retrain.model_info(store)["scores"]["player_top1"] == 0.9
+    h = retrain.history(store)[0]
+    assert h["installed"] is True and h["in_use"] and h["labelled_minutes"] == 1 and h["date"] == "2026-10-28T00:00"
