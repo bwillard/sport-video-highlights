@@ -13,6 +13,7 @@ dependencies = [
     "uvicorn",
     "watchfiles",  # serve restarts on code changes
     "pillow",
+    "scipy",  # pitch calibration
 ]
 
 [project.optional-dependencies]

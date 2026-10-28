@@ -138,6 +138,13 @@ class PickIn(RequestBody):
     track: int | None = None  # the tracklet meant, when boxes overlap (suggestions know it)
 
 
+class PitchPointIn(RequestBody):
+    frame: int = Field(ge=0)
+    x: float = Field(ge=0, le=1)  # fractions of the frame
+    y: float = Field(ge=0, le=1)
+    target: str  # a landmark, a line, or the centre circle (pitch.targets)
+
+
 class AnswerIn(RequestBody):
     track: int
     frame: int = Field(ge=0)  # a frame the tracklet has a box in
@@ -700,6 +707,47 @@ def create_app(store: Store | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(422, str(e))
         return {"pick": pick, **people_labels(game)}
+
+    @app.get("/api/games/{game_id}/pitch")
+    def game_pitch(game_id: str) -> dict:
+        """The pitch calibration: clicks (with how far off each is after the solve), the field's markings
+        and sizes, and what can be clicked on."""
+        from soccer_clips.track import pitch
+
+        return pitch.state(store, load(game_id))
+
+    @app.post("/api/games/{game_id}/pitch/points")
+    def game_pitch_add(game_id: str, body: PitchPointIn) -> dict:
+        """'This pixel is that landmark / on that line': adds the click and solves again."""
+        from soccer_clips.track import pitch
+
+        try:
+            return pitch.add_point(store, load(game_id), body.frame, body.x, body.y, body.target)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    @app.delete("/api/games/{game_id}/pitch/points/{index}")
+    def game_pitch_remove(game_id: str, index: int) -> dict:
+        from soccer_clips.track import pitch
+
+        try:
+            return pitch.remove_point(store, load(game_id), index)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+
+    @app.get("/api/games/{game_id}/pitch/frames")
+    def game_pitch_frames(game_id: str, start: int, end: int) -> Response:
+        """
+        Per game frame in [start, end): little-endian float32 rows of frame, then the 3x3 homography from
+        pitch metres to frame pixels (full size, row-major; NaN where not calibrated). For drawing the
+        field over the video and placing players on the map.
+        """
+        from soccer_clips.track import pitch
+
+        if not 0 <= start <= end or end - start > PEOPLE_MAX_FRAMES:
+            raise HTTPException(422, f"ask for up to {PEOPLE_MAX_FRAMES} frames")
+        rows = pitch.frame_rows(store, load(game_id), start, end)
+        return Response(rows.astype("<f4").tobytes(), media_type="application/octet-stream")
 
     @app.post("/api/games/{game_id}/people/answers")
     def game_people_answers(game_id: str, body: AnswersIn) -> dict:

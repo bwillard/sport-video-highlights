@@ -1,6 +1,6 @@
 # Phase 5 — Pitch Map (where everyone is on the field)
 
-**Status (2026-10-28):** planned, nothing built.
+**Status (2026-10-28):** 5.1–5.3 built and tried on PRSC: calibration clicks in the tagger (`Q`), the solve (`track/pitch.py`), the field lines layer over the video, and the map below the video with the camera's view, players and the ball (placed in the browser from the boxes; 5.4's smoothing and stored positions not built). The map is in the Player view too (a "field map" checkbox), with the player you're watching ringed, and players who leave the view fade out where they were last seen. All seven games are registered (5.0). Next: calibrate every game, then 5.4.
 **Goal:** For any moment of a game, know where each tracked player (and the ball) is on the field in metres, and show it as a top-down 2D map next to the video, synced frame by frame, in the tagger and the Player view.
 **Depends on:** Phase 3.2 player tracks, 4.2 teams, 4.3 names (all built), and the frame registration in `track/world.py` (built for the ball's fixed-object finder; six of seven games have it, fcu still needs `soccer-clips ball fixed-objects`).
 
@@ -48,6 +48,8 @@ Per game in `game.json`: the field's length and width as the solve estimated the
 - Drawing data for the map: the same lines, as polylines, at the solved sizes.
 
 ## 5.2 — Solving the calibration
+*As built (2026-10-28), after trying it on PRSC (see Findings): links are compared at fixed pixels of one view, not at pitch points, each link weighs about as much as one click, and the start can also come from the centre circle alone.*
+
 Unknowns: `H_pitch[k]` for every keyframe k (8 numbers each; ~300 keyframes means ~2,400 unknowns), plus the field's length and width and the marking sizes (5.1). Residuals, solved together with `scipy.optimize.least_squares` (sparse Jacobian, robust loss):
 1. **Clicks:** each click is mapped into its keyframe with `world.place`, then through `H_pitch[k]`. For a point landmark the residual is the distance to the landmark; for a line it's the distance to the line or circle (metres). Landmark positions are functions of the sizes, so the clicks also pull the sizes into place.
 2. **Size priors:** a gentle pull of length and width toward the 9v9 middle, and a tight pull of each marking size toward its standard value.
@@ -110,12 +112,14 @@ A canvas panel, drawn in the same `requestVideoFrameCallback` loop that draws bo
 - **Double-marked fields:** a click on the wrong set is flagged by its residual; the overlay shows which set the solve followed.
 
 ## Tasks
-- [ ] 5.0 Register fcu; spot-check `world.place` on player feet near frame edges
-- [ ] 5.1 Pitch model (9v9 landmarks and lines as functions of the sizes; standard marking sizes confirmed), with tests
-- [ ] 5.2 Solver (clicks + size priors + link consistency, BFS start, coverage report, wrong-line flag), with synthetic tests
-- [ ] 5.3 + 5.5 Map below the tagger's video, the field lines layer, and `Q` clicks; calibrate one game end to end
+- [x] 5.0 Register fcu (2026-10-28: 452 keyframes, 2020 links, every sampled frame placed; 802 ball detections on fixed objects blocked and its ball path redone). Player feet near frame edges: the PRSC overlay lines up to the edges by eye; measured spot checks still to do
+- [x] 5.1 Pitch model (9v9 landmarks and lines as functions of the sizes), with tests. Standard marking sizes from secondary sources, not yet checked against a field
+- [x] 5.2 Solver (clicks + size priors + link consistency, start from 4 landmarks or the centre circle, coverage, wrong-line flag, how sure each size is), with synthetic tests
+- [x] 5.3 + 5.5 Map below the tagger's video, the field lines layer, and `Q` clicks (tried end to end on PRSC in headless Chrome); calibrate one game fully (PRSC has the circle, halfway line and left goal so far)
 - [ ] 5.4 `pitch place`: player / ball positions, smoothing, view outline, off-pitch flag; yardsticks on that game
-- [ ] 5.5 Players and ball on the map (tagger), then the map below the Player view's video
+- [x] 5.5 Players and ball on the map in the tagger (placed in the browser from the box chunks; spectators > 3 m outside the lines left off)
+- [x] 5.5 The map below the Player view's video (tried on PRSC #38); players fading out over 6 s at their last place when they leave the view (only if that place is now out of view, so a broken tracklet leaves no ghost)
+- [ ] Bench players and subs sitting at the touchline show on the map (inside the 3 m margin); filter them in 5.4 (tracklets that stay put by the line)
 - [ ] Calibrate the remaining games; record results in Findings
 - [ ] 5.6 items as separate follow-ups
 
@@ -129,3 +133,8 @@ A canvas panel, drawn in the same `requestVideoFrameCallback` loop that draws bo
 
 ## Findings
 - **2026-10-28** — Planning check: six of seven games have `world.npz` (128–341 keyframes, 974–3124 links, every sampled frame placed); fcu has none yet. Sample frames: fc-1's lines are faint on grass, and PRSC's turf has white and yellow line sets on top of each other. That's why calibration starts with clicks.
+- **2026-10-28** — First real-data run (PRSC), with 20 clicks around the centre circle in one kickoff view (eyeballed by Claude from frames, left in the game as a starting point): all 141 keyframes calibrated, 100% of sampled frames placed, and the drawn circle and halfway line sit on the painted white ones in views 15–35 minutes later, ignoring the yellow set. Adding the left goal's posts through the tagger moved the length from the 9v9 middle (68.6 m) to 62.7 ± 2.9 m; the width stays unmeasured (45.7 ± 4.6) until a touchline or the right goal is clicked.
+- **2026-10-28** — Keyframe links disagree on ground points by a median 5 px (90th percentile 23 px, max 217 px), the same one link from the clicks as four: each link's own error, not a build-up along chains (ORB matches are mostly trees and stands, and a Veo view isn't an exact rotation). At 2 px per link point they outvoted the clicks and bent the solve (clicks 200 px off); now each link weighs about one click at 6 px.
+- **2026-10-28** — Links were first compared at pitch points in metres; the solve then grew the centre circle to 9.5 m (standard 7.3 ± 0.5), because rescaling the field moves those points onto ground where the links agree better. Compared at fixed pixels instead (`P_b · P_a⁻¹ · x` vs `H_ab · x`), the links don't care about scale and the circle stays at 7.3–7.9 m.
+- **2026-10-28** — Kickoff views often show only the centre circle and halfway line (three landmarks on one line), so the solve can also start from the centre spot, the two halfway-line crossings and 3+ circle points: the centre's harmonic conjugate gives the halfway line's vanishing point, whose polar is the circle's other diameter.
+- **2026-10-28** — Solve time for PRSC's 141 keyframes: 7–10 s while fcu was registering (load ~12 on 4 cores), 4 s with only the test suite alongside (load ~11); to measure on an idle machine, and on fcu (452 keyframes, the most). Stopping early (1e-3 of the cost) left positions a median 1.6 m off across the field, so it runs to 1e-6; starting from the previous calibration saved nothing and was taken back out.

@@ -157,7 +157,7 @@ def playlist(store: Store, games: list[Game], player: int, guesses: bool = True,
             continue
         out += [{"game": g.id, **r} for r in rs]
         info[g.id] = {"description": g.description, "played_on": g.played_on.isoformat() if g.played_on else None,
-                      "duration_s": g.duration_s, "fps": g.fps,
+                      "duration_s": g.duration_s, "fps": g.fps, "width": g.width, "height": g.height,
                       "kickoff_1h_s": g.kickoff_1h_s, "kickoff_2h_s": g.kickoff_2h_s}
     return {"runs": out, "games": info, "total_s": round(sum(r["end_s"] - r["start_s"] for r in out), 1)}
 
