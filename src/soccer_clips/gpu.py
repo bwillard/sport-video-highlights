@@ -312,10 +312,32 @@ class Runner:
         raise TimeoutError("pod never became reachable over ssh")
 
     def arm_dead_mans_switch(self) -> None:
-        """Stop the container (and so GPU billing) after max_hours even if we lose contact."""
+        """
+        Delete the pod (billing and its disk) after max_hours even if this machine is gone: a script on the pod
+        calls RunPod's API with our key (sent over ssh into a root-only file, not on a command line), then
+        stops the container if that failed. The deadline is also kept locally for retrain.sweep.
+        """
         secs = int(self.max_hours * 3600)
-        self.ssh(f"nohup bash -c 'sleep {secs}; kill -TERM 1' < /dev/null > /dev/null 2>&1 &")
-        self.log(f"pod will stop itself after {self.max_hours:g} h")
+        (self.dir / "deadline").write_text(f"{time.time() + secs:.0f}\n")
+        script = f"""sleep {secs}
+python3 - <<'PY'
+import urllib.request
+req = urllib.request.Request("{API}/pods/{self.pod['id']}", method="DELETE",
+                             headers={{"Authorization": "Bearer {_api_key()}", "User-Agent": "soccer-clips/0.1"}})
+for _ in range(5):
+    try:
+        urllib.request.urlopen(req, timeout=60)
+        break
+    except Exception:
+        import time; time.sleep(30)
+PY
+sleep 120
+kill -TERM 1
+"""
+        subprocess.run(["ssh", *self.ssh_args, "umask 077 && cat > /root/.deadline.sh && "
+                        "(nohup bash /root/.deadline.sh < /dev/null > /dev/null 2>&1 &)"],
+                       input=script.encode(), check=True, timeout=60)
+        self.log(f"pod will delete itself after {self.max_hours:g} h")
 
     def upload(self) -> None:
         root = data_root(self.store)

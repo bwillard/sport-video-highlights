@@ -6,10 +6,12 @@ and the reel page.
 
 import json
 import logging
+import os
 import re
 
 import numpy as np
 import shutil
+import threading
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -216,7 +218,23 @@ def create_app(store: Store | None = None) -> FastAPI:
         added = scan(store.settings, store)
         if added:
             logger.info("registered %d new game(s): %s", len(added), [g.id for g in added])
+        stop = threading.Event()
+        if os.environ.get("RUNPOD_API_KEY"):
+            threading.Thread(target=sweep_pods, args=(stop,), name="pod-sweep", daemon=True).start()
         yield
+        stop.set()
+
+    def sweep_pods(stop: threading.Event) -> None:
+        """Every 10 minutes: delete our RunPod pods past their deadline (retrain.sweep), in case a pod's own
+        switch failed."""
+        from soccer_clips import retrain
+
+        while not stop.is_set():
+            try:
+                retrain.sweep(store, log=logger.warning)
+            except Exception as e:
+                logger.warning("pod sweep failed: %s", e)
+            stop.wait(600)
 
     app = FastAPI(lifespan=lifespan)
     app.state.jobs = jobs
@@ -771,6 +789,35 @@ def create_app(store: Store | None = None) -> FastAPI:
                                                     for p in sorted(body.players, key=lambda p: p.number)]})
         save_roster(store.settings, roster)
         return {"roster": roster.model_dump(exclude_none=True)["players"]}
+
+    @app.get("/api/retrain")
+    def retrain_get() -> dict:
+        """The recognition model in use (when trained, on how much), what a retrain costs, and the current or last
+        retrain."""
+        from soccer_clips import retrain
+
+        return {"model": retrain.model_info(store), "estimate": retrain.estimate(store), "status": retrain.status(store),
+                "runpod": bool(os.environ.get("RUNPOD_API_KEY"))}
+
+    @app.post("/api/retrain")
+    def retrain_start() -> dict:
+        """Start a retrain (RunPod; runs on its own, detached from the server)."""
+        from soccer_clips import retrain
+
+        try:
+            return {"status": retrain.start(store)}
+        except RuntimeError as e:  # one running already, or RunPod not set up (ConfigError)
+            raise HTTPException(409, str(e))
+
+    @app.get("/api/retrain/log")
+    def retrain_log(lines: int = 40) -> dict:
+        """The end of the current or last retrain's log."""
+        from soccer_clips import retrain
+
+        st = retrain.status(store) or {}
+        p = retrain.status_path(store).parent / st.get("log", "-")
+        text = p.read_text(errors="replace").splitlines()[-min(max(lines, 1), 400):] if st.get("log") and p.exists() else []
+        return {"lines": text}
 
     @app.get("/api/roster/pictures")
     def roster_pictures(view: Literal["player", "probable", "unassigned", "unsure"], player: int | None = None,

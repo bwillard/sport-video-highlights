@@ -436,6 +436,14 @@ def cmd_gpu(store: Store, args: argparse.Namespace) -> None:
                   + ("" if live else "  (NOT FOUND on RunPod)"))
         else:
             print("no volume set up (soccer-clips gpu volume create)")
+    elif args.gpu_command == "retrain-reid":
+        from soccer_clips import retrain
+
+        retrain.run(store, log=lambda m: print(m, flush=True), log_name=args.log_name)
+    elif args.gpu_command == "sweep":
+        from soccer_clips import retrain
+
+        print(f"{len(retrain.sweep(store))} overdue pod(s) deleted")
     elif args.gpu_command == "cleanup":
         pods = gpu.list_pods()
         for p in pods:
@@ -618,6 +626,10 @@ def main() -> None:
                          help="with a volume: wait for its data centre instead of running elsewhere")
     run_gpu.add_argument("--max-hours", type=float, default=4.0, help="hard limit; the pod also stops itself after this")
     g_sub.add_parser("cleanup", help="delete every soccer-clips pod")
+    rr = g_sub.add_parser("retrain-reid", help="fine-tune the recognition model, keep it if it scores as well, re-sign "
+                          "every game (what the roster page's Retrain button starts)")
+    rr.add_argument("--log-name", help=argparse.SUPPRESS)
+    g_sub.add_parser("sweep", help="delete soccer-clips pods past their deadline")
     vol = g_sub.add_parser("volume", help="network volume for game videos and models (status with no subcommand)")
     vol_sub = vol.add_subparsers(dest="volume_command")
     vc = vol_sub.add_parser("create", help="create the network volume (billed monthly until deleted)")
