@@ -9,8 +9,6 @@
 - Match-clock display (kickoff markers).
 - Export individual clips from the original video.
 
-**Stopgap:** until this exists, LosslessCut can do in/out marking and export with no code. An importer for its segment CSV is optional (see tasks).
-
 ## Server
 - `soccer-clips serve` → FastAPI on `SOCCER_HOST:SOCCER_PORT` from `.env` (default `0.0.0.0:8000`) so the tagging machine on the LAN can reach it. There's no auth (single user, home network). The port may need opening in `ufw` if the firewall is on.
 - Serve the video (keyframe copy if it exists, otherwise the original) with **HTTP Range support** (required for seeking). Verify Starlette's `FileResponse` handles Range in the installed version; otherwise write a small range-serving endpoint.
@@ -109,7 +107,6 @@ class Clip(BaseModel):
 - [x] Timeline strip with clip ranges
 - [x] Kickoff markers + match clock
 - [x] Export job (single + batch)
-- [ ] *(Optional)* LosslessCut CSV import
 - [x] Tag one full real game (2026-10-28: real games tagged; works well, no friction points raised)
 
 ## Acceptance criteria
