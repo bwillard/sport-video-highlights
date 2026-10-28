@@ -99,7 +99,7 @@ next to the games folder (same root):
 ## Plan
 - [x] **Phase 0 — Setup & ingest** → [plans/phase0_ingest.md](plans/phase0_ingest.md)
   Environment, ffmpeg upgrade, import a game, make a scrub-friendly proxy.
-- [ ] **Phase 1 — Clip tagging** (built; real-game test pending) → [plans/phase1_tagging.md](plans/phase1_tagging.md)
+- [x] **Phase 1 — Clip tagging** → [plans/phase1_tagging.md](plans/phase1_tagging.md)
   Keyboard-driven web player: mark in/out, tag, rate, export clips.
 - [x] **Phase 2 — Highlight reel** → [plans/phase2_reel.md](plans/phase2_reel.md)
   Order clips, render with hard cuts and a title card, landscape. Watch reels in the app, jump back to the full game, download. (Fades, music, vertical, speed/slow-mo: future ideas.)
@@ -182,3 +182,4 @@ next to the games folder (same root):
 - **2026-10-27** — Labelling at scale: automatic labels (a stretch claimed when it looks ≥ 0.90 like a player and clearly more than anyone else, never while they're labelled elsewhere), `A` / `G` / `Y` / `X` in the tagger, and the roster page (`/roster`, replacing `/players`) to name numbers and assign, unlabel, split or reject pictures from every game at once, with undo. Labelled stretches are always our team (fixed #11 / #28 showing as "other" in fcu's shade).
 - **2026-10-27** — Retraining from the app instead of through Claude: buttons on the roster page (recognition) and ball labels page (ball model; re-track every game), run as detached processes so a server restart doesn't stop them. Overrun protection: each pod deletes itself through RunPod's API at its time limit (the API key goes to the pod for this, into a root-only file), and the server deletes overdue pods every 10 minutes. Scores that don't single out #38 (each player's top-1, averaged) and the last three runs shown side by side. First run: 73% → 89% ($1.61).
 - **2026-10-28** — Player view (`/watch`): one player's games played from the game videos with everything else skipped, decided on the fly rather than pre-rendered (30–70 jumps a game for #38; a second hidden `<video>` makes each jump seamless). Then a configurable marker on the player, the ⚽ filter (ball within N of their heights, with before / after seconds), `W` in the tagger for the same within a game, and a shared nav row (the tagger's toolbar had pushed its page links out of reach).
+- **2026-10-28** — Phase 1 (clip tagging) signed off after tagging real games: it works well.

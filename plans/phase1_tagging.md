@@ -110,7 +110,7 @@ class Clip(BaseModel):
 - [x] Kickoff markers + match clock
 - [x] Export job (single + batch)
 - [ ] *(Optional)* LosslessCut CSV import
-- [ ] Tag one full real game; note friction points below
+- [x] Tag one full real game (2026-10-28: real games tagged; works well, no friction points raised)
 
 ## Acceptance criteria
 - Tag a full 60–90 min game in noticeably less time than on Veo's website.
