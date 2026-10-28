@@ -141,11 +141,16 @@ async function init() {
   await load();
 }
 
+let rosterTicket = 0;
 async function loadRoster() {
-  $("players").innerHTML = roster.length ? "" : `<div class="keys">counting pictures… (the first time takes about 10 s)</div>`;
+  // the list stays up while the counts are redone (a few seconds after a change); only the first load says so
+  if (!roster.length) $("players").innerHTML = `<div class="keys">counting pictures… (the first time takes about 10 s)</div>`;
+  const ticket = ++rosterTicket;
   const r = await getJson("/api/roster");
+  if (ticket !== rosterTicket) return;  // a later change's counts are on the way
   roster = r.roster;
   stats = r;
+  if (document.activeElement?.matches("#players input.name")) return;  // don't wipe a name being typed
   renderSide();
 }
 
