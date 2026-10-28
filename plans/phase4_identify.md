@@ -113,6 +113,13 @@ Turn many short, anonymous tracklets of our team into named players.
 - [x] Retrain from the app (roster page, "Recognition model"; `retrain.py`, 2026-10-27): shows when the model in use was trained, its held-out scores, labels then vs now, and the estimated time and cost (last runs + 10%). The button starts `soccer-clips gpu retrain-reid` detached from the server (survives crashes and restarts; status in `gpu/retrain.json`): reid-train (2 h limit), keep the new model unless #38 or teammates top-1 drops by > 5 points (old one kept as `.prev.pt`), then reid-sigs (1 h limit) and install. Overrun guards: each pod deletes itself through RunPod's API at its limit (key sent over ssh into a root-only file), stopping the container if that fails; the server deletes our pods 10 min past their deadline (every 10 min, `gpu sweep` by hand)
 - [x] Same for the ball model (ball labels page, "Ball model"; `ball_retrain.py`, 2026-10-27): Retrain exports the labels, fine-tunes YOLO26x, and scores the new model and the one in use on today's bench and on the bench frames labelled since (mostly fixes of missed balls); kept unless its found/real balance drops > 1 point. Re-track (separate button, hours) runs the model over every game video on the volume from scratch (weights under a new name: the volume only notices a changed file by size), then puts the hand fixes back. Panels share `static/retrain.js`
 
+## 4.3b — Player view (`/watch`, `track/watch.py`)
+One player's game(s) played straight from the game videos with everything else skipped; nothing rendered.
+- Runs = their labelled stretches (+ the appearance model's sure guesses, at the tagger's "auto-label at"), 1 s lead-in/out, gaps under 3 s played through, glimpses under 2 s dropped. #38: 30–65 runs a game, ~45 of 70 min (labelled only: 8–35 runs).
+- The page keeps two `<video>`s: the next run is loaded and parked in the hidden one, and swapped in at the cut (seamless in headless Chrome, also across games; keyframes every 2.5 s in the cut copies, so a cold jump is a short seek).
+- First load of a game ~5 s (auto labels + segments, then cached per game); every game ~20 s cold, 0.05 s warm. `reid.auto_all` now caches per game (it held one game, so the tagger and the view evicted each other).
+- Next: "only when the ball is near" = 4.4's per-frame proximity as frame spans, `watch.intersect`ed with `watch.stretches` before `runs` (the boxes come from the same labelled / guessed tracklets). Maybe a ring on the player during playback (the wide Veo view makes a far player hard to pick out).
+
 ## 4.4 — Clips where a player is near the ball
 For a chosen player, find the stretches of a game where they're involved with the ball and offer them as clips.
 

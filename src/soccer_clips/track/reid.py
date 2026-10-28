@@ -1093,7 +1093,7 @@ def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: floa
     pp = people._picks_path(store, game)
     key = (game.id, min_score, margin, *(f.stat().st_mtime_ns for f in files), pp.stat().st_mtime_ns if pp.exists() else 0,
            *(f.stat().st_mtime_ns if f.exists() else 0 for f in looks))
-    if key not in _auto_cache:
+    if _auto_cache.get(game.id, (None,))[0] != key:  # one entry per game (the player view reads every game)
         players = sorted({p for g in store.list_games() for p in player_sums(store, g)})
         claims = {p: auto_label(store, game, p, margin=margin, min_score=min_score) for p in players}
         flat = sorted((c["track"], c["start"], c["end"], p) for p, cs in claims.items() for c in cs)
@@ -1102,6 +1102,5 @@ def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: floa
             if k1 == k2 and a2 < b1 and p1 != p2:
                 clash |= {(k1, a1, p1), (k2, a2, p2)}
         out = {p: [c for c in cs if (c["track"], c["start"], p) not in clash] for p, cs in claims.items()}
-        _auto_cache.clear()
-        _auto_cache[key] = {p: cs for p, cs in out.items() if cs}
-    return _auto_cache[key]
+        _auto_cache[game.id] = (key, {p: cs for p, cs in out.items() if cs})
+    return _auto_cache[game.id][1]

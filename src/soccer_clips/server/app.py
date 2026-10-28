@@ -885,6 +885,20 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         return {"undone": gallery.undo(store, batch)}
 
+    @app.get("/watch")
+    def watch_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "watch.html")
+
+    @app.get("/api/watch")
+    def watch_runs(player: int, game: str | None = None, guesses: bool = True, min_score: float | None = None) -> dict:
+        """The player view (watch.playlist): the runs of the game video where #player is on screen, in one game
+        or (no game) all of them; guesses: include the stretches the appearance model claims, at min_score."""
+        from soccer_clips.track import watch
+
+        games = [load(game)] if game else sorted(store.list_games(), key=lambda g: (g.played_on is None, g.played_on, g.id))
+        ms = None if min_score is None else min(max(min_score, 0.5), 1.0)
+        return watch.playlist(store, games, player, guesses, ms)
+
     @app.get("/label-ball")
     def label_ball_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "label-ball.html")

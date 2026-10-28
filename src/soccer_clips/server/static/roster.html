@@ -76,6 +76,7 @@
 <body>
 <div class="bar">
   <a href="/" title="Back to the tagger">← Tagger</a>
+  <a href="/watch" title="Watch one player's games with everything else skipped">Player view</a>
   <select id="game" aria-label="game" title="Pictures from every game, or just one"></select>
   <select id="sort" aria-label="order" title="Order of the pictures"></select>
   <span class="stat" id="count"></span>
@@ -244,7 +245,7 @@ async function load() {
 function renderHead() {
   const s = stats.players[player] || {};
   if (view === "player" || view === "probable") {
-    $("title").textContent = label(player);
+    $("title").innerHTML = `${esc(label(player))} <a href="/watch#${makeHash({ player, game: $("game").value || "all" }).slice(1)}" style="font-size: 13px; font-weight: 400; margin-left: 8px" title="Watch their games with everything else skipped">▶ player view</a>`;
     $("tabs").innerHTML = `<button data-tab="player" class="${view === "player" ? "on" : ""}">Labelled (${s.stretches ?? 0})</button>
       <button data-tab="probable" class="${view === "probable" ? "on" : ""}">Probably #${player} (${s.probable ?? 0})</button>`;
   } else {

@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Clips — Player view</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  #stage { position: relative; background: #000; aspect-ratio: 16 / 9; max-height: 72vh; margin: 0 auto; }
+  #stage video { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; }
+  #stage video.standby { visibility: hidden; }
+  #stage .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted);
+                text-align: center; padding: 20px; pointer-events: none; }
+  #stage:fullscreen { max-height: none; aspect-ratio: auto; }
+  .ctl { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .ctl .stat { margin-left: auto; }
+  #reel, #gamebar { width: 100%; display: block; cursor: pointer; touch-action: none; }
+  #reel { height: 34px; margin-top: 6px; }
+  #gamebar { height: 16px; margin-top: 4px; }
+  .lbl { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  #runs li { grid-template-columns: 26px 62px 50px 1fr auto; }
+  #runs .g { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #runs .gh { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 8px 6px 2px; cursor: default; display: block; }
+  #runs .gh:hover { background: none; }
+  .guess { color: var(--warn); font-size: 11px; }
+  label.opt { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="/" title="Back to the tagger">← Tagger</a>
+  <a href="/roster" title="Names for numbers, and each player's pictures">Roster</a>
+  <b>Player view</b>
+  <select id="who" aria-label="player" title="Whose game to watch"></select>
+  <select id="game" aria-label="game" title="One game, or every game back to back"></select>
+  <label class="opt" title="Also play the stretches the appearance model is sure are them but nobody has labelled yet (the dashed #n? guesses in the tagger, at the tagger's 'auto-label at' setting). Off = only stretches you labelled.">
+    <input type="checkbox" id="guesses" checked> likely too</label>
+  <button id="sound">🔇 sound off</button>
+  <span id="flash"></span>
+</div>
+<div class="layout">
+  <main>
+    <div id="stage">
+      <video id="v0" playsinline preload="auto"></video>
+      <video id="v1" class="standby" playsinline preload="auto" muted></video>
+      <div class="msg" id="msg">Pick a player.</div>
+    </div>
+    <div class="ctl">
+      <button id="prev" title="Previous stretch ([)">⏮</button>
+      <button id="play" title="Play / pause (Space)">▶ play</button>
+      <button id="next" title="Next stretch (])">⏭</button>
+      <select id="speed" aria-label="speed" title="Speed"><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option></select>
+      <button id="tagger" title="Open the tagger at this moment (T)">open in tagger</button>
+      <span class="stat" id="where"></span>
+    </div>
+    <canvas id="reel" title="Their time on screen, stretch by stretch (darker = guessed rather than labelled). Click to jump."></canvas>
+    <div class="lbl" id="gamelbl"></div>
+    <canvas id="gamebar" title="This game: where the stretches are (blue) and what's skipped. Click to jump to the nearest stretch."></canvas>
+  </main>
+  <aside>
+    <div class="box">
+      <h3 id="sumTitle">Stretches</h3>
+      <div class="stat" id="summary"></div>
+      <ul class="list" id="runs" style="max-height: 60vh; margin-top: 6px"></ul>
+    </div>
+    <div class="box help">
+      Plays straight from the game video, skipping the time the player isn't on screen: a stretch is where they're
+      labelled (or, with <i>likely too</i>, where the appearance model is sure it's them), with a second of lead-in
+      and lead-out, and gaps under 3 s played through.<br>
+      <kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> 5 s · <kbd>[</kbd> <kbd>]</kbd> previous / next stretch ·
+      <kbd>M</kbd> sound · <kbd>F</kbd> full screen · <kbd>T</kbd> open in the tagger
+    </div>
+  </aside>
+</div>
+<script src="/static/common.js"></script>
+<script>
+const vids = [$("v0"), $("v1")];
+let act = 0;               // vids[act] is the one showing; the other holds the next stretch, paused
+let runs = [], games = {}, starts = [], total = 0;  // starts[i]: where run i begins in the reel (their time)
+let cur = -1, ready = -1;  // the run playing; the run waiting in the standby video
+let playing = false, soundOn = false, ticket = 0, firstNames = {};
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+// ---- loading a run into a video --------------------------------------------------------------------------
+function seekTo(v, game, t) {
+  // resolves once v shows game at t (a new src first if it's another game)
+  return new Promise((done) => {
+    const go = () => {
+      if (Math.abs(v.currentTime - t) < 0.02 && v.readyState >= 2) return done();
+      v.addEventListener("seeked", () => done(), { once: true });
+      v.currentTime = t;
+    };
+    if (v.dataset.game !== game) {
+      v.dataset.game = game;
+      v.src = `/video/${encodeURIComponent(game)}`;
+      v.addEventListener("loadedmetadata", go, { once: true });
+    } else if (v.readyState >= 1) go();
+    else v.addEventListener("loadedmetadata", go, { once: true });
+  });
+}
+
+function prepare(j) {
+  // park run j in the standby video so the jump to it is a swap
+  const sb = vids[1 - act];
+  sb.pause();
+  ready = -1;
+  if (j >= runs.length) return;
+  const my = ticket;
+  seekTo(sb, runs[j].game, runs[j].start_s).then(() => { if (my === ticket && sb === vids[1 - act]) ready = j; });
+}
+
+async function startRun(i, offset = 0) {
+  // jump straight to run i (a click, a key): load it in the showing video, then line up the next one
+  if (i < 0 || i >= runs.length) return;
+  if (i === ready && i === cur + 1 && !offset) return swap();  // already parked
+  const my = ++ticket;
+  cur = i;
+  const v = vids[act];
+  v.pause();
+  await seekTo(v, runs[i].game, runs[i].start_s + offset);
+  if (my !== ticket) return;
+  if (playing) v.play().catch(() => {});
+  prepare(i + 1);
+  draw();
+}
+
+function swap() {
+  // the showing video reached the end of its run: show the standby one, already at the next run
+  const old = vids[act], nu = vids[1 - act];
+  ++ticket;
+  act = 1 - act;
+  cur += 1;
+  nu.muted = !soundOn;
+  nu.playbackRate = +$("speed").value;
+  if (playing) nu.play().catch(() => {});
+  nu.classList.remove("standby");
+  old.classList.add("standby");
+  old.muted = true;
+  old.pause();
+  prepare(cur + 1);
+  draw();
+}
+
+function check() {
+  if (cur < 0 || !runs.length) return;
+  const v = vids[act], r = runs[cur];
+  if (v.currentTime >= r.end_s - 0.01 || (v.ended && cur < runs.length)) {
+    if (cur + 1 >= runs.length) { setPlaying(false); return; }
+    if (ready === cur + 1) swap();
+    else if (!v.seeking) startRun(cur + 1);  // the next one isn't parked yet (just jumped): load it here
+  }
+}
+function loop() { if (playing) check(); drawHead(); requestAnimationFrame(loop); }
+vids.forEach((v) => v.addEventListener("timeupdate", () => { if (v === vids[act] && playing) check(); }));  // rAF stops in a hidden tab
+
+function setPlaying(on) {
+  playing = on;
+  const v = vids[act];
+  if (on && cur < 0 && runs.length) startRun(0);
+  else if (on) v.play().catch(() => {});
+  else v.pause();
+  $("play").textContent = on ? "⏸ pause" : "▶ play";
+}
+
+// ---- the reel: position in their time ----------------------------------------------------------------------
+function reelTime() {
+  if (cur < 0) return 0;
+  const r = runs[cur], t = vids[act].currentTime;
+  return starts[cur] + Math.min(Math.max(t - r.start_s, 0), r.end_s - r.start_s);
+}
+function runAt(rt) {
+  let i = starts.findLastIndex((s) => s <= rt);
+  i = Math.max(0, i);
+  return [i, Math.min(rt - starts[i], runs[i].end_s - runs[i].start_s - 0.05)];
+}
+function jumpReel(rt) {
+  rt = Math.min(Math.max(rt, 0), Math.max(0, total - 0.05));
+  const [i, off] = runAt(rt);
+  if (i === cur && vids[act].dataset.game === runs[i].game) { vids[act].currentTime = runs[i].start_s + off; drawHead(); }
+  else startRun(i, off);
+}
+
+// ---- drawing ---------------------------------------------------------------------------------------------
+function sizeCanvas(c) {
+  const w = c.clientWidth * devicePixelRatio, h = c.clientHeight * devicePixelRatio;
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  return c.getContext("2d");
+}
+function runColour(r, on) {
+  // labelled = blue, guessed = amber, mixed in between
+  const g = 1 - r.labelled;
+  const [a, b] = [[78, 161, 255], [255, 207, 92]];
+  const c = a.map((x, k) => Math.round(x + (b[k] - x) * g));
+  return `rgba(${c.join(",")},${on ? 1 : 0.55})`;
+}
+let base = null;  // the bars without the playhead
+function draw() {
+  const c = $("reel"), ctx = sizeCanvas(c), w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  if (total > 0) {
+    let lastGame = null;
+    runs.forEach((r, i) => {
+      const x0 = starts[i] / total * w, x1 = (starts[i] + r.end_s - r.start_s) / total * w;
+      ctx.fillStyle = runColour(r, i === cur);
+      ctx.fillRect(x0, 4, Math.max(1, x1 - x0 - 1), h - 8);
+      if (r.game !== lastGame && lastGame !== null) { ctx.fillStyle = "#fff"; ctx.fillRect(x0 - 1, 0, 2, h); }
+      lastGame = r.game;
+    });
+  }
+  base = ctx.getImageData(0, 0, w, h);
+  drawGame();
+  drawList();
+  drawHead();
+}
+function drawGame() {
+  const c = $("gamebar"), ctx = sizeCanvas(c), w = c.width, h = c.height;
+  ctx.fillStyle = "#222";
+  ctx.fillRect(0, 0, w, h);
+  const r = runs[cur];
+  if (!r) { $("gamelbl").textContent = ""; return; }
+  const gi = games[r.game], d = gi.duration_s;
+  runs.forEach((x, i) => {
+    if (x.game !== r.game) return;
+    ctx.fillStyle = runColour(x, i === cur);
+    ctx.fillRect(x.start_s / d * w, 2, Math.max(1, (x.end_s - x.start_s) / d * w), h - 4);
+  });
+  $("gamelbl").textContent = `${gi.description || shortGame(r.game)}${gi.played_on ? ` · ${gi.played_on}` : ""} — the whole game, skipped parts dark`;
+}
+function drawHead() {
+  if (!base) return;
+  const c = $("reel"), ctx = c.getContext("2d");
+  ctx.putImageData(base, 0, 0);
+  if (cur < 0) { $("where").textContent = total ? `${fmtLong(total)} of their time in ${runs.length} stretches` : ""; return; }
+  const rt = reelTime(), x = rt / total * c.width;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(x - 1, 0, 2, c.height);
+  const r = runs[cur], gi = games[r.game], t = vids[act].currentTime;
+  const clock = matchClockFor(t, gi.kickoff_1h_s, gi.kickoff_2h_s);
+  $("where").innerHTML = `stretch <b>${cur + 1}</b>/${runs.length} · game <b>${fmt(t)}</b>${clock ? ` (${clock})` : ""} · ${fmtLong(rt)} / ${fmtLong(total)}`;
+  // the game bar's playhead
+  const g = $("gamebar"), gctx = g.getContext("2d");
+  drawHeadOnGame(gctx, g, t / gi.duration_s * g.width);
+}
+let gameBase = null, gameBaseKey = "";
+function drawHeadOnGame(ctx, c, x) {
+  const key = `${cur}:${c.width}`;
+  if (key !== gameBaseKey) { drawGame(); gameBase = ctx.getImageData(0, 0, c.width, c.height); gameBaseKey = key; }
+  ctx.putImageData(gameBase, 0, 0);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(x - 1, 0, 2, c.height);
+}
+const fmtLong = (s) => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`; };
+
+let listKey = "";
+function drawList() {
+  const ul = $("runs"), key = `${runs.length}:${total}`;
+  if (key !== listKey) {
+    listKey = key;
+    let lastGame = null, multi = new Set(runs.map((r) => r.game)).size > 1;
+    ul.innerHTML = runs.map((r, i) => {
+      const head = multi && r.game !== lastGame ? `<li class="gh">${esc(games[r.game].description || shortGame(r.game))}</li>` : "";
+      lastGame = r.game;
+      const gi = games[r.game], clock = matchClockFor(r.start_s, gi.kickoff_1h_s, gi.kickoff_2h_s);
+      const g = r.labelled >= 0.995 ? "" : `<span class="guess" title="${Math.round((1 - r.labelled) * 100)}% of it guessed by appearance, not labelled">${r.labelled <= 0.005 ? "likely" : `${Math.round((1 - r.labelled) * 100)}% likely`}</span>`;
+      return `${head}<li data-i="${i}"><span class="d">${i + 1}</span><span class="t">${fmt(r.start_s)}</span><span class="d">${fmtLong(r.end_s - r.start_s)}</span><span class="g">${clock}</span>${g}</li>`;
+    }).join("") || `<li class="empty">Nothing: they aren't labelled in ${$("game").value ? "this game" : "any game"}${$("guesses").checked ? ", and the model isn't sure of them anywhere" : " (try 'likely too')"}.</li>`;
+  }
+  for (const li of ul.querySelectorAll("li[data-i]")) li.classList.toggle("sel", +li.dataset.i === cur);
+  const sel = ul.querySelector("li.sel");
+  if (sel && (sel.offsetTop < ul.scrollTop || sel.offsetTop > ul.scrollTop + ul.clientHeight - 30)) sel.scrollIntoView({ block: "nearest" });
+}
+
+// ---- loading the runs ------------------------------------------------------------------------------------
+async function loadRuns() {
+  const who = +$("who").value;
+  if (!who) return;
+  const game = $("game").value, guesses = $("guesses").checked;
+  history.replaceState(null, "", makeHash({ player: who, game: game || "all", guesses: guesses ? null : "0" }));
+  store.set("watchWho", who); store.set("watchGame", game || "all"); store.set("watchGuesses", guesses ? "1" : "0");
+  setPlaying(false);
+  ++ticket;
+  runs = []; cur = -1; ready = -1; total = 0; draw();
+  const slow = setTimeout(() => ($("msg").textContent = "Working out where they are… (the first time for a game takes a few seconds; every game, up to half a minute)"), 400);
+  $("msg").hidden = false; $("msg").textContent = "";
+  const q = new URLSearchParams({ player: who, guesses });
+  if (game) q.set("game", game);
+  const am = parseFloat(store.get("autoMin"));  // the tagger's "auto-label at" setting
+  if (am) q.set("min_score", am);
+  let got;
+  try { got = await getJson(`/api/watch?${q}`); } catch { return; } finally { clearTimeout(slow); }
+  if (+$("who").value !== who || $("game").value !== game || $("guesses").checked !== guesses) return;  // changed meanwhile
+  runs = got.runs; games = got.games; total = 0;
+  starts = runs.map((r) => { const s = total; total += r.end_s - r.start_s; return s; });
+  const name = firstNames[who] ? ` ${firstNames[who]}` : "";
+  $("sumTitle").textContent = `#${who}${name}`;
+  const lab = runs.reduce((a, r) => a + (r.end_s - r.start_s) * r.labelled, 0);
+  $("summary").innerHTML = runs.length
+    ? `<b>${fmtLong(total)}</b> on screen in ${runs.length} stretches${Object.keys(games).length > 1 ? ` across ${Object.keys(games).length} games` : ""}` +
+      (guesses ? ` · ${Math.round(lab / total * 100)}% labelled, the rest likely` : "")
+    : "";
+  $("msg").textContent = runs.length ? "" : "Nothing to show.";
+  $("msg").hidden = !!runs.length;
+  if (runs.length) startRun(0);
+  draw();
+}
+
+async function init() {
+  const [settings, gl] = await Promise.all([getJson("/api/settings"), getJson("/api/games")]);
+  firstNames = settings.first_names || {};
+  const nums = [...new Set([...(settings.roster || []), settings.default_player].filter((n) => n != null))].sort((a, b) => a - b);
+  $("who").innerHTML = nums.map((n) => `<option value="${n}">#${n}${firstNames[n] ? ` ${esc(firstNames[n])}` : ""}</option>`).join("");
+  const sorted = [...gl].sort((a, b) => String(b.played_on).localeCompare(String(a.played_on)));
+  $("game").innerHTML = `<option value="">every game</option>` +
+    sorted.map((g) => `<option value="${esc(g.id)}">${esc(g.description || shortGame(g.id))}${g.played_on ? ` · ${g.played_on}` : ""}</option>`).join("");
+  const h = readHash();
+  const who = h.player || store.get("watchWho") || settings.default_player;
+  if (nums.includes(+who)) $("who").value = who;
+  const game = h.game || store.get("watchGame");
+  $("game").value = game === "all" ? "" : sorted.some((g) => g.id === game) ? game : sorted[0]?.id || "";
+  $("guesses").checked = (h.guesses ?? store.get("watchGuesses")) !== "0";
+  loadRuns();
+}
+
+// ---- controls --------------------------------------------------------------------------------------------
+for (const id of ["who", "game", "guesses"]) $(id).addEventListener("change", (e) => { e.target.blur(); loadRuns(); });
+$("play").addEventListener("click", (e) => { e.target.blur(); setPlaying(!playing); });
+$("prev").addEventListener("click", (e) => { e.target.blur(); prevRun(); });
+$("next").addEventListener("click", (e) => { e.target.blur(); startRun(cur + 1); });
+$("speed").addEventListener("change", (e) => { e.target.blur(); vids.forEach((v) => (v.playbackRate = +e.target.value)); });
+$("tagger").addEventListener("click", (e) => { e.target.blur(); openTagger(); });
+$("sound").addEventListener("click", (e) => { e.target.blur(); toggleSound(); });
+$("runs").addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) startRun(+li.dataset.i); });
+function prevRun() {
+  // back to the start of this stretch, or to the one before if just started
+  if (cur < 0) return;
+  const into = vids[act].currentTime - runs[cur].start_s;
+  startRun(into > 2 || cur === 0 ? cur : cur - 1);
+}
+function toggleSound() {
+  soundOn = !soundOn;
+  vids[act].muted = !soundOn;
+  $("sound").textContent = soundOn ? "🔊 sound on" : "🔇 sound off";
+  $("sound").classList.toggle("on", soundOn);
+}
+function openTagger() {
+  if (cur < 0) return;
+  window.open(`/${makeHash({ game: runs[cur].game, t: vids[act].currentTime.toFixed(2) })}`, "_blank");
+}
+function clickBar(e, fn) {
+  const r = e.currentTarget.getBoundingClientRect();
+  fn(Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1));
+}
+$("reel").addEventListener("pointerdown", (e) => clickBar(e, (f) => jumpReel(f * total)));
+$("gamebar").addEventListener("pointerdown", (e) => clickBar(e, (f) => {
+  // nearest stretch of this game to the click (inside one: that moment)
+  const r = runs[cur];
+  if (!r) return;
+  const t = f * games[r.game].duration_s;
+  let best = null, bd = Infinity;
+  runs.forEach((x, i) => {
+    if (x.game !== r.game) return;
+    const d = t < x.start_s ? x.start_s - t : t > x.end_s ? t - x.end_s : 0;
+    if (d < bd) { bd = d; best = i; }
+  });
+  if (best != null) startRun(best, Math.min(Math.max(t - runs[best].start_s, 0), runs[best].end_s - runs[best].start_s - 0.05));
+}));
+$("stage").addEventListener("click", () => setPlaying(!playing));
+document.addEventListener("keydown", (e) => {
+  if (typingInField(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key;
+  if (k === " ") setPlaying(!playing);
+  else if (k === "ArrowRight") jumpReel(reelTime() + 5);
+  else if (k === "ArrowLeft") jumpReel(reelTime() - 5);
+  else if (k === "]") startRun(cur + 1);
+  else if (k === "[") prevRun();
+  else if (k === "m" || k === "M") toggleSound();
+  else if (k === "t" || k === "T") openTagger();
+  else if (k === "f" || k === "F") document.fullscreenElement ? document.exitFullscreen() : $("stage").requestFullscreen();
+  else return;
+  e.preventDefault();
+});
+addEventListener("resize", () => { gameBaseKey = ""; draw(); });
+init();
+loop();
+</script>
+</body>
+</html>
