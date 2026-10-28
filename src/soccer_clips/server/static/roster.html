@@ -60,6 +60,21 @@
   .model button { margin: 6px 0 2px; }
   .model .run { color: var(--warn); }
   .model .bad { color: var(--bad); }
+  .model > div { margin-bottom: 6px; }
+  .model .big { font-size: 20px; font-weight: 700; color: var(--in); }
+  .model .meters { margin: 2px 0 8px; }
+  .model .meter { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+  .model .meter .lbl { width: 90px; flex: none; }
+  .model .meter .track { flex: 1; height: 8px; background: #2a2a2a; border-radius: 4px; overflow: hidden; }
+  .model .meter .fill { display: block; height: 100%; }
+  .model .meter .fill.tuned { background: var(--in); }
+  .model .meter .fill.stock { background: #777; }
+  .model .meter .fill.chance { background: #444; }
+  .model .meter .v { width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
+  .model .news { color: var(--warn); }
+  .model .msg { color: var(--muted); }
+  .model details { margin-top: 6px; }
+  .model summary { cursor: pointer; }
   .model table { border-collapse: collapse; margin: 4px 0; font-variant-numeric: tabular-nums; width: 100%; }
   .model th { font-weight: 400; text-align: left; font-size: 11px; padding: 0 4px 2px 0; }
   .model td { padding: 1px 4px 1px 0; white-space: nowrap; }
@@ -488,36 +503,56 @@ async function loadRetrain() {
 
 function renderRetrain(logText) {
   const m = retrain.model, est = retrain.estimate, st = retrain.status, running = st?.state === "running";
+  const runs = retrain.history || [], cur = runs.find((r) => r.in_use) || null;
+  const top = (sc) => sc?.player_top1 ?? sc?.all_top1;  // each player counting the same where the run has it
+  const day = (iso) => iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }) : "?";
   const thenMin = m?.labelled_minutes ? Object.values(m.labelled_minutes).reduce((a, b) => a + b, 0) : null;
   const nowMin = Object.values(stats.players).reduce((a, p) => a + p.seconds, 0) / 60;
-  const lines = [];
-  if (m) {
-    lines.push(`Trained <b>${when(m.trained_at)}</b>${m.games ? ` on ${m.games.length} games` : ""}${m.train_dollars != null ? ` ($${m.train_dollars.toFixed(2)})` : ""}.`);
-    if (thenMin != null) lines.push(`Labels then <b>${Math.round(thenMin)} min</b>, now <b>${Math.round(nowMin)} min</b>${m.games && games.size > m.games.length ? `, and ${games.size - m.games.length} new game(s)` : ""}.`);
+  const newGames = m?.games ? games.size - m.games.length : 0;
+  const parts = [];
+
+  // the model in use, as one number with what it's compared against
+  if (m && cur) {
+    const tuned = top(cur.tuned), stock = top(cur.stock), chance = cur.tuned.all_chance;
+    parts.push(`<div>Gets the right player <span class="big">${pct(tuned)}</span> of the time</div>
+      <div class="meters" title="Tested on games the model wasn't trained on">
+        ${[["this model", tuned, "tuned"], ["before training", stock, "stock"], ["random guess", chance, "chance"]].map(([t, v, c]) =>
+          `<div class="meter"><span class="lbl">${t}</span><span class="track"><span class="fill ${c}" style="width:${Math.round((v || 0) * 100)}%"></span></span><span class="v">${pct(v)}</span></div>`).join("")}
+      </div>
+      <div>Trained ${day(m.trained_at)} on ${m.games ? m.games.length + " games and " : ""}${thenMin != null ? Math.round(thenMin) + " min of labels" : "your labels"}.</div>`);
+    if (thenMin != null && nowMin > thenMin * 1.2 || newGames > 0) {
+      parts.push(`<div class="news">Since then: ${nowMin > thenMin ? `<b>+${Math.round(nowMin - thenMin)} min</b> of labels` : ""}${newGames > 0 ? `${nowMin > thenMin ? " and " : ""}<b>${newGames} new game${newGames > 1 ? "s" : ""}</b>` : ""}. Retraining should help.</div>`);
+    }
   } else {
-    lines.push("No fine-tuned model yet (using the stock one).");
+    parts.push("<div>No trained model yet: using the stock one.</div>");
   }
+
+  // a retrain going on, or how the last one ended
   if (st) {
     const cls = st.state === "running" ? "run" : st.state === "failed" ? "bad" : "";
-    const label = st.state === "running" ? `Retraining: ${st.step}… since ${when(st.started)}` : st.state === "failed" ? `Last retrain failed ${when(st.finished || st.updated)}` : `Last retrain ${when(st.finished)}`;
-    lines.push(`<span class="${cls}">${esc(label)}${st.dollars ? ` · $${st.dollars.toFixed(2)} so far` : ""}</span>${st.message ? `<br>${esc(st.message)}` : ""}`);
+    const label = st.state === "running" ? `Retraining (${st.step}), started ${when(st.started)}` : st.state === "failed" ? `The last retrain failed (${when(st.finished || st.updated)})` : `Last retrain finished ${when(st.finished)}`;
+    parts.push(`<div class="${cls}">${esc(label)}${st.dollars ? ` · $${st.dollars.toFixed(2)} spent` : ""}${st.message ? `<br><span class="msg">${esc(st.message)}</span>` : ""}</div>`);
   }
-  const runs = retrain.history || [];
-  if (runs.length) {
-    // each player counting the same where the run has per-player counts, else every labelled moment (older runs)
-    const top = (sc) => sc.player_top1 ?? sc.all_top1;
-    const row = (r) => `<tr class="${r.in_use ? "use" : ""}" title="${esc(r.run)}${r.why ? ": " + esc(r.why) : ""}">
-      <td>${r.in_use ? "▸ " : ""}${when(r.date)}</td><td>${r.labelled_minutes != null ? r.labelled_minutes + "m" : "?"}</td>
-      <td>${pct(top(r.tuned))}${r.tuned.player_top1 == null ? "*" : ""} <small>(${pct(top(r.stock))})</small></td>
-      <td>${pct(r.tuned.same_top1)}</td><td>${r.installed === false ? "<small>kept old</small>" : ""}</td></tr>`;
-    lines.push(`<table title="Scored on games each model never saw (3-fold). Picked out: at each labelled moment, is that player's tracklet the one on our team most like them (their look from the other games)? Each player counts the same; * older run: every labelled moment, so players with more labels weigh more. In brackets: the stock model on the same test. Chance about ${pct(runs[0].tuned.all_chance)}. Same girl: a tracklet matches itself 10-20 s later better than the teammates on screen (no labels needed).">
-      <tr><th>Trained</th><th>Labels</th><th>Picked out</th><th>Same girl</th><th></th></tr>${runs.map(row).join("")}</table>`);
+
+  // earlier runs, one line each
+  const earlier = runs.filter((r) => !r.in_use);
+  if (earlier.length) {
+    parts.push(`<div class="earlier">Earlier runs:${earlier.map((r) => `<br>${day(r.date)}: ${pct(top(r.tuned))} right (before training ${pct(top(r.stock))})${r.labelled_minutes != null ? `, ${r.labelled_minutes} min of labels` : ""}${r.installed === false ? " · <i>not used: no better</i>" : ""}`).join("")}</div>`);
   }
-  const btn = retrain.runpod
-    ? `<button id="retrainBtn" ${running ? "disabled" : ""} title="Fine-tune on RunPod with every label so far, keep the new model if it scores as well, then recompute every game's signatures">${running ? "Retraining…" : `Retrain (~${est.minutes} min, ~$${est.dollars.toFixed(2)})`}</button>`
-    : `<div>RunPod isn't set up (RUNPOD_API_KEY in .env).</div>`;
-  const log = st?.log ? `<details ${running ? "open" : ""}><summary>log</summary><pre>${esc(logText || "…")}</pre></details>` : "";
-  $("model").innerHTML = lines.join("<br>") + "<br>" + btn + log;
+
+  parts.push(retrain.runpod
+    ? `<button id="retrainBtn" ${running ? "disabled" : ""}>${running ? "Retraining…" : `Retrain now · about ${est.minutes} min, $${est.dollars.toFixed(2)}`}</button>`
+    : `<div>Retraining needs RunPod (RUNPOD_API_KEY in .env).</div>`);
+  parts.push(`<details><summary>How is this measured?</summary><div class="msg">
+    For every labelled moment of every player, the test asks: among our players on screen right then, does her tracklet look
+    most like her? Her “look” comes from her labels in the other games, and each game is tested with a model that never
+    trained on it. Each player's hit rate counts the same in the average (players with at least 5 moments)${runs.some((r) => r.tuned.player_top1 == null) ? "; older runs counted every moment, so players with more labels weighed more" : ""}.
+    “Before training” is the stock model on the same test, which shows how hard that test was: the gap between the two is
+    what training added. A new model is only used if it does about as well as the one in use (within 5 points).
+    ${cur?.tuned.same_top1 != null ? `<br>Also: a player matches herself 10–20 s later ${pct(cur.tuned.same_top1)} of the time (${pct(cur.stock.same_top1)} before training).` : ""}
+  </div></details>`);
+  if (st?.log) parts.push(`<details ${running ? "open" : ""}><summary>log</summary><pre>${esc(logText || "…")}</pre></details>`);
+  $("model").innerHTML = parts.join("");
   const pre = $("model").querySelector("pre");
   if (pre) pre.scrollTop = pre.scrollHeight;
 }
