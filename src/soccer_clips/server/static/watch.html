@@ -81,7 +81,7 @@
     <div class="lbl" id="gamelbl"></div>
     <canvas id="gamebar" title="This game: where the stretches are (blue) and what's skipped. Click to jump to the nearest stretch."></canvas>
     <div id="pitchBox" hidden>
-      <canvas id="pitchMap" title="The field from above: the camera's view (lighter), them (orange ring), our players (white), opponents (blue), the ball (yellow). Players who leave the view fade out where they were last seen."></canvas>
+      <canvas id="pitchMap" title="The field from above: the camera's view (lighter), them (orange ring), our players as their number where it's known (fainter = guessed by appearance, at the tagger's 'auto-label at' setting) or a white dot, opponents (blue dots), the ball (yellow). Players who leave the view fade out where they were last seen."></canvas>
       <div id="pitchInfo"></div>
     </div>
   </main>
@@ -539,7 +539,7 @@ showHl();
 // ---- field map (Phase 5) ---------------------------------------------------------------------------------
 // Per game: its calibration (from the tagger's Q), the per-frame homographies, everyone's boxes and the ball,
 // fetched when the game first plays. Their own position comes from boxAt, so the map follows the highlight.
-const fieldCache = new Map();  // game id -> {state, hs, boxes, ball} | "loading"
+const fieldCache = new Map();  // game id -> {state, hs, boxes, ball, num} | "loading"
 let mapOn = store.get("watchMap") !== "0", mapMem = mapMemory(), mapGame = null;
 $("mapOn").checked = mapOn;
 $("mapOn").addEventListener("change", (e) => { e.target.blur(); mapOn = e.target.checked; store.set("watchMap", mapOn ? "1" : "0"); });
@@ -548,9 +548,12 @@ function fieldFor(game) {
   if (got && got !== "loading") return got;
   if (!got) {
     fieldCache.set(game, "loading");
-    const g = encodeURIComponent(game);
-    Promise.all([getJson(`/api/games/${g}/pitch`), getJson(`/api/games/${g}/ball`).catch(() => null)])
-      .then(([state, ball]) => fieldCache.set(game, { state, hs: pitchFrames(game), boxes: boxFrames(game), ball }))
+    const g = encodeURIComponent(game), am = parseFloat(store.get("autoMin"));  // the tagger's "auto-label at" setting
+    Promise.all([getJson(`/api/games/${g}/pitch`), getJson(`/api/games/${g}/ball`).catch(() => null),
+                 getJson(`/api/games/${g}/people`).catch(() => null),
+                 getJson(`/api/games/${g}/people/auto${am ? `?min_score=${am}` : ""}`).catch(() => null)])
+      .then(([state, ball, people, auto]) => fieldCache.set(game, { state, hs: pitchFrames(game), boxes: boxFrames(game), ball,
+                                                                    num: trackNumbers(people?.segments, auto) }))
       .catch(() => fieldCache.delete(game));
   }
   return null;
@@ -577,10 +580,15 @@ function drawField() {
     footprint = pitchFootprint(Gi, gi.width, gi.height);
     const got = fd.boxes.at(f);
     if (got) players = pitchPlayers(G, gi.width, gi.height, got[2], got[0], got[1], fd.boxes.stride,
-                                    { length: st.drawing.length, width: st.drawing.width });
+                                    { length: st.drawing.length, width: st.drawing.width, num: (t) => fd.num(t, f) });
+    // the player you're watching, where the highlight has them: ringed, in place of their own dot or number
     const b = boxAt(r.game, f), who = +$("who").value;
     const me = b && pixelToPitch(Gi, (b.x1 + b.x2) / 2 * gi.width, b.y2 * gi.height);
-    if (me) players.push({ x: me[0], y: me[1], team: 0, track: "me", ring: true, label: `#${who}` });
+    if (me) {
+      const ours = (p) => p.team !== 1 && p.team !== 2;  // an opponent marking them stays
+      players = players.filter((p) => p.num !== who && !(ours(p) && Math.hypot(p.x - me[0], p.y - me[1]) < 1.5));
+      players.push({ x: me[0], y: me[1], team: 0, track: "me", ring: true, num: who, guessed: b.guessed });
+    }
     const bi = fd.ball ? ballIndex(fd.ball, f) : -1;
     if (bi >= 0) ballAt = pixelToPitch(Gi, fd.ball.x[bi] * gi.width, fd.ball.y[bi] * gi.height);
     players = mapMem(f, gi.fps, players, footprint);

@@ -113,7 +113,7 @@
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <div id="pitchBox" hidden>
-      <canvas id="pitchMap" title="The field from above: the camera's view (lighter), our players (white), opponents (blue), the ball (yellow), the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
+      <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed by appearance, at the 'auto-label at' setting in 🔍 layers), a white dot where not; opponents (blue dots); the ball (yellow); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
       <div id="pitchInfo"></div>
     </div>
     <div class="help help-secs" id="help">
@@ -153,7 +153,8 @@
           the area the detector searches</li>
       </ul></details>
       <details data-sec="field"><summary>Field map</summary><ul>
-        <li>The <b>field map</b> below the video shows everyone the camera sees, from above (🔍 layers turns it on / off).
+        <li>The <b>field map</b> below the video shows everyone the camera sees, from above (🔍 layers turns it on / off): our players
+          as their number where it's known (fainter = guessed by appearance, at the "auto-label at" setting), a white dot where not; opponents as blue dots.
           It needs the game's field calibrated once: a few clicks tie the video to the field</li>
         <li><kbd>Q</kbd> (or ✏️ calibrate) calibrate / correct: a magenta banner over the video says it's on, and clicks on the video place points instead of pausing. Click a spot on the video that you can place on the field (a corner, a goal post,
           the centre spot, where the circle meets the halfway line, or anywhere on a line or the circle), then click that spot on the
@@ -1121,7 +1122,7 @@ function looksLike(tr, f) {
   return null;
 }
 function loadAuto() {
-  if (!showPeople || !game) return;
+  if (!(showPeople || showPitchMap) || !game) return;
   const id = game.id;
   getJson(`/api/games/${encodeURIComponent(id)}/people/auto${autoMin ? `?min_score=${autoMin}` : ""}`)
     .then((a) => { if (game?.id === id) autoLabels = { gameId: id, byPlayer: a }; })
@@ -1190,7 +1191,7 @@ function toggleOnly() {
 $("onlyBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleOnly(); });
 
 function loadPeople() {
-  if (!showPeople || !game || people?.gameId === game.id) return peopleLoading;
+  if (!(showPeople || showPitchMap) || !game || people?.gameId === game.id) return peopleLoading;
   const id = game.id;
   peopleLoading = getJson(`/api/games/${encodeURIComponent(id)}/people`).then((p) => {
     if (game?.id === id) people = { gameId: id, ...p };
@@ -1735,6 +1736,7 @@ $("layMap").addEventListener("change", (e) => {
   showPitchMap = e.target.checked;
   try { localStorage.setItem("showPitchMap", showPitchMap ? "1" : "0"); } catch {}
   showPitchButtons();
+  loadPeople();  // numbers on the map
 });
 const pct = (x) => `${Math.round(x * 100)}%`;
 function renderPitchInfo() {
@@ -1903,10 +1905,11 @@ function drawMap() {
     footprint = pitchFootprint(inv3(G), game.width, game.height);
     const got = boxesAt(f);
     if (got) {
-      const lab = people?.gameId === game.id ? labelledAt(f) : new Map(), fol = people?.gameId === game.id ? followedTracks(f) : new Set();
+      const known = people?.gameId === game.id;
+      const lab = known ? labelledAt(f) : new Map(), auto = autoAt(f), fol = known ? followedTracks(f) : new Set();
       players = pitchPlayers(G, game.width, game.height, got[2], got[0], got[1], STRIDE, {
-        length: pitch.drawing.length, width: pitch.drawing.width,
-        ring: (t) => fol.has(t), label: (t) => (lab.has(t) ? `#${lab.get(t)}` : ""),
+        length: pitch.drawing.length, width: pitch.drawing.width, ring: (t) => fol.has(t),
+        num: (t) => (lab.has(t) ? [lab.get(t), false] : auto.has(t) ? [auto.get(t), true] : null),
       });
     }
     if (ball?.gameId === game.id) {

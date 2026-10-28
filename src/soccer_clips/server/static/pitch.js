@@ -146,7 +146,8 @@ function mapFrame(canvas, drawing) {
 const MAP_TEAM = { 0: "#ffffff", 1: "#5ab0ff", 2: "#9a9a9a" };
 
 function drawPitchMap(canvas, o) {
-  // o: {drawing, footprint (the camera's view on the pitch, pitchFootprint), players: [{x, y, team, ring, label, alpha}],
+  // o: {drawing, footprint (the camera's view on the pitch, pitchFootprint), players: [{x, y, team, ring, num, guessed, alpha}]
+  //     (num: their number where it's known, drawn instead of a dot; guessed: by appearance, drawn fainter),
   //     ball: [x, y] or null, targets: bool (show landmarks), hover: target id or null, clicks: [{pitch, bad}], note: text over the map}
   const m = mapFrame(canvas, o.drawing), { ctx, to } = m;
   ctx.clearRect(0, 0, m.W, m.H);
@@ -205,19 +206,28 @@ function drawPitchMap(canvas, o) {
   for (const p of o.players || []) {
     const [X, Y] = to(p.x, p.y);
     const a = p.alpha ?? 1;
-    ctx.fillStyle = MAP_TEAM[p.team] || MAP_TEAM[0];
-    ctx.globalAlpha = (p.team === 2 ? 0.6 : 0.95) * a;
-    ctx.beginPath(); ctx.arc(X, Y, p.team === 2 ? 2.5 : 3.6, 0, 2 * Math.PI); ctx.fill();
+    if (p.num != null) {  // a known player: their number instead of a dot
+      ctx.save();
+      ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.globalAlpha = (p.guessed ? 0.7 : 1) * a;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.strokeText(String(p.num), X, Y);
+      ctx.fillStyle = p.ring ? "#ff9f40" : MAP_TEAM[0];
+      ctx.fillText(String(p.num), X, Y);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = MAP_TEAM[p.team] || MAP_TEAM[0];
+      ctx.globalAlpha = (p.team === 2 ? 0.6 : 0.95) * a;
+      ctx.beginPath(); ctx.arc(X, Y, p.team === 2 ? 2.5 : 3.6, 0, 2 * Math.PI); ctx.fill();
+    }
     ctx.globalAlpha = a;
     if (p.ring) {
       ctx.strokeStyle = "#ff9f40";
       ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(X, Y, 7, 0, 2 * Math.PI); ctx.stroke();
-    }
-    if (p.label) {
-      ctx.font = "10px system-ui, sans-serif";
-      ctx.fillStyle = p.ring ? "#ff9f40" : "rgba(255,255,255,0.85)";
-      ctx.fillText(p.label, X + 5, Y - 5);
+      ctx.beginPath(); ctx.arc(X, Y, p.num != null ? 10 : 7, 0, 2 * Math.PI); ctx.stroke();
     }
     ctx.globalAlpha = 1;
   }
@@ -241,7 +251,8 @@ function drawPitchMap(canvas, o) {
 
 function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
   // map dots from box rows (frame, track, x1, y1, x2, y2 as fractions, team, ...): feet = bottom centre.
-  // opts.ring(track) / opts.label(track); people more than 3 m outside the lines (spectators, benches) are left off
+  // opts.ring(track); opts.num(track) = [number, guessed] for our players whose number is known (else a dot);
+  // people more than 3 m outside the lines (spectators, benches) are left off
   const out = [];
   if (!G) return out;
   const Gi = inv3(G), L = opts.length ?? 70, Wd = opts.width ?? 46;
@@ -250,7 +261,8 @@ function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
     const p = pixelToPitch(Gi, (rows[o + 2] + rows[o + 4]) / 2 * frameW, rows[o + 5] * frameH);
     if (!p || Math.abs(p[0]) > L / 2 + 3 || Math.abs(p[1]) > Wd / 2 + 3) continue;
     const track = rows[o + 1];
-    out.push({ x: p[0], y: p[1], track, team: rows[o + 6], ring: opts.ring?.(track), label: opts.label?.(track) });
+    const team = rows[o + 6], n = team === 1 || team === 2 ? null : opts.num?.(track);  // numbers for our team only
+    out.push({ x: p[0], y: p[1], track, team, ring: opts.ring?.(track), num: n?.[0], guessed: n?.[1] });
   }
   return out;
 }
@@ -284,5 +296,22 @@ function boxFrames(gameId) {
       while (i1 < n && r[i1 * STRIDE] === f) i1++;
       return [lo, i1, r];
     },
+  };
+}
+
+function trackNumbers(segments, autoByPlayer) {
+  // (track, frame) -> [number, guessed] or null, from labelled stretches ({track, start, end, player}) and the
+  // automatic ones by appearance ({player: [{track, start, end}]}); a labelled stretch wins over a guess
+  const by = new Map();
+  const add = (track, start, end, player, guessed) => {
+    if (!by.has(track)) by.set(track, []);
+    by.get(track).push([start, end, player, guessed]);
+  };
+  for (const s of segments || []) add(s.track, s.start, s.end, s.player, false);
+  for (const [p, list] of Object.entries(autoByPlayer || {})) for (const s of list) add(s.track, s.start, s.end, +p, true);
+  return (track, f) => {
+    let best = null;
+    for (const [s, e, p, g] of by.get(track) || []) if (f >= s && f < e && (!best || best[1])) best = [p, g];
+    return best;
   };
 }
