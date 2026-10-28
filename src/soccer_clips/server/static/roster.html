@@ -53,6 +53,21 @@
   .tile .who2 .g { color: var(--muted); }
   .pager { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
   .placeholder { padding: 48px 16px; text-align: center; color: var(--muted); }
+  .tile .cap a.cut { margin-left: auto; cursor: pointer; color: var(--muted); }
+  .tile .cap a.cut:hover { color: var(--text); }
+  .tile .cap a.cut + a { margin-left: 8px; }
+  #splitBox { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 20; }
+  #splitBox.on { display: flex; }
+  #splitBox .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; max-width: 94vw; }
+  #splitBox .hint { color: var(--muted); margin: 4px 0 10px; }
+  #splitCrops { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 6px; }
+  #splitCrops .c { flex: none; text-align: center; cursor: pointer; border-left: 3px solid transparent; padding-left: 3px; }
+  #splitCrops .c img { height: 160px; display: block; border-radius: 3px; }
+  #splitCrops .c span { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #splitCrops .c.cut { border-left-color: var(--bad); }
+  #splitCrops .c.cut span { color: var(--bad); font-weight: 600; }
+  #splitCrops .c:hover img { outline: 1px solid #888; }
+  #splitBox .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   #typed { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #23272e; border: 1px solid var(--accent);
            padding: 8px 16px; border-radius: 6px; font-size: 16px; display: none; z-index: 10; }
   .model { padding: 4px 12px 16px; font-size: 12px; line-height: 1.6; color: var(--muted); }
@@ -108,7 +123,7 @@
     <div class="keys">
       Click to select · Shift-click a range · <kbd>Ctrl</kbd>+<kbd>A</kbd> all on page · <kbd>Esc</kbd> none<br>
       Type a number + <kbd>Enter</kbd>: assign to that player · or drag onto a name<br>
-      <kbd>Backspace</kbd> unlabel · <kbd>N</kbd> not our team · <kbd>U</kbd> undo · <kbd>←</kbd>/<kbd>→</kbd> pages<br>
+      <kbd>Backspace</kbd> unlabel · <kbd>N</kbd> not our team · <kbd>S</kbd> or ✂ split (more than one girl) · <kbd>U</kbd> undo · <kbd>←</kbd>/<kbd>→</kbd> pages<br>
       Without a selection, keys act on the picture under the mouse.
     </div>
     <div class="sec">Recognition model</div>
@@ -126,6 +141,13 @@
   </div>
 </div>
 <div id="typed"></div>
+<div id="splitBox"><div class="box">
+  <b>Where does a different girl start?</b>
+  <div class="hint">Click the first picture of each new girl (click again to undo). Each part becomes its own picture to assign.</div>
+  <div id="splitCrops"></div>
+  <div class="row"><button id="splitSave" disabled>Split <kbd>Enter</kbd></button><button id="splitCancel">Cancel <kbd>Esc</kbd></button>
+    <span class="stat" id="splitInfo"></span></div>
+</div></div>
 
 <script src="/static/common.js"></script>
 <script>
@@ -283,6 +305,7 @@ function render() {
       <div class="pics"><img loading="lazy" alt="" src="/api/games/${gid}/people/strip.jpg?track=${it.track}&start=${it.start}&end=${it.end}"
         onerror="this.replaceWith(Object.assign(document.createElement('span'), {className: 'none', textContent: 'no picture (too small)'}))"></div>
       <div class="cap">${$("game").value ? "" : `<span title="${esc(it.game)}">${esc(gameName(it.game))}</span>`}<span>${fmt(t)}</span><span>${Math.round(it.secs)} s</span>
+        <a class="cut" data-split="${i}" title="More than one girl? Split it where she changes (S)">✂</a>
         <a href="/#${makeHash({ game: it.game, t: t.toFixed(2) }).slice(1)}" target="_blank" title="Open in the tagger at this moment">▶</a></div>
       <div class="who2" title="labelled as, and who it looks most like (higher is more alike)">${who}</div>
     </div>`;
@@ -345,6 +368,8 @@ async function saveRoster() {
 
 // ---- tiles: select, drag ----
 $("grid").addEventListener("click", (e) => {
+  const cut = e.target.closest("[data-split]");
+  if (cut) { openSplit(items[+cut.dataset.split]); return; }
   if (e.target.closest("a")) return;
   const el = e.target.closest(".tile");
   if (!el) return;
@@ -458,6 +483,12 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.ctrlKey || e.metaKey) return;
+  if (splitting) {  // the split view takes the keys while it's open
+    if (e.key === "Escape") closeSplit();
+    else if (e.key === "Enter" && !$("splitSave").disabled) saveSplit();
+    e.preventDefault();
+    return;
+  }
   if (/^[0-9]$/.test(e.key)) {
     e.preventDefault();
     typed += e.key;
@@ -473,6 +504,7 @@ document.addEventListener("keydown", (e) => {
     Backspace: () => typed ? (typed = typed.slice(0, -1), showTyped()) : assign(null),
     Delete: () => assign(null),
     n: () => assign(NOT_OURS),
+    s: () => { const t = targets(); if (t.length === 1) openSplit(t[0]); else flash("point at (or select) one picture to split"); },
     u: undo,
     ArrowLeft: () => $("prev").disabled || $("prev").click(),
     ArrowRight: () => $("next").disabled || $("next").click(),
@@ -481,6 +513,55 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   act();
 });
+
+// ---- splitting a picture of more than one girl ----
+let splitting = null;  // {it, frames, cuts: Set of frames}
+async function openSplit(it) {
+  splitting = { it, frames: [], cuts: new Set() };
+  $("splitCrops").innerHTML = `<span class="hint">loading pictures…</span>`;
+  $("splitInfo").textContent = "";
+  $("splitSave").disabled = true;
+  $("splitBox").classList.add("on");
+  const q = new URLSearchParams({ game: it.game, track: it.track, start: it.start, end: it.end, n: 16 });
+  const r = await getJson(`/api/roster/crops?${q}`);
+  if (splitting?.it !== it) return;
+  splitting.frames = r.frames;
+  const gid = encodeURIComponent(it.game), fps = fpsOf(it.game);
+  $("splitCrops").innerHTML = r.frames.length < 2 ? `<span class="hint">Too few pictures of this one to split.</span>` :
+    r.frames.map((f, i) => `<div class="c" data-f="${f}" title="${i ? "A different girl from here" : "The start"}">
+      <img alt="" src="/api/games/${gid}/people/strip.jpg?track=${it.track}&start=${f}&end=${f + 1}&n=1"><span>${fmt(f / fps)}</span></div>`).join("");
+}
+function closeSplit() { splitting = null; $("splitBox").classList.remove("on"); }
+function showCuts() {
+  for (const el of $("splitCrops").children) el.classList.toggle("cut", splitting.cuts.has(+el.dataset.f));
+  const n = splitting.cuts.size;
+  $("splitSave").disabled = !n;
+  $("splitInfo").textContent = n ? `${n + 1} parts` : "";
+}
+$("splitCrops").addEventListener("click", (e) => {
+  const c = e.target.closest(".c");
+  if (!c || !splitting || c === $("splitCrops").firstElementChild) return;  // the first picture starts the first part
+  const f = +c.dataset.f;
+  splitting.cuts.has(f) ? splitting.cuts.delete(f) : splitting.cuts.add(f);
+  showCuts();
+});
+async function saveSplit() {
+  const { it, cuts } = splitting;
+  const batch = Date.now().toString(36);
+  try {
+    const r = await api("POST", "/api/roster/split", { game: it.game, track: it.track, frames: [...cuts], batch });
+    undos.push(batch);
+    $("undo").disabled = false;
+    flash(`split into ${cuts.size + 1} parts (${r.changed} marks)`);
+  } catch (err) { flash(String(err.message || err), true); return; }
+  closeSplit();
+  sel.clear();
+  await load();  // the parts show up in their own places (a labelled picture keeps its label up to the first split)
+  loadRoster();
+}
+$("splitSave").addEventListener("click", saveSplit);
+$("splitCancel").addEventListener("click", closeSplit);
+$("splitBox").addEventListener("click", (e) => { if (e.target === $("splitBox")) closeSplit(); });
 
 // ---- the recognition model: when it was trained, and retraining it on RunPod ----
 let retrain = null, retrainTimer = null;

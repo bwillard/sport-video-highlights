@@ -831,6 +831,34 @@ def assign_stretches(store: Store, game: Game, stretches: list[dict], player: in
     return n
 
 
+SPLIT = -2  # the "player" of a "split" pick: a different girl from here on (the roster page's ✂)
+
+
+def split_stretch(store: Store, game: Game, track: int, frames: list[int], batch: str, model: str = DEFAULT_MODEL) -> int:
+    """
+    Mark where a tracklet changes to another girl: a "split" pick at each frame (at the tracklet's first box from
+    there), so a label stops there and the rest is a stretch of its own. With `batch` for undo_answers. Returns the
+    picks added.
+    """
+    t = tracks(store, game, model)
+    if t is None:
+        raise ValueError("this game hasn't been through player tracking")
+    picks = load_picks(store, game)
+    n = 0
+    for f in sorted(set(int(x) for x in frames)):
+        a, b = t.window(f, t.last.get(track, f) + 1)
+        on = np.flatnonzero(t.track[a:b] == track)
+        if not len(on) or int(t.frame[a + on[0]]) <= t.first[track]:
+            continue  # past its end, or at its very start: nothing to split
+        i = a + int(on[0])
+        x1, y1, x2, y2 = t.box[i].tolist()
+        picks.append({"frame": int(t.frame[i]), "x": round((x1 + x2) / 2, 4), "y": round((y1 + y2) / 2, 4), "player": SPLIT,
+                      "kind": "split", "track": track, "batch": batch})
+        n += 1
+    _save_picks(store, game, picks)
+    return n
+
+
 def undo_answers(store: Store, game: Game, batch: str) -> int:
     """Take back a page saved by answer_tracklets or assign_stretches (picks added are removed, picks changed
     are restored)."""

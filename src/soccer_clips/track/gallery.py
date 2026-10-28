@@ -53,6 +53,10 @@ def table(store: Store, game: Game) -> dict | None:
     ids, inv = np.unique(t.track, return_inverse=True)
     theirs = set(ids[np.bincount(inv, weights=roles >= 1, minlength=len(ids)) / np.bincount(inv, minlength=len(ids)) > 0.5].tolist())
     hidden = {(p["track"], p["frame"]) for p in picks if p["player"] == people.NOT_OURS and "track" in p}
+    splits: dict[int, list[int]] = {}  # where a tracklet changes to another girl (people.split_stretch)
+    for p in picks:
+        if p["kind"] == "split" and "track" in p:
+            splits.setdefault(p["track"], []).append(p["frame"])
     s = reid.load_sigs(store, game)
     order = np.lexsort((s["frame"], s["track"]))
     s_track, s_frame, s_sig = s["track"][order], s["frame"][order], s["sig"][order]
@@ -71,6 +75,14 @@ def table(store: Store, game: Game) -> dict | None:
             at = sg["end"]
         if at <= t.last[k]:
             parts.append((at, t.last[k] + 1, -1))
+        if k in splits:  # an unlabelled stretch ends at each split too (a label already does, via segments)
+            cut = []
+            for lo, hi, label in parts:
+                for f in sorted(f for f in splits[k] if lo < f < hi) if label < 0 else []:
+                    cut.append((lo, f, -1))
+                    lo = f
+                cut.append((lo, hi, label))
+            parts = cut
         for lo, hi, label in parts:
             i, j = a + np.searchsorted(fr, lo), a + np.searchsorted(fr, hi)
             if label < 0 and (j - i < MIN_CROPS or k in theirs):
@@ -240,6 +252,24 @@ def assign(store: Store, stretches: list[dict], player: int | None, batch: str) 
     for gid, sgs in by_game.items():
         n += people.assign_stretches(store, store.load_game(gid), sgs, player, batch)
     return n
+
+
+def split(store: Store, game_id: str, track: int, frames: list[int], batch: str) -> int:
+    """people.split_stretch in one game."""
+    return people.split_stretch(store, store.load_game(game_id), track, frames, batch)
+
+
+def crop_frames(store: Store, game_id: str, track: int, start: int, end: int, n: int = 16) -> list[int]:
+    """Up to n crop frames of a tracklet in [start, end), evenly spread (the split view's pictures)."""
+    c = reid._crop_store(store, store.load_game(game_id))
+    if c is None:
+        return []
+    a, b = np.searchsorted(c["sorted_track"], [track, track + 1])
+    fr = np.sort(c["frame"][c["order"][a:b]])
+    fr = fr[(fr >= start) & (fr < end)]
+    if not len(fr):
+        return []
+    return sorted({int(fr[i]) for i in np.linspace(0, len(fr) - 1, min(n, len(fr))).round().astype(int)})
 
 
 def undo(store: Store, batch: str) -> int:

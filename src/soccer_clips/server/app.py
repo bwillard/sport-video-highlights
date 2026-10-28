@@ -175,6 +175,13 @@ class AssignIn(RequestBody):
     stretches: list[StretchIn] = Field(max_length=2000)
 
 
+class SplitIn(RequestBody):
+    game: str
+    track: int
+    frames: list[int] = Field(min_length=1, max_length=40)  # where a different girl starts
+    batch: str = Field(min_length=1, max_length=64)
+
+
 class VerdictIn(RequestBody):
     verdict: ball_others.Verdict
 
@@ -838,6 +845,23 @@ def create_app(store: Store | None = None) -> FastAPI:
         except (ValueError, FileNotFoundError) as e:
             raise HTTPException(422, str(e))
         return {"changed": n}
+
+    @app.post("/api/roster/split")
+    def roster_split(body: SplitIn) -> dict:
+        """A different girl from each of these frames on (gallery.split); undone like an assignment."""
+        from soccer_clips.track import gallery
+
+        try:
+            return {"changed": gallery.split(store, body.game, body.track, body.frames, body.batch)}
+        except (ValueError, KeyError) as e:
+            raise HTTPException(422, str(e))
+
+    @app.get("/api/roster/crops")
+    def roster_crops(game: str, track: int, start: int, end: int, n: int = 16) -> dict:
+        """Crop frames across a stretch, for choosing where to split it."""
+        from soccer_clips.track import gallery
+
+        return {"frames": gallery.crop_frames(store, game, track, start, end, min(max(n, 2), 40))}
 
     @app.delete("/api/roster/assign/{batch}")
     def roster_assign_undo(batch: str) -> dict:

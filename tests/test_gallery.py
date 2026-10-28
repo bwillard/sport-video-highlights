@@ -92,3 +92,19 @@ def test_roster_api(settings):
         assert client.delete("/api/roster/assign/x").json() == {"undone": 1}
         assert client.get("/players", follow_redirects=False).headers["location"] == "/roster"
         assert client.get("/roster").status_code == 200
+
+
+def test_split_a_picture_of_two_girls(settings):
+    store, game = four_tracklets(settings)
+    spans = lambda view, player=None: sorted((it["track"], it["start"], it["end"]) for it in gallery.pictures(store, view, player)["items"])
+    # the teammate's tracklet (0-179, unlabelled) is two girls from frame 90; #38's (0-89) from frame 40
+    assert gallery.split(store, game.id, 2, [90], "s1") == 1
+    assert (2, 0, 90) in spans("unassigned") and (2, 90, 180) in spans("unassigned")
+    assert gallery.split(store, game.id, 1, [40, 0, 500], "s2") == 1  # its start, or past its end: nothing to split
+    assert spans("player", 38) == [(1, 0, 40)] and (1, 40, 90) in spans("unassigned")
+    second = next(it for it in gallery.pictures(store, "unassigned")["items"] if (it["track"], it["start"]) == (2, 90))
+    gallery.assign(store, [second], 5, "a1")  # each part is assigned on its own
+    assert spans("player", 5) == [(2, 90, 180)] and (2, 0, 90) in spans("unassigned")
+    for b in ("a1", "s2", "s1"):
+        gallery.undo(store, b)
+    assert spans("player", 38) == [(1, 0, 90)] and (2, 0, 180) in spans("unassigned")
