@@ -286,10 +286,15 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.get("/api/settings")
     def ui_settings() -> dict:
-        """What the pages need: the player the F key tags (.env) and the roster's shirt numbers."""
+        """What the pages need: the player the F key tags (.env), the roster's shirt numbers and first names (shown
+        on the video only when asked), and the automatic labels' default threshold."""
         from soccer_clips.roster import load_roster
+        from soccer_clips.track import reid
 
-        return {"default_player": store.settings.default_player, "roster": load_roster(store.settings).numbers()}
+        roster = load_roster(store.settings)
+        return {"default_player": store.settings.default_player, "roster": roster.numbers(),
+                "first_names": {str(p.number): p.name.split()[0] for p in roster.players if p.name and p.name.split()},
+                "auto_min": reid.AUTO_MIN}
 
     @app.get("/api/games/{game_id}/clips")
     def list_clips(game_id: str) -> list[Clip]:
@@ -748,11 +753,14 @@ def create_app(store: Store | None = None) -> FastAPI:
         return reid.guess(store, load(game_id), track, frame)
 
     @app.get("/api/games/{game_id}/people/auto")
-    def game_people_auto(game_id: str) -> dict:
-        """Automatic labels (reid.auto_all): {player: [{track, start, end, margin}]} for every labelled player."""
+    def game_people_auto(game_id: str, min_score: float | None = None, margin: float | None = None) -> dict:
+        """Automatic labels (reid.auto_all): {player: [{track, start, end, margin}]} for every labelled player;
+        min_score / margin: how alike a stretch must look to be claimed (the tagger's setting), else the defaults."""
         from soccer_clips.track import reid
 
-        return {str(p): cs for p, cs in reid.auto_all(store, load(game_id)).items()}
+        ms = reid.AUTO_MIN if min_score is None else min(max(min_score, 0.5), 1.0)
+        mg = reid.AUTO_MARGIN if margin is None else min(max(margin, 0.0), 0.5)
+        return {str(p): cs for p, cs in reid.auto_all(store, load(game_id), ms, mg).items()}
 
     @app.delete("/api/games/{game_id}/people/picks/last")
     def game_people_undo(game_id: str) -> dict:

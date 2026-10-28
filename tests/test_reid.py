@@ -141,6 +141,8 @@ def test_suggestions_rank_lookalikes_and_respect_one_place_at_a_time(settings, m
     assert [c["track"] for c in claims] == [3] and claims[0]["start"] <= claims[0]["frame"] < claims[0]["end"]
     assert reid.auto_label(store, game, 38, min_score=0.99) == []
     assert {p: [c["track"] for c in cs] for p, cs in reid.auto_all(store, game).items()} == {38: [3]}
+    assert reid.auto_all(store, game, min_score=0.99) == {}  # the tagger's threshold setting
+    assert {p: [c["track"] for c in cs] for p, cs in reid.auto_all(store, game, min_score=0.5).items()} == {38: [3]}
     # "no" takes a tracklet out of the suggestions, without counting as a swap
     people.add_pick(store, game, 100, 38, "no", 0.55, 0.4, track=3)
     assert [s["track"] for s in reid.suggest(store, game, 38)["suggestions"]] == [2]

@@ -1080,9 +1080,10 @@ def evaluate_auto(store: Store, game_ids: list[str], players: list[int] | None =
 _auto_cache: dict = {}
 
 
-def auto_all(store: Store, game: Game) -> dict[int, list[dict]]:
+def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: float = AUTO_MARGIN) -> dict[int, list[dict]]:
     """auto_label for every player labelled in any game; a stretch two players both claim is dropped.
-    Cached until the game's signatures, tracklets or picks change, or labels change in another game."""
+    Cached until the game's signatures, tracklets or picks change, labels change in another game, or the
+    thresholds do (min_score, margin: see auto_label)."""
     from soccer_clips.track import people
 
     files = [sigs_path(store, game), people.path(store, game, people.DEFAULT_MODEL)]
@@ -1090,11 +1091,11 @@ def auto_all(store: Store, game: Game) -> dict[int, list[dict]]:
         return {}
     looks = [_looks_path(store, g) for g in store.list_games()]
     pp = people._picks_path(store, game)
-    key = (game.id, *(f.stat().st_mtime_ns for f in files), pp.stat().st_mtime_ns if pp.exists() else 0,
+    key = (game.id, min_score, margin, *(f.stat().st_mtime_ns for f in files), pp.stat().st_mtime_ns if pp.exists() else 0,
            *(f.stat().st_mtime_ns if f.exists() else 0 for f in looks))
     if key not in _auto_cache:
         players = sorted({p for g in store.list_games() for p in player_sums(store, g)})
-        claims = {p: auto_label(store, game, p) for p in players}
+        claims = {p: auto_label(store, game, p, margin=margin, min_score=min_score) for p in players}
         flat = sorted((c["track"], c["start"], c["end"], p) for p, cs in claims.items() for c in cs)
         clash = set()
         for (k1, a1, b1, p1), (k2, a2, b2, p2) in zip(flat, flat[1:]):

@@ -82,6 +82,9 @@ def test_roster_api(settings):
         r = client.put("/api/roster", json={"players": [{"number": 38, "name": " A Player "}, {"number": 5}]})
         assert r.json()["roster"] == [{"number": 5}, {"number": 38, "name": "A Player"}]
         assert client.put("/api/roster", json={"players": [{"number": 5}, {"number": 5}]}).status_code == 422
+        st = client.get("/api/settings").json()
+        assert st["first_names"] == {"38": "A"} and st["roster"] == [5, 38] and st["auto_min"] == 0.9
+        assert client.get(f"/api/games/{game.id}/people/auto?min_score=1").json() == {}
         got = client.get("/api/roster").json()
         assert got["roster"][1]["name"] == "A Player" and got["players"]["38"]["stretches"] == 1
         three = next(it for it in client.get("/api/roster/pictures?view=probable&player=38").json()["items"])

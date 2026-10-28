@@ -33,6 +33,8 @@
             background: var(--panel); border: 1px solid var(--line); box-shadow: 0 2px 12px #000a; }
   #layers label { display: flex; gap: 6px; align-items: center; cursor: pointer; white-space: nowrap; }
   #layers .hint { color: var(--muted); font-size: 12px; }
+  #layers .slider input { width: 110px; }
+  #layers .slider b { font-variant-numeric: tabular-nums; min-width: 32px; }
   #markin { display: inline-block; min-width: 4em; }
   #peopleStat { display: inline-block; min-width: 11em; }
   /* "who is this?": after clicking a player */
@@ -82,6 +84,9 @@
   <label title="Boxes on our team (white), and on anyone not yet put on a team"><input type="checkbox" id="layOurs"> our team</label>
   <label title="Boxes on the other team (blue)"><input type="checkbox" id="layTheirs"> opponents</label>
   <label title="Boxes on referees, keepers and spectators (grey dashed)"><input type="checkbox" id="layRest"> others: refs, keepers, spectators</label>
+  <label title="First names (from the roster) beside the numbers on the video"><input type="checkbox" id="layNames"> names with numbers</label>
+  <label class="slider" title="How alike a stretch must look to a player (against every player's labels) before it's labelled #n? automatically. Higher: fewer guesses, more of them right. 0.90 is the default."><span>auto-label at</span>
+    <input type="range" id="autoMin" min="0.80" max="0.98" step="0.01"><b id="autoMinV"></b></label>
   <div class="hint">Player boxes need 👥 players on · <kbd>Shift</kbd>+<kbd>D</kbd> opponents + others</div>
 </div>
 <div class="layout">
@@ -203,6 +208,12 @@ let jobsByClip = {}, pollTimer = null, hoverX = null;
 let fps = 30000 / 1001;
 let defaultPlayer = null;  // SOCCER_DEFAULT_PLAYER from .env; the F key
 let roster = [];  // shirt numbers from roster.json
+let firstNames = {};  // number -> first name (roster.json), drawn only with "names with numbers" on
+let showNames = false;
+try { showNames = localStorage.getItem("showNames") === "1"; } catch {}
+let autoMin = null;  // the automatic labels' threshold (null: the server's default)
+try { autoMin = parseFloat(localStorage.getItem("autoMin")) || null; } catch {}
+const tagOf = (n) => showNames && firstNames[n] ? `#${n} ${firstNames[n]}` : `#${n}`;
 
 const matchClock = (t) => matchClockFor(t, game?.kickoff_1h_s, game?.kickoff_2h_s);
 const label = (t) => matchClock(t) || fmt(t);
@@ -967,6 +978,20 @@ $("layRaw").addEventListener("change", (e) => { e.target.blur(); if (e.target.ch
 $("layOurs").addEventListener("change", (e) => { e.target.blur(); setTeams({ 0: e.target.checked }); });
 $("layTheirs").addEventListener("change", (e) => { e.target.blur(); setTeams({ 1: e.target.checked }); });
 $("layRest").addEventListener("change", (e) => { e.target.blur(); setTeams({ 2: e.target.checked }); });
+$("layNames").addEventListener("change", (e) => {
+  e.target.blur();
+  showNames = e.target.checked;
+  try { localStorage.setItem("showNames", showNames ? "1" : "0"); } catch {}
+});
+$("autoMin").addEventListener("input", (e) => { $("autoMinV").textContent = (+e.target.value).toFixed(2); });
+$("autoMin").addEventListener("change", (e) => {  // on release: the guesses again at the new threshold
+  e.target.blur();
+  autoMin = +e.target.value;
+  try { localStorage.setItem("autoMin", String(autoMin)); } catch {}
+  autoLabels = null;
+  loadAuto();
+  flash(`automatic labels at ${autoMin.toFixed(2)} or more alike`);
+});
 function firstAtOrAfter(a, f) {  // first index with a[i] >= f in sorted a
   let lo = 0, hi = a.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (a[mid] < f) lo = mid + 1; else hi = mid; }
@@ -1053,7 +1078,7 @@ function looksLike(tr, f) {
 function loadAuto() {
   if (!showPeople || !game) return;
   const id = game.id;
-  getJson(`/api/games/${encodeURIComponent(id)}/people/auto`)
+  getJson(`/api/games/${encodeURIComponent(id)}/people/auto${autoMin ? `?min_score=${autoMin}` : ""}`)
     .then((a) => { if (game?.id === id) autoLabels = { gameId: id, byPlayer: a }; })
     .catch(() => {});
 }
@@ -1153,7 +1178,7 @@ function followedTracks(f) {
 function drawPeople(ctx) {
   if (!showPeople) return;
   if (!people || people.gameId !== game?.id) { $("peopleStat").textContent = "players: loading…"; return; }
-  const f = Math.round(v.currentTime * fps), who = followWho == null ? "" : `#${followWho}`;
+  const f = Math.round(v.currentTime * fps), who = followWho == null ? "" : tagOf(followWho);
   if (!people.ranges.some(([s, e]) => f >= s && f < e)) {
     $("peopleStat").textContent = people.ranges.length ? "players: not tracked here" : "players: not tracked in this game";
     return;
@@ -1185,8 +1210,8 @@ function drawPeople(ctx) {
     const cx = r.x + (rows[o + 2] + rows[o + 4]) / 2 * r.w, y1 = r.y + rows[o + 3] * r.h;
     if (n != null) {
       ctx.fillStyle = "#fff"; ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.strokeText(`#${n}`, cx, y1 - 3);
-      ctx.fillText(`#${n}`, cx, y1 - 3);
+      ctx.strokeText(tagOf(n), cx, y1 - 3);
+      ctx.fillText(tagOf(n), cx, y1 - 3);
       continue;
     }
     const a = auto.get(tr);
@@ -1204,8 +1229,8 @@ function drawPeople(ctx) {
     } else {
       ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.font = "italic 11px system-ui, sans-serif";
     }
-    ctx.strokeText(`#${a}?`, cx, y1 - 3);
-    ctx.fillText(`#${a}?`, cx, y1 - 3);
+    ctx.strokeText(`${tagOf(a)}?`, cx, y1 - 3);
+    ctx.fillText(`${tagOf(a)}?`, cx, y1 - 3);
   }
   for (let i = i0; i < i1; i++) {
     const o = i * STRIDE;
@@ -1782,7 +1807,11 @@ window.addEventListener("hashchange", applyHash);
 
 (async () => {
   tags = await getJson("/api/tags");
-  ({ default_player: defaultPlayer, roster = [] } = await getJson("/api/settings"));
+  let autoDefault;
+  ({ default_player: defaultPlayer, roster = [], first_names: firstNames = {}, auto_min: autoDefault = 0.9 } = await getJson("/api/settings"));
+  $("autoMin").value = autoMin ?? autoDefault;
+  $("autoMinV").textContent = (+$("autoMin").value).toFixed(2);
+  $("layNames").checked = showNames;
   for (const t of tags) $("ftag").append(new Option(t.name, t.name));
   const games = await getJson("/api/games");
   for (const g of games) sel.append(new Option(g.id, g.id));
