@@ -58,6 +58,9 @@
   #pitchInfo { color: var(--muted); font-size: 13px; line-height: 1.5; }
   #pitchInfo b { color: var(--text); }
   #pitchInfo .bad { color: #ff6b6b; }
+  /* while calibrating: says so over the video, since clicks there place points instead of pausing */
+  #calBanner { position: absolute; top: 8px; left: 8px; max-width: 60%; padding: 6px 10px; border-radius: 5px; z-index: 2;
+               background: rgba(40, 0, 40, 0.85); border: 2px solid #ff3df5; color: #fff; font-size: 13px; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -69,6 +72,8 @@
   <span class="stat" title="Playback speed: [ and ] change it by 0.5×">rate <b id="rate">1</b>×</span>
   <button id="sound" title="Sound on/off (M). Starts off.">🔇 sound off</button>
   <button id="ballBtn" title="Show the game ball (B): a yellow ring follows it where the game has been ball-tracked.&#10;Solid ring = detected in that frame; dashed = filled in across a short gap.&#10;With it on: K fixes the ball, K then O marks other balls.">⚽ ball</button>
+  <button id="fieldBtn" title="Field lines (Shift+Q): the field as the calibration places it, drawn over the video in magenta. Only shows it: where the lines miss the painted ones, use ✏️ calibrate (Q) to fix them.">📐 lines <span class="hk">⇧Q</span></button>
+  <button id="calBtn" title="Calibrate the field (Q): click a spot on the video, then where it is on the map below. While it's on, clicks on the video place points instead of pausing. Q or Esc to finish.">✏️ calibrate <span class="hk">Q</span></button>
   <button id="layersBtn" title="What's drawn over the video: ball detections (raw, D) and which players' boxes (our team, opponents, others). Lit when anything beyond our team is on.">🔍 layers ▾</button>
   <span class="stat" id="debugStat" hidden title="Ball detections in this frame (before the filter picks the game ball)"></span>
   <span class="stat" id="ballStat" hidden title="The game ball in this frame:&#10;seen = detected; filled in = between detections, a short gap bridged;&#10;not seen = no game ball chosen (hidden, out of shot, or missed);&#10;not tracked here = this part of the game hasn't been through ball tracking"></span>
@@ -89,7 +94,7 @@
   <label title="Boxes on our team (white), and on anyone not yet put on a team"><input type="checkbox" id="layOurs"> our team</label>
   <label title="Boxes on the other team (blue)"><input type="checkbox" id="layTheirs"> opponents</label>
   <label title="Boxes on referees, keepers and spectators (grey dashed)"><input type="checkbox" id="layRest"> others: refs, keepers, spectators</label>
-  <label title="The field's lines as the calibration places them, drawn over the video (magenta). Where they miss the painted lines, the calibration is off there: Q to add a click."><input type="checkbox" id="layPitch"> field lines (calibration) <kbd>Q</kbd> fixes</label>
+  <label title="The field's lines as the calibration places them, drawn over the video (magenta). Where they miss the painted lines, the calibration is off there: Q to add a click."><input type="checkbox" id="layPitch"> field lines <kbd>Shift</kbd>+<kbd>Q</kbd></label>
   <label title="A top-down map of the field below the video: the part the camera shows, players, the ball"><input type="checkbox" id="layMap"> field map</label>
   <label title="First names (from the roster) beside the numbers on the video"><input type="checkbox" id="layNames"> names with numbers</label>
   <label class="slider" title="How alike a stretch must look to a player (against every player's labels) before it's labelled #n? automatically. Higher: fewer guesses, more of them right. 0.90 is the default."><span>auto-label at</span>
@@ -104,6 +109,7 @@
       <canvas id="loupe" width="240" height="240" hidden></canvas>
       <div id="picker" hidden></div>
       <span id="flash"></span>
+      <div id="calBanner" hidden></div>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <div id="pitchBox" hidden>
@@ -149,13 +155,13 @@
       <details data-sec="field"><summary>Field map</summary><ul>
         <li>The <b>field map</b> below the video shows everyone the camera sees, from above (🔍 layers turns it on / off).
           It needs the game's field calibrated once: a few clicks tie the video to the field</li>
-        <li><kbd>Q</kbd> calibrate / correct: pause, click a spot on the video that you can place on the field (a corner, a goal post,
+        <li><kbd>Q</kbd> (or ✏️ calibrate) calibrate / correct: a magenta banner over the video says it's on, and clicks on the video place points instead of pausing. Click a spot on the video that you can place on the field (a corner, a goal post,
           the centre spot, where the circle meets the halfway line, or anywhere on a line or the circle), then click that spot on the
           map (magenta dots = landmarks; near a line = somewhere on that line). It solves again each time (a few seconds).
           <kbd>Q</kbd> / <kbd>Esc</kbd> stops · <kbd>U</kbd> takes back the last click · click one of your clicks (cyan ×) on the video to remove it</li>
         <li>To start: 4 landmarks not all on one line, or at kickoff the centre spot, both places the circle crosses the halfway line and 3
           more points on the circle. Then click goal posts or corners at both ends: they tell it how long and wide the field is</li>
-        <li>🔍 layers → <b>field lines</b>: the calibrated field drawn over the video (magenta). Where it misses the painted lines, add a click
+        <li><kbd>Shift</kbd>+<kbd>Q</kbd> (or 📐 field lines) <b>field lines</b>: the calibrated field drawn over the video (magenta), just to look; it's always shown while calibrating. Where it misses the painted lines, add a click
           there. A red × is a click that disagrees with the rest (often on the other set of lines on a double-marked field): click it to remove it</li>
       </ul></details>
       <details data-sec="players"><summary>Players</summary><ul>
@@ -1708,15 +1714,22 @@ async function loadPitch() {
 }
 function showPitchButtons() {
   $("layPitch").checked = showPitchLines;
+  $("fieldBtn").classList.toggle("on", showPitchLines);
+  $("calBtn").classList.toggle("on", !!pitchMode);
+  $("calBanner").hidden = !pitchMode;
   $("layMap").checked = showPitchMap;
   $("pitchBox").hidden = !(showPitchMap || pitchMode);
   $("pitchBox").classList.toggle("calibrating", !!pitchMode);
 }
-$("layPitch").addEventListener("change", (e) => {
-  e.target.blur();
-  showPitchLines = e.target.checked;
+function togglePitchLines(on = !showPitchLines) {
+  showPitchLines = on;
   try { localStorage.setItem("showPitchLines", showPitchLines ? "1" : "0"); } catch {}
-});
+  showPitchButtons();
+  if (!pitchMode) flash(showPitchLines ? "field lines on" : "field lines off");
+}
+$("layPitch").addEventListener("change", (e) => { e.target.blur(); togglePitchLines(e.target.checked); });
+$("fieldBtn").addEventListener("click", (e) => { e.currentTarget.blur(); togglePitchLines(); });
+$("calBtn").addEventListener("click", (e) => { e.currentTarget.blur(); pitchMode ? stopPitchMode() : startPitchMode(); });
 $("layMap").addEventListener("change", (e) => {
   e.target.blur();
   showPitchMap = e.target.checked;
@@ -1730,9 +1743,10 @@ function renderPitchInfo() {
   const n = pitch.points.length, bad = pitch.points.filter((p) => p.bad).length;
   const lines = [];
   if (pitchMode) {
-    lines.push(pitchMode.stage === "video"
-      ? "<b>Calibrating:</b> click a spot on the video you can place on the field (a landmark, or anywhere on a line or the circle). Click one of your clicks (×) to remove it. <kbd>U</kbd> undo · <kbd>Q</kbd> / <kbd>Esc</kbd> done"
-      : "<b>Now click where that is on the map</b> (magenta dots = landmarks; near a line = on that line). <kbd>Esc</kbd> cancels");
+    $("calBanner").innerHTML = pitchBusy ? "<b>✏️ Calibrating</b> · solving…"
+      : pitchMode.stage === "video"
+      ? "<b>✏️ Calibrating</b> · click a spot on the video you can place on the field: a corner, a goal post, the centre spot, or anywhere on a line or the circle. Click one of your × to remove it · <kbd>U</kbd> undo · <kbd>Q</kbd> / <kbd>Esc</kbd> done"
+      : "<b>✏️ Calibrating</b> · now click where that is on the <b>map below</b> (magenta dots = landmarks; near a line = on that line) · <kbd>Esc</kbd> cancels";
   }
   if (!pitch.registered) {
     lines.push("This game's frames aren't registered yet: run <code>soccer-clips ball fixed-objects " + esc(game.id) + "</code>.");
@@ -1766,6 +1780,7 @@ function stopPitchMode() {
   stage.classList.remove("placing");
   showPitchButtons();
   renderPitchInfo();
+  flash(showPitchLines ? "calibration done" : "calibration done (📐 field lines / Shift+Q shows the lines)");
 }
 async function pitchChange(method, url, body, what) {
   pitchBusy = true;
@@ -1993,7 +2008,7 @@ document.addEventListener("keydown", (e) => {
     z: () => (e.shiftKey ? cycleLoupeZoom() : toggleLoupe()),
     l: () => (e.shiftKey ? pickPlayer("not") : startPicking()),
     u: () => (pitchMode ? undoPitchPoint() : undoPick()),
-    q: () => (pitchMode ? stopPitchMode() : startPitchMode()),
+    q: () => (e.shiftKey ? togglePitchLines() : pitchMode ? stopPitchMode() : startPitchMode()),
     g: () => nextSuggestion(),
     y: () => answer(true),
     x: () => answer(false),
