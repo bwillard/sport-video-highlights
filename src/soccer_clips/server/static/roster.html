@@ -572,7 +572,7 @@ async function loadRetrain() {
   try { retrain = await getJson("/api/retrain"); } catch (e) { $("model").textContent = String(e.message || e); return; }
   const st = retrain.status, running = st?.state === "running";
   let logText = "";
-  if (running || $("model").querySelector("details[open]")) {
+  if (running || $("model").querySelector("details[data-k=log][open]")) {
     try { logText = (await getJson("/api/retrain/log?lines=30")).lines.join("\n"); } catch { /* not yet */ }
   }
   renderRetrain(logText);
@@ -624,7 +624,7 @@ function renderRetrain(logText) {
   parts.push(retrain.runpod
     ? `<button id="retrainBtn" ${running ? "disabled" : ""}>${running ? "Retraining…" : `Retrain now · about ${est.minutes} min, $${est.dollars.toFixed(2)}`}</button>`
     : `<div>Retraining needs RunPod (RUNPOD_API_KEY in .env).</div>`);
-  parts.push(`<details><summary>How is this measured?</summary><div class="msg">
+  parts.push(`<details data-k="how"><summary>How is this measured?</summary><div class="msg">
     For every labelled moment of every player, the test asks: among our players on screen right then, does her tracklet look
     most like her? Her “look” comes from her labels in the other games, and each game is tested with a model that never
     trained on it. Each player's hit rate counts the same in the average (players with at least 5 moments)${runs.some((r) => r.tuned.player_top1 == null) ? "; older runs counted every moment, so players with more labels weighed more" : ""}.
@@ -632,8 +632,11 @@ function renderRetrain(logText) {
     what training added. A new model is only used if it does about as well as the one in use (within 5 points).
     ${cur?.tuned.same_top1 != null ? `<br>Also: a player matches herself 10–20 s later ${pct(cur.tuned.same_top1)} of the time (${pct(cur.stock.same_top1)} before training).` : ""}
   </div></details>`);
-  if (st?.log) parts.push(`<details ${running ? "open" : ""}><summary>log</summary><pre>${esc(logText || "…")}</pre></details>`);
+  if (st?.log) parts.push(`<details data-k="log" ${running ? "open" : ""}><summary>log</summary><pre>${esc(logText || "…")}</pre></details>`);
+  // a redraw keeps each fold-out as the viewer left it
+  const open = Object.fromEntries([...$("model").querySelectorAll("details[data-k]")].map((d) => [d.dataset.k, d.open]));
   $("model").innerHTML = parts.join("");
+  for (const d of $("model").querySelectorAll("details[data-k]")) if (d.dataset.k in open) d.open = open[d.dataset.k];
   const pre = $("model").querySelector("pre");
   if (pre) pre.scrollTop = pre.scrollHeight;
 }
@@ -651,7 +654,7 @@ $("model").addEventListener("click", async (e) => {
   } catch (err) { flash(String(err.message || err), true); }
   loadRetrain();
 });
-$("model").addEventListener("toggle", (e) => { if (e.target.open) loadRetrain(); }, true);
+$("model").addEventListener("toggle", (e) => { if (e.target.open && e.target.dataset.k === "log") loadRetrain(); }, true);  // fetch the log
 
 init().then(loadRetrain);
 </script>
