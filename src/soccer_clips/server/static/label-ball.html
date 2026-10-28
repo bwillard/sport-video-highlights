@@ -36,12 +36,10 @@
 </head>
 <body>
 <div class="bar">
-  <a href="/" title="Back to tagging games">← Tagger</a>
   <select id="setPick" aria-label="label set" title="Which set of frames to label:&#10;bench = the benchmark, used only to score models (never trained on);&#10;train = frames the detector is fine-tuned on.&#10;Frames you fix in the tagger land in one of these automatically."></select>
   <span class="stat" title="Frames in this set with an answer (including no ball and can't tell)"><b id="done">0</b> / <b id="total">0</b> labelled</span>
   <div class="progress"><div id="bar"></div></div>
   <span class="stat" title="Which frame of the set you're on">frame <b id="pos">–</b></span>
-  <a href="/review-balls" title="Check the model's finds that aren't the game ball: real spare balls (they count as correct) or junk">Review other balls →</a>
   <span id="flash"></span>
 </div>
 

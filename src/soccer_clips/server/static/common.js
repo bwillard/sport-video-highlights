@@ -123,3 +123,26 @@ function setupMute(video) {
   document.addEventListener("keydown", hide, true);
   addEventListener("scroll", hide, true);
 })();
+
+// The links between the pages, in a row at the top of every page (this script loads at the end of <body>).
+// A page can point a link at what it's showing: navLink("/watch", makeHash({player: 38, game: id})).
+const NAV = [
+  ["/", "Tagger", "Tag clips in a game, label players and fix the ball while watching"],
+  ["/watch", "Player view", "Watch one player's games with everything else skipped: only the stretches where they're on screen"],
+  ["/roster", "Roster", "Names for numbers, each player's pictures from every game, and the unassigned ones to sort"],
+  ["/reel", "Reels", "Build highlight reels from tagged clips, across games"],
+  ["/label-ball", "Ball labels", "Label the ball in sampled frames: the training and benchmark data for the ball detector"],
+  ["/review-balls", "Other balls", "Check the model's finds that aren't the game ball: real spare balls or junk"],
+];
+(function siteNav() {
+  const here = location.pathname.replace(/\/$/, "") || "/";
+  const nav = document.createElement("nav");
+  nav.className = "site";
+  nav.innerHTML = `<span class="brand">⚽ Soccer Clips</span>` + NAV.map(([href, name, tip]) =>
+    `<a href="${href}" data-nav="${href}" title="${esc(tip)}"${href === here ? ' class="on" aria-current="page"' : ""}>${name}</a>`).join("");
+  document.body.prepend(nav);
+})();
+function navLink(path, hash = "") {
+  const a = document.querySelector(`nav.site a[data-nav="${path}"]`);
+  if (a) a.href = path + hash;
+}

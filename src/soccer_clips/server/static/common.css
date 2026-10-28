@@ -78,3 +78,11 @@ button.on .hk { color: #00000099; }
 .model summary { cursor: pointer; }
 .model pre { font-size: 10px; max-height: 180px; overflow: auto; background: #151515; padding: 4px; white-space: pre-wrap; margin: 4px 0 0; }
 .box .model { padding: 0; }
+
+/* the links between pages (common.js siteNav) */
+nav.site { display: flex; gap: 2px; align-items: center; padding: 0 12px; height: 30px; flex: none; background: #0a0a0a;
+           border-bottom: 1px solid var(--line); font-size: 13px; overflow-x: auto; white-space: nowrap; }
+nav.site .brand { color: var(--muted); margin-right: 10px; font-weight: 600; }
+nav.site a { color: var(--muted); text-decoration: none; padding: 4px 10px; border-radius: 4px; }
+nav.site a:hover { color: var(--text); background: #1d1d1d; }
+nav.site a.on { color: var(--text); background: #23272e; box-shadow: inset 0 -2px 0 var(--accent); }

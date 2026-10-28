@@ -72,13 +72,10 @@
   <button id="loupeBtn" title="Magnifier (Z): a 3× close-up follows the mouse over the video, boxes and rings included.&#10;Shift+Z switches between 3× and 6×.">🔎 magnifier</button>
   <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;A small white #number over a box = already labelled as that player.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.&#10;Dashed ring / faint #n? = probably that player, by appearance; Y / X confirm or reject the dashed ring.">👥 players</button>
   <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
+  <button id="onlyBtn" hidden title="Only them (W): play just the stretches where the player you follow is on screen (labelled, or the dashed #n? guesses), skipping the rest, as the Player view page does: a second either side, gaps under 3 s played through. The timeline darkens what's skipped.&#10;W again = play everything.">⏭ only them <span class="hk">W</span></button>
   <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
   <span class="stat" title="Marked in / out points for the next clip (I and O; Esc clears). Enter saves the clip; without an in point it saves the last 8s and next 2s.">in <b id="markin">–</b></span>
   <span class="stat" title="Game time: when each half starts and ends. H / Shift+H set the 1st / 2nd half kickoff (H late in the game asks which); J / Shift+J the end of the 1st / 2nd half. Used for the match clock, reel captions, and cutting the video to game time (the Game time box on the right).">game <b id="kickoffs">–</b></span>
-  <a href="/roster" title="The roster: names for numbers, each player's pictures from every game, and the unassigned ones to sort">Roster</a>
-  <a href="/watch" title="Watch one player's games with everything else skipped: only the stretches where they're on screen">Player view</a>
-  <a href="/label-ball" title="Label the ball in sampled frames: the training and benchmark data for the ball detector">Ball labels</a>
-  <a href="/reel" title="Build highlight reels from tagged clips, across games">Reels →</a>
 </div>
 <div id="layers" hidden>
   <label title="Every ball the detector found, not just the game ball (D)"><input type="checkbox" id="layRaw"> ball detections (raw) <kbd>D</kbd></label>
@@ -143,6 +140,9 @@
         <li><kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person)</li>
         <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
         <li>The orange strip under the timeline = where they're labelled</li>
+        <li><kbd>W</kbd> only them: plays just the stretches where the player you follow is on screen (labelled or guessed),
+          skipping the rest (darkened on the timeline) · <kbd>W</kbd> again plays everything. The <b>Player view</b> page does
+          the same across every game</li>
         <li>Paused, <b>point at a player</b> (cyan box): <kbd>Y</kbd> / <kbd>X</kbd> answer for them: on a <i>#5?</i> guess, yes
           it's #5 / no it isn't; on a labelled #5, <kbd>X</kbd> = not #5 from here on; on anyone else, <kbd>Y</kbd> = whoever they look
           most like (the hint under the box says who). <b>Click</b> them to pick any number ("looks like" = the closest three;
@@ -599,6 +599,15 @@ function drawTimeline() {
       if (b > a) ctx.fillRect(x(a), 14, x(b) - x(a), h - 14);
     }
   }
+  const only = onlyThem && showPeople && themRuns();
+  if (only) {  // what "only them" skips: dark
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    let from = 0;
+    for (const [a, b] of [...only, [game.duration_s, game.duration_s]]) {
+      if (a > from) ctx.fillRect(x(from), 14, x(a) - x(from), h - 14);
+      from = Math.max(from, b);
+    }
+  }
   if (showPeople && people?.gameId === game.id) {  // where the followed player is labelled
     ctx.fillStyle = "#ff9f40";
     const spf = 1 / fps;
@@ -650,6 +659,7 @@ canvas.addEventListener("pointerleave", () => (hoverX = null));
 
 function frame() {
   if (stopAt != null && v.currentTime >= stopAt) { v.pause(); stopAt = null; }
+  skipToThem();
   $("time").textContent = fmt(v.currentTime);
   $("clock").textContent = (game && matchClock(v.currentTime)) || "–";
   drawTimeline();
@@ -1094,6 +1104,57 @@ function autoAt(f) {
   }
   return m;
 }
+// W: play only where the followed player is on screen (labelled, or the dashed #n? guesses), like the Player view
+// page (watch.py): a second either side, gaps under 3 s played through, glimpses under 2 s dropped
+let onlyThem = false, themCache = null;
+try { onlyThem = localStorage.getItem("onlyThem") === "1"; } catch {}
+const NO_AUTO = [];
+function themRuns() {
+  // [[start_s, end_s]] for the followed player in this game; null until the labels are loaded
+  if (!game || people?.gameId !== game.id || followWho == null) return null;
+  const auto = (autoLabels?.gameId === game.id && autoLabels.byPlayer[followWho]) || NO_AUTO;
+  const c = themCache;
+  if (c && c.segs === people.segments && c.auto === auto && c.who === followWho && c.game === game.id) return c.runs;
+  const spans = [...people.segments.filter((sg) => sg.player === followWho), ...auto]
+    .map((sg) => [Math.max(0, sg.start / fps - 1), sg.end / fps + 1]).sort((a, b) => a[0] - b[0]);
+  const runs = [];
+  for (const [a, b] of spans) {
+    const last = runs[runs.length - 1];
+    if (last && a - last[1] <= 3) last[1] = Math.max(last[1], b);
+    else runs.push([a, b]);
+  }
+  themCache = { segs: people.segments, auto, who: followWho, game: game.id, runs: runs.filter(([a, b]) => b - a >= 2) };
+  return themCache.runs;
+}
+function skipToThem() {
+  // playing in a skipped part: on to their next stretch
+  if (!onlyThem || !showPeople || v.paused || v.seeking) return;
+  const runs = themRuns();
+  if (!runs) return;
+  const t = v.currentTime;
+  if (runs.some(([a, b]) => t >= a - 0.05 && t < b)) return;
+  const next = runs.find(([a]) => a > t);
+  if (next) v.currentTime = next[0];
+  else { v.pause(); flash(`no more of ${followWho == null ? "them" : tagOf(followWho)} in this game`); }
+}
+function flashOnly() {
+  const runs = themRuns();
+  if (!runs) return flash("only them: loading where they are…");
+  const secs = runs.reduce((a, [s, e]) => a + e - s, 0);
+  flash(runs.length ? `only ${tagOf(followWho)}: ${runs.length} stretches, ${Math.round(secs / 60)} min of this game · W plays everything`
+    : `${tagOf(followWho)} isn't labelled or guessed in this game: nothing to play`, !runs.length);
+}
+function toggleOnly() {
+  if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
+  onlyThem = !onlyThem;
+  try { localStorage.setItem("onlyThem", onlyThem ? "1" : "0"); } catch {}
+  if (onlyThem && !showPeople) togglePeople();
+  showPeopleButton();
+  if (onlyThem) (loadPeople() || Promise.resolve()).then(() => setTimeout(flashOnly, 0));
+  else flash("playing everything");
+}
+$("onlyBtn").addEventListener("click", (e) => { e.currentTarget.blur(); toggleOnly(); });
+
 function loadPeople() {
   if (!showPeople || !game || people?.gameId === game.id) return peopleLoading;
   const id = game.id;
@@ -1118,7 +1179,8 @@ function togglePeople() {
 }
 function showPeopleButton() {
   $("peopleBtn").classList.toggle("on", showPeople);
-  $("peopleStat").hidden = $("followWho").hidden = !showPeople;
+  $("peopleStat").hidden = $("followWho").hidden = $("onlyBtn").hidden = !showPeople;
+  $("onlyBtn").classList.toggle("on", onlyThem && showPeople);
 }
 function fillFollowWho() {
   // the default player, the roster, and every number tagged on a clip in this game
@@ -1133,12 +1195,16 @@ function fillFollowWho() {
   if (!nums.size) pick.append(new Option("follow: add a player number to a clip first", ""));
   followWho = nums.has(keep) ? keep : nums.has(defaultPlayer) ? defaultPlayer : nums.size ? +pick.options[0].value : null;
   pick.value = followWho ?? "";
+  watchLink();
 }
+const watchLink = () => navLink("/watch", makeHash({ player: followWho, game: game?.id }));
 $("followWho").addEventListener("change", (e) => {
   followWho = +e.target.value || null;
   suggestion = null;
   fetchSuggestions()?.catch(() => {});
   try { localStorage.setItem("followWho", followWho ?? ""); } catch {}
+  watchLink();
+  if (onlyThem) flashOnly();
   e.target.blur();
 });
 function chunkRows(ci) {
@@ -1660,6 +1726,7 @@ document.addEventListener("keydown", (e) => {
     d: () => (e.shiftKey ? toggleOthersLayers() : toggleDebug()),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
     v: () => togglePeople(),
+    w: () => toggleOnly(),
     z: () => (e.shiftKey ? cycleLoupeZoom() : toggleLoupe()),
     l: () => (e.shiftKey ? pickPlayer("not") : startPicking()),
     u: () => undoPick(),
