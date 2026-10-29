@@ -103,7 +103,7 @@ const pct = (x) => `${Math.round(100 * x)}%`;
 const totalOf = (r) => r ? r.seconds.labelled + r.seconds.appearance + r.seconds.place + r.seconds.unknown : 0;
 const namedOf = (r) => totalOf(r) ? 1 - r.seconds.unknown / totalOf(r) : null;
 const who = (n) => `#${n}${names[n] ? ` ${esc(names[n])}` : ""}`;
-const tagger = (id, t) => `/${makeHash({ game: id, t: t != null ? t.toFixed(1) : null })}`;
+const tagger = (id, t, track) => `/${makeHash({ game: id, t: t != null ? t.toFixed(1) : null, track })}`;
 
 function stackBar(parts, total, cls = "") {
   const w = (v) => total ? (100 * v / total).toFixed(2) : 0;
@@ -165,7 +165,8 @@ function detail(g) {
     const top = x.looks[0], sure = top && top.score >= r.auto_min;
     const looks = x.looks.length ? x.looks.map((l, i) => `<span class="${i === 0 && sure ? "sure" : ""}">${who(l.player)} ${l.score.toFixed(2)}</span>`).join(", ")
       : `<span class="busy">no crops (too small)</span>`;
-    return `<tr><td><a href="${tagger(g.id, x.t)}" title="Open the tagger here (V shows the players, L labels one)">${fmt(x.t)}</a></td>
+    // a moment into it: t is rounded, and the first frame may be just before the tracklet starts
+    return `<tr><td><a href="${tagger(g.id, x.t + 0.1, x.track)}" title="Open the tagger here, with this tracklet outlined in yellow: click it to name them">${fmt(x.t)}</a></td>
       <td class="num">${dur(x.s)}</td><td class="num">${dur(x.length)}</td>
       <td ${sure ? `title="Looks at least ${r.auto_min} like them but wasn't guessed: another teammate on screen looked nearly as alike, two players claimed it, or they were labelled elsewhere then"` : ""}>${looks}</td></tr>`;
   }).join("");

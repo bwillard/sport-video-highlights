@@ -179,6 +179,8 @@
           it's #5 / no it isn't; on a labelled #5, <kbd>X</kbd> = not #5 from here on; on anyone else, <kbd>Y</kbd> = whoever they look
           most like (the hint under the box says who). <b>Click</b> them to pick any number ("looks like" = the closest three;
           best guess outlined: click it, or <kbd>Enter</kbd>; or type a number then <kbd>Enter</kbd>)</li>
+        <li>From the <b>Games</b> page's longest unknown tracklets: the game opens there with that tracklet outlined in yellow
+          ("who is this?"); click it to name them. The outline goes once it's labelled</li>
         <li><kbd>A</kbd> next automatic guess, any player (<kbd>Shift</kbd>+<kbd>A</kbd> back): jumps to a <i>#n?</i> and asks
           (magenta box) · <kbd>Y</kbd> yes · <kbd>X</kbd> no, and on to the next · <kbd>A</kbd> again skips it</li>
         <li><kbd>G</kbd> next suggestion: jumps to an unlabelled teammate who looks like the player you follow (magenta box, best
@@ -1090,6 +1092,7 @@ const TEAM_STYLE = { 0: ["rgba(255,255,255,0.75)", []], 1: ["rgba(90,176,255,0.7
 let showPeople = false, people = null;  // people: {gameId, ranges, teams, picks, segments}
 let followWho = null, picking = false;
 let suggestion = null;  // {track, frame, x, y, box, score, start, end, n, of} being asked about
+let wanted = null;  // {gameId, track}: a tracklet sent from the games page (#track=), outlined until it's labelled
 const skippedSuggestions = new Set();  // "player:track" skipped with G
 const boxChunks = new Map();  // chunk index -> Float32Array, or "loading"
 try { showPeople = localStorage.getItem("showPeople") === "1"; } catch {}
@@ -1202,6 +1205,7 @@ function loadPeople() {
 }
 function setLabels(r) {
   if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
+  if (wanted?.gameId === game.id && r.segments.some((sg) => sg.track === wanted.track)) wanted = null;  // named: done
   loadAuto();  // labels move the automatic ones
   looks.clear();  // and the players' looks, and who's busy where
   boxChunks.clear();  // which kit is "ours" comes from the labels, so box teams may have changed
@@ -1362,6 +1366,24 @@ function drawPeople(ctx) {
       ctx.fillText(`#${suggestion.player}?  Y / X`, (x1 + x2) / 2, y1 - 8);
     }
   }
+  // the tracklet sent from the games page: a yellow outline wherever it is
+  let wantedHere = false;
+  if (wanted?.gameId === game.id) {
+    for (let i = i0; i < i1; i++) {
+      const o = i * STRIDE;
+      if (rows[o + 1] !== wanted.track) continue;
+      wantedHere = true;
+      const x1 = r.x + rows[o + 2] * r.w, x2 = r.x + rows[o + 4] * r.w, y1 = r.y + rows[o + 3] * r.h, y2 = r.y + rows[o + 5] * r.h;
+      ctx.lineWidth = 5; ctx.strokeStyle = "rgba(0,0,0,0.6)";
+      ctx.strokeRect(x1 - 4, y1 - 4, x2 - x1 + 8, y2 - y1 + 8);
+      ctx.lineWidth = 3; ctx.strokeStyle = "#ffe14d";
+      ctx.strokeRect(x1 - 4, y1 - 4, x2 - x1 + 8, y2 - y1 + 8);
+      ctx.font = "bold 12px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.fillStyle = "#ffe14d";
+      ctx.strokeText("who is this?", (x1 + x2) / 2, y1 - 10);
+      ctx.fillText("who is this?", (x1 + x2) / 2, y1 - 10);
+    }
+  }
   // the player under the mouse (paused, once it has moved since the last jump): what Y / X / a click act on
   hoverBox = boxUnder(f, i0, i1, rows, known, auto);
   if (hoverBox) {
@@ -1383,6 +1405,9 @@ function drawPeople(ctx) {
     ? `players: is this #${suggestion.player}? (guess ${suggestion.n} of ${suggestion.of} by appearance) Y yes · X no · A skip`
     : suggestion
     ? `players: is this #${suggestion.player}? (best match ${suggestion.n} of ${suggestion.of} unlabelled tracklets of our team)`
+    : wanted?.gameId === game.id
+    ? (wantedHere ? "players: the yellow box is the tracklet from the games page: paused, click it to name them"
+                  : "players: the tracklet from the games page isn't on screen here")
     : here ? `players: ${who} here`
     : autoHere ? `players: ${who} probably here (by appearance): Y yes · X no`
     : `players: ${who || "nobody followed"} not labelled here`;
@@ -2214,6 +2239,8 @@ function applyHash() {
   back.hidden = !h.back;
   if (h.back) back.href = h.back;
   if (h.game && [...sel.options].some((o) => o.value === h.game)) {
+    wanted = h.track != null && h.track !== "" ? { gameId: h.game, track: +h.track } : null;
+    if (wanted && !showPeople) togglePeople();  // the outline is drawn with the players
     loadGame(h.game, Math.max(0, +h.t || 0), h.clip || null);
     return true;
   }
