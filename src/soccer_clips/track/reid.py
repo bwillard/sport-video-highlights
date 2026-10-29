@@ -981,6 +981,8 @@ def auto_label(store: Store, game: Game, player: int, margin: float = AUTO_MARGI
             ok &= ~(over & (pc["track"] == x["track"]))
         if x["player"] == player:
             ok &= ~over
+    for x in people.not_ours(t, picks):  # marked not anyone on our team
+        ok &= ~((pc["lo"] < x["end"]) & (pc["hi"] >= x["start"]) & (pc["track"] == x["track"]))
     idx = np.flatnonzero(ok)
     if not len(idx):  # every piece labelled, turned down or while the player is labelled elsewhere
         return []
@@ -1114,6 +1116,9 @@ def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: floa
         for p in picks:
             if p["kind"] != "is" and p.get("track") is not None:
                 rejected.setdefault(p["player"], set()).add(p["track"])
+        theirs = {x["track"] for x in people.not_ours(t, picks)}  # marked not ours: turned down for everyone
+        for p in {*players, *(x["player"] for x in people.segments(t, picks))}:
+            rejected.setdefault(p, set()).update(theirs)
         for p, cs in bridge.extend(store, game, people.segments(t, picks), out, rejected).items():
             out[p] = sorted(out.get(p, []) + cs, key=lambda c: c["start"])
         _auto_cache[game.id] = (key, {p: cs for p, cs in out.items() if cs})

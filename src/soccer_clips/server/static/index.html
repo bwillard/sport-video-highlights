@@ -171,6 +171,9 @@
           Which teams get boxes: 🔍 layers (our team only to start) · <kbd>Shift</kbd>+<kbd>D</kbd> opponents + others on / off</li>
         <li><kbd>L</kbd> then click a player = that's them (labels the whole tracklet: a stretch the tracker kept on one person)</li>
         <li><kbd>Shift</kbd>+<kbd>L</kbd> = the ring is on the wrong person from here · <kbd>U</kbd> take back the last one</li>
+        <li>Paused, point at someone who isn't on our team (a spectator, a parent, a coach, an opponent) and press
+          <kbd>Shift</kbd>+<kbd>X</kbd> (or 🚫 in the box a click opens): their stretch of the tracklet turns grey and is
+          never labelled or guessed, and a label on it goes. <kbd>U</kbd> takes it back</li>
         <li>The orange strip under the timeline = where they're labelled</li>
         <li><kbd>W</kbd> only them: plays just the stretches where the player you follow is on screen (labelled or guessed),
           skipping the rest (darkened on the timeline) · <kbd>W</kbd> again plays everything. The <b>Player view</b> page does
@@ -1400,7 +1403,7 @@ function drawPeople(ctx) {
   $("peopleStat").textContent = suggestWaiting != null
     ? `players: finding teammates who look like #${suggestWaiting}…`
     : hoverBox
-    ? `players: ${targetHint(hoverBox)} · click = pick a number`
+    ? `players: ${targetHint(hoverBox)} · click = pick a number · Shift+X = not our team`
     : suggestion?.from === "queue"
     ? `players: is this #${suggestion.player}? (guess ${suggestion.n} of ${suggestion.of} by appearance) Y yes · X no · A skip`
     : suggestion
@@ -1450,7 +1453,24 @@ function yxTarget() {
   if (autoHere) return { ...autoHere, label: null, guess: followWho, from: "ring" };
   return null;
 }
+let lastNotOurs = null;  // {gameId, batch} of the last "not our team", while it's the last change (U takes it back)
+async function notOurs(t) {
+  // the stretch of the tracklet under the mouse isn't anyone on our team: grey from then on, never labelled or guessed
+  if (!showPeople || !people) return flash("press V to show the players first", true);
+  if (!t) return flash("point at a player first", true);
+  if (t.x == null || t.track == null) return flash("players still loading…");
+  closePicker();
+  const batch = `notours-${Date.now()}`;
+  const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/not-ours`, { track: t.track, frame: t.frame, batch });
+  setLabels(r);
+  lastNotOurs = r.changed ? { gameId: game.id, batch } : null;
+  suggestList = null;
+  if (suggestion?.track === t.track) suggestion = null;
+  flash(r.changed ? `not our team${t.label != null ? ` (#${t.label}'s label removed)` : ""}: U takes it back` : "already marked not our team");
+  render();
+}
 async function postPick(player, kind, t) {
+  lastNotOurs = null;
   const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`,
                       { frame: t.frame, player, kind, x: t.x, y: t.y, track: t.track });
   setLabels(r);
@@ -1519,7 +1539,8 @@ function openPicker(t) {
       `<button data-n="${x.player}"${x.player === best ? ' class="best"' : ""} title="likeness ${x.score}">#${x.player}</button>`).join("") +
       `<div class="ptitle">everyone:</div>` : "") +
     followNums.map((n) => `<button data-n="${n}"${n === best && !close.some((x) => x.player === best) ? ' class="best"' : ""}>#${n}</button>`).join("") +
-    ((t.label ?? t.guess) != null ? `<button class="no" data-no>✕ not #${t.label ?? t.guess}</button>` : "");
+    ((t.label ?? t.guess) != null ? `<button class="no" data-no>✕ not #${t.label ?? t.guess}</button>` : "") +
+    `<button class="no" data-notours title="A spectator, parent, coach or opponent: never labelled or guessed (Shift+X)">🚫 not our team</button>`;
   el.hidden = false;
   picker = { t, best, typed: "" };
   showTyped();
@@ -1558,6 +1579,7 @@ $("picker").addEventListener("click", (e) => {
   if (!b || !picker) return;
   if (b.dataset.n) pickerCommit(+b.dataset.n);
   else if ("no" in b.dataset) pickerReject();
+  else if ("notours" in b.dataset) notOurs(picker.t);
 });
 function pickerKey(e) {
   // keys while the "who is this?" box is open; true if used
@@ -1572,6 +1594,8 @@ function pickerKey(e) {
     if (n != null) pickerCommit(n);
   } else if (e.key === "Escape") {
     closePicker();
+  } else if (e.shiftKey && e.key.toLowerCase() === "x") {
+    notOurs(picker.t);
   } else {
     closePicker();  // anything else closes it and does what it normally does
     return false;
@@ -1596,6 +1620,7 @@ async function pickPlayer(kind, p = null) {
   if (!showPeople || !people) return flash("press V to show the players first", true);
   if (followWho == null) return flash("pick who to follow next to the 👥 button first", true);
   v.pause();
+  lastNotOurs = null;
   const body = { frame: Math.round(v.currentTime * fps), player: followWho, kind, ...(p || {}) };
   const r = await api("POST", `/api/games/${encodeURIComponent(game.id)}/people/picks`, body);
   setLabels(r);
@@ -1603,6 +1628,13 @@ async function pickPlayer(kind, p = null) {
 }
 async function undoPick() {
   if (!showPeople || !people) return flash("press V to show the players first", true);
+  if (lastNotOurs?.gameId === game.id) {  // the last change was a "not our team"
+    const r = await api("DELETE", `/api/games/${encodeURIComponent(game.id)}/people/answers/${encodeURIComponent(lastNotOurs.batch)}`);
+    lastNotOurs = null;
+    setLabels(r);
+    suggestList = null;
+    return flash("took back the last \"not our team\"");
+  }
   const r = await api("DELETE", `/api/games/${encodeURIComponent(game.id)}/people/picks/last`);
   setLabels(r);
   suggestList = null;
@@ -2098,7 +2130,7 @@ document.addEventListener("keydown", (e) => {
     q: () => (e.shiftKey ? togglePitchLines() : pitchMode ? stopPitchMode() : startPitchMode()),
     g: () => nextSuggestion(),
     y: () => answer(true),
-    x: () => answer(false),
+    x: () => (e.shiftKey ? notOurs(yxTarget()) : answer(false)),
     a: () => nextAuto(e.shiftKey),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),

@@ -669,8 +669,9 @@ def _save_picks(store: Store, game: Game, picks: list[dict]) -> None:
     atomic_write_text(_picks_path(store, game), json.dumps({"picks": picks}, indent=1) + "\n")
 
 
-def segments(t: Tracks, picks: list[dict]) -> list[dict]:
-    """Labelled stretches of tracklets from the picks: {track, start, end (exclusive), player}."""
+def stretches(t: Tracks, picks: list[dict]) -> list[tuple[int, int, int, dict]]:
+    """Every stretch of a tracklet with picks on it, and the pick that decides it: (track, start, end (exclusive),
+    pick). A pick holds from its frame to the tracklet's next pick; the first one from the tracklet's start."""
     by_track: dict[int, list[dict]] = {}
     for p in picks:
         tid = t.at(p["frame"], p["x"], p["y"], prefer=p.get("track"))
@@ -680,10 +681,19 @@ def segments(t: Tracks, picks: list[dict]) -> list[dict]:
     for tid, ps in by_track.items():
         ps = sorted(ps, key=lambda p: p["frame"])  # a later click on the same frame wins (stable sort)
         edges = [t.first[tid]] + [p["frame"] for p in ps[1:]] + [t.last[tid] + 1]
-        for (a, b), p in zip(zip(edges, edges[1:]), ps):
-            if b > a and p["kind"] == "is":
-                out.append({"track": tid, "start": a, "end": b, "player": p["player"]})
+        out += [(tid, a, b, p) for (a, b), p in zip(zip(edges, edges[1:]), ps) if b > a]
+    return out
+
+
+def segments(t: Tracks, picks: list[dict]) -> list[dict]:
+    """Labelled stretches of tracklets from the picks: {track, start, end (exclusive), player}."""
+    out = [{"track": k, "start": a, "end": b, "player": p["player"]} for k, a, b, p in stretches(t, picks) if p["kind"] == "is"]
     return sorted(out, key=lambda s: s["start"])
+
+
+def not_ours(t: Tracks, picks: list[dict]) -> list[dict]:
+    """Stretches marked as not anyone on our team (NOT_OURS): {track, start, end}."""
+    return [{"track": k, "start": a, "end": b} for k, a, b, p in stretches(t, picks) if p["player"] == NOT_OURS]
 
 
 def follows(t: Tracks, picks: list[dict], player: int, frame: int) -> int | None:
@@ -812,10 +822,11 @@ def assign_stretches(store: Store, game: Game, stretches: list[dict], player: in
             p = _starting_pick(t, picks, k, start, int(label))
             if p is None:
                 continue
-            _change(p, batch, **({"kind": "no"} if player is None or player == NOT_OURS else {"player": player}))
+            # unlabel, or not ours: that pick decides the whole stretch, so it becomes a NOT_OURS one itself
+            _change(p, batch, **({"kind": "no"} if player is None else {"kind": "no", "player": NOT_OURS}
+                                 if player == NOT_OURS else {"player": player}))
             n += 1
-            if player != NOT_OURS:
-                continue
+            continue
         elif player is None:
             continue
         a, b = t.window(start, int(sg.get("end", t.last[k] + 1)))
@@ -829,6 +840,36 @@ def assign_stretches(store: Store, game: Game, stretches: list[dict], player: in
         n += 1
     _save_picks(store, game, picks)
     return n
+
+
+def mark_not_ours(store: Store, game: Game, track: int, frame: int, batch: str, model: str = DEFAULT_MODEL) -> int:
+    """
+    The stretch of `track` around `frame` isn't anyone on our team (the tagger's Shift+X): the pick that decides
+    that stretch becomes a NOT_OURS one (a label on it goes), or, on a tracklet with no picks, one is added at its
+    first box, so the whole tracklet is. With `batch` for undo_answers. Returns the picks changed or added (0 if
+    it already was).
+    """
+    t = tracks(store, game, model)
+    if t is None:
+        raise ValueError("this game hasn't been through player tracking")
+    if track not in t.first:
+        raise ValueError(f"no tracklet {track}")
+    picks = load_picks(store, game)
+    frame = min(max(frame, t.first[track]), t.last[track])
+    for k, a, b, p in stretches(t, picks):
+        if k == track and a <= frame < b:
+            if p["player"] == NOT_OURS:
+                return 0
+            _change(p, batch, player=NOT_OURS, kind="no")
+            break
+    else:
+        i = t.window(t.first[track], t.first[track] + 1)
+        i = i[0] + int(np.flatnonzero(t.track[i[0]:i[1]] == track)[0])
+        x1, y1, x2, y2 = t.box[i].tolist()
+        picks.append({"frame": int(t.frame[i]), "x": round((x1 + x2) / 2, 4), "y": round((y1 + y2) / 2, 4),
+                      "player": NOT_OURS, "kind": "no", "track": track, "batch": batch})
+    _save_picks(store, game, picks)
+    return 1
 
 
 SPLIT = -2  # the "player" of a "split" pick: a different girl from here on (the roster page's ✂)
@@ -1010,9 +1051,13 @@ def labelled_ours(t: Tracks, picks: list[dict], role: np.ndarray) -> np.ndarray:
 
 
 def roles_of(t: Tracks, picks: list[dict], game: Game, player: int | None) -> tuple[dict[int, str], np.ndarray]:
-    """team_roles, and every box's team (box_roles, labelled stretches ours)."""
+    """team_roles, and every box's team (box_roles, labelled stretches ours, stretches marked not ours other)."""
     roles = team_roles(t, picks, game, player)
-    return roles, labelled_ours(t, picks, box_roles(t, roles))
+    role = labelled_ours(t, picks, box_roles(t, roles))
+    for sg in not_ours(t, picks):
+        a, b = t.window(sg["start"], sg["end"])
+        role[a:b][t.track[a:b] == sg["track"]] = ROLE_CODES["other"]
+    return roles, role
 
 
 _roles_cache: dict = {}

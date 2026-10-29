@@ -177,6 +177,12 @@ class StretchIn(RequestBody):
     label: int | None = None  # who it's labelled as now (None: unlabelled)
 
 
+class NotOursIn(RequestBody):
+    track: int
+    frame: int = Field(ge=0)
+    batch: str = Field(min_length=1, max_length=64)  # so it can be taken back (DELETE .../people/answers/{batch})
+
+
 class AssignIn(RequestBody):
     player: int | None = Field(default=None, ge=-1, le=99)  # None: unlabel; -1: not one of ours (people.NOT_OURS)
     batch: str = Field(min_length=1, max_length=64)  # so it can be taken back
@@ -761,6 +767,18 @@ def create_app(store: Store | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(422, str(e))
         return {"saved": n, **people_labels(game)}
+
+    @app.post("/api/games/{game_id}/people/not-ours")
+    def game_people_not_ours(game_id: str, body: NotOursIn) -> dict:
+        """The stretch of a tracklet around a frame isn't anyone on our team (people.mark_not_ours); returns the labels."""
+        from soccer_clips.track import people
+
+        game = load(game_id)
+        try:
+            n = people.mark_not_ours(store, game, body.track, body.frame, body.batch)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"changed": n, **people_labels(game)}
 
     @app.delete("/api/games/{game_id}/people/answers/{batch}")
     def game_people_answers_undo(game_id: str, batch: str) -> dict:
