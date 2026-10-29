@@ -113,7 +113,7 @@
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <div id="pitchBox" hidden>
-      <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed by appearance, at the 'auto-label at' setting in 🔍 layers), a white dot where not; opponents (blue dots); the ball (yellow); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
+      <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed by appearance, at the 'auto-label at' setting in 🔍 layers), a white dot where not; opponents (blue dots); the ball (yellow; hollow = where it was last seen, for a moment after it's lost); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
       <div id="pitchInfo"></div>
     </div>
     <div class="help help-secs" id="help">
@@ -832,7 +832,7 @@ let showBall = false, ball = null;  // ball: {gameId, ranges, frame, x, y, r, ki
 try { showBall = localStorage.getItem("showBall") === "1"; } catch {}
 
 async function loadBall() {
-  if (!showBall || !game || ball?.gameId === game.id) return;
+  if (!(showBall || showPitchMap) || !game || ball?.gameId === game.id) return;  // the map shows it too
   const id = game.id;
   const b = await getJson(`/api/games/${encodeURIComponent(id)}/ball`);
   if (game?.id === id) ball = { gameId: id, ...b };
@@ -1740,6 +1740,7 @@ $("layMap").addEventListener("change", (e) => {
   try { localStorage.setItem("showPitchMap", showPitchMap ? "1" : "0"); } catch {}
   showPitchButtons();
   loadPeople();  // numbers on the map
+  loadBall();
 });
 const pct = (x) => `${Math.round(x * 100)}%`;
 function renderPitchInfo() {
@@ -1972,10 +1973,7 @@ function drawMap() {
         num: (t) => (lab.has(t) ? [lab.get(t), false] : auto.has(t) ? [auto.get(t), true] : null),
       });
     }
-    if (ball?.gameId === game.id) {
-      const i = ballAt(f);
-      if (i >= 0) ballAtPitch = pixelToPitch(inv3(G), ball.x[i] * game.width, ball.y[i] * game.height);
-    }
+    if (ball?.gameId === game.id) ballAtPitch = pitchBall(ball, f, inv3(G), game.width, game.height, fps, pitch.drawing);
     players = mapMem(f, fps, players, footprint);
   }
   const note = !pitch.calibrated ? "not calibrated: press Q" : !G ? "this view isn't placed" : "";

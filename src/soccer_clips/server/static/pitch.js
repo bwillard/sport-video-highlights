@@ -152,7 +152,7 @@ const MAP_TEAM = { 0: "#ffffff", 1: "#5ab0ff", 2: "#9a9a9a" };
 function drawPitchMap(canvas, o) {
   // o: {drawing, footprint (the camera's view on the pitch, pitchFootprint), players: [{x, y, team, ring, num, guessed, alpha}]
   //     (num: their number where it's known, drawn instead of a dot; guessed: by appearance, drawn fainter),
-  //     ball: [x, y] or null, targets: bool (show landmarks), hover: target id or null, clicks: [{pitch, bad}], note: text over the map}
+  //     ball: {x, y, stale} or null (stale: not seen just now, where it was last), targets: bool (show landmarks), hover: target id or null, clicks: [{pitch, bad}], note: text over the map}
   const m = mapFrame(canvas, o.drawing), { ctx, to } = m;
   ctx.clearRect(0, 0, m.W, m.H);
   ctx.fillStyle = "#1f3b26";
@@ -235,12 +235,17 @@ function drawPitchMap(canvas, o) {
     }
     ctx.globalAlpha = 1;
   }
-  if (o.ball) {
-    const [X, Y] = to(...o.ball);
-    ctx.fillStyle = "#ffe14d";
+  if (o.ball) {  // on top of everyone: a yellow ball with a dark edge, hollow and fainter where it was last seen
+    const [X, Y] = to(o.ball.x, o.ball.y);
+    ctx.save();
+    ctx.globalAlpha = o.ball.stale ? 0.55 : 1;
+    ctx.lineWidth = 1.5;
     ctx.strokeStyle = "#000";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(X, Y, 3.2, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#ffe14d";
+    ctx.beginPath(); ctx.arc(X, Y, 5, 0, 2 * Math.PI);
+    if (o.ball.stale) { ctx.stroke(); ctx.strokeStyle = "#ffe14d"; ctx.beginPath(); ctx.arc(X, Y, 3.5, 0, 2 * Math.PI); ctx.stroke(); }
+    else { ctx.fill(); ctx.stroke(); }
+    ctx.restore();
   }
   if (o.note) {
     ctx.font = "12px system-ui, sans-serif";
@@ -251,6 +256,22 @@ function drawPitchMap(canvas, o) {
     ctx.fillText(o.note, 12, 20);
   }
   return m;
+}
+
+const BALL_HOLD_S = 1.5;  // a ball not seen for this long drops off the map
+const BALL_OFF_M = 10;  // a ball further outside the lines than this is in the air (projected onto the ground far beyond)
+
+function pitchBall(ball, f, Ginv, frameW, frameH, fps, size) {
+  // the ball on the field at frame f, {x, y, stale}, or null. ball: the /ball path ({frame (sorted), x, y}
+  // in fractions of the frame). Where it isn't seen, its last position for up to BALL_HOLD_S, stale.
+  const a = ball?.frame;
+  if (!a?.length || !Ginv) return null;
+  let lo = 0, hi = a.length - 1, i = -1;  // the last path frame at or before f
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m] <= f) { i = m; lo = m + 1; } else hi = m - 1; }
+  if (i < 0 || f - a[i] > BALL_HOLD_S * fps) return null;
+  const p = pixelToPitch(Ginv, ball.x[i] * frameW, ball.y[i] * frameH);
+  if (!p || Math.abs(p[0]) > size.length / 2 + BALL_OFF_M || Math.abs(p[1]) > size.width / 2 + BALL_OFF_M) return null;
+  return { x: p[0], y: p[1], stale: a[i] !== f };
 }
 
 function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
