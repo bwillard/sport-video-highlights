@@ -92,12 +92,13 @@ def _lines() -> dict[str, tuple[str, str, str]]:
         out[f"goal_{end}"] = (f"corner_{end}n", f"corner_{end}f", f"{word} goal line")
         for a, name in (("ga", "goal area"), ("pa", "penalty area")):
             out[f"{a}_{end}"] = (f"{a}_{end}n", f"{a}_{end}f", f"{word} {name}, front edge")
-            for side, sw in (("n", "near"), ("f", "far")):
-                out[f"{a}_{end}{side}"] = (f"{a}_{end}{side}_line", f"{a}_{end}{side}", f"{word} {name}, {sw} side")
+            for side, sw in (("n", "near"), ("f", "far")):  # not just {a}_{end}{side}: that's the corner
+                out[f"{a}_{end}{side}_side"] = (f"{a}_{end}{side}_line", f"{a}_{end}{side}", f"{word} {name}, {sw} side")
     return out
 
 
 LINES = _lines()
+assert not LINES.keys() & LANDMARKS.keys()
 CIRCLE = "circle"  # click target: somewhere on the centre circle
 
 
@@ -211,6 +212,22 @@ def _circle_ends(centre: np.ndarray, near: np.ndarray, far: np.ndarray, on_circl
     return ends[np.argsort(ends[:, 0])]
 
 
+def _general(src: np.ndarray, tol_m: float = 1.0) -> bool:
+    """Whether 4 of the pitch points have no 3 on one line, which a homography needs: not true when all but one
+    are on one line (the halfway line's three landmarks and one more)."""
+    pts = np.unique(np.round(src, 2), axis=0)
+    if len(pts) < 4:
+        return False
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            d = pts[j] - pts[i]
+            e = pts - pts[i]
+            off = np.abs(d[0] * e[:, 1] - d[1] * e[:, 0]) / np.linalg.norm(d)
+            if (off > tol_m).sum() < 2:
+                return False
+    return True
+
+
 def _start(world: dict, ck: np.ndarray, cpx: np.ndarray, ctarget: list[str]) -> tuple[int, np.ndarray]:
     """
     (root keyframe, its pitch -> pixels homography) from the clicks it and its near neighbours
@@ -248,7 +265,7 @@ def _start(world: dict, ck: np.ndarray, cpx: np.ndarray, ctarget: list[str]) -> 
         if len(seen) < 4:
             continue
         src, dst = np.array(src, float), np.array(dst, float)
-        if cv2.contourArea(cv2.convexHull(src.astype(np.float32))) < 20:  # all on one line
+        if not _general(src):
             continue
         score = (len(seen), len(src))
         if best is None or score > best[0]:
@@ -258,7 +275,7 @@ def _start(world: dict, ck: np.ndarray, cpx: np.ndarray, ctarget: list[str]) -> 
                     Hm = -Hm
                 best = (score, k, Hm)
     if best is None:
-        raise NotEnough("click at least 4 landmarks that aren't all on one line (or the centre spot, both ends of the "
+        raise NotEnough("click at least 4 landmarks, no 3 of them on one line (or the centre spot, both ends of the "
                         "circle on the halfway line and 3 more points on the circle), in one view or views next to each other")
     return best[1], best[2]
 
@@ -605,15 +622,28 @@ def cal_path(store: Store, game: Game) -> Path:
     return tracks_dir(store, game) / "pitch_cal.npz"
 
 
+POINTS_VERSION = 2  # 1: a box's side line had the same id as its corner in the field (ga_lf), and was solved as the corner
+
+
+def _upgrade(points: list[dict], version: int) -> list[dict]:
+    if version < 2:  # a version 1 click on ga_lf meant the corner or anywhere on that side; the corner is on the side
+        boxes = {k.removesuffix("_side") for k in LINES if k.endswith("_side")}
+        points = [{**p, "target": p["target"] + "_side"} if p["target"] in boxes else p for p in points]
+    return points
+
+
 def load_points(store: Store, game: Game) -> list[dict]:
     p = points_path(store, game)
-    return json.loads(p.read_text())["points"] if p.exists() else []
+    if not p.exists():
+        return []
+    d = json.loads(p.read_text())
+    return _upgrade(d["points"], d.get("version", 1))
 
 
 def save_points(store: Store, game: Game, points: list[dict]) -> None:
     from soccer_clips.store import atomic_write_text
 
-    atomic_write_text(points_path(store, game), json.dumps({"points": points}, indent=1) + "\n")
+    atomic_write_text(points_path(store, game), json.dumps({"version": POINTS_VERSION, "points": points}, indent=1) + "\n")
 
 
 _registration_cache: dict[str, tuple] = {}
@@ -724,12 +754,16 @@ def state(store: Store, game: Game) -> dict:
                       for k, v, sd, ps in zip(SIZE_NAMES, sizes, cal["size_sd"] if ok else S_SIGMA, S_SIGMA)}}
 
 
-def add_point(store: Store, game: Game, frame: int, x: float, y: float, target: str) -> dict:
+def add_point(store: Store, game: Game, frame: int, x: float, y: float, target: str, solve: bool = True) -> dict:
+    """Save a click and solve again; with solve=False, only save it (more clicks are coming) and return {count}."""
     if target not in LANDMARKS and target not in LINES and target != CIRCLE:
         raise ValueError(f"unknown target {target!r}")
     if _registration(store, game) is None:
         raise ValueError("this game's frames aren't registered yet (soccer-clips ball fixed-objects)")
-    save_points(store, game, load_points(store, game) + [{"frame": frame, "x": round(x, 5), "y": round(y, 5), "target": target}])
+    points = load_points(store, game) + [{"frame": frame, "x": round(x, 5), "y": round(y, 5), "target": target}]
+    save_points(store, game, points)
+    if not solve:
+        return {"count": len(points)}
     calibrate(store, game)
     return state(store, game)
 

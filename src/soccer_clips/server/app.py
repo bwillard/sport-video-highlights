@@ -143,6 +143,7 @@ class PitchPointIn(RequestBody):
     x: float = Field(ge=0, le=1)  # fractions of the frame
     y: float = Field(ge=0, le=1)
     target: str  # a landmark, a line, or the centre circle (pitch.targets)
+    solve: bool = True  # false: only save it, more clicks are coming (returns {count})
 
 
 class AnswerIn(RequestBody):
@@ -718,11 +719,11 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.post("/api/games/{game_id}/pitch/points")
     def game_pitch_add(game_id: str, body: PitchPointIn) -> dict:
-        """'This pixel is that landmark / on that line': adds the click and solves again."""
+        """'This pixel is that landmark / on that line': adds the click and solves again (unless solve is false)."""
         from soccer_clips.track import pitch
 
         try:
-            return pitch.add_point(store, load(game_id), body.frame, body.x, body.y, body.target)
+            return pitch.add_point(store, load(game_id), body.frame, body.x, body.y, body.target, body.solve)
         except ValueError as e:
             raise HTTPException(422, str(e))
 

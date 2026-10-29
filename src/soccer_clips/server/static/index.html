@@ -158,7 +158,7 @@
           It needs the game's field calibrated once: a few clicks tie the video to the field</li>
         <li><kbd>Q</kbd> (or ✏️ calibrate) calibrate / correct: a magenta banner over the video says it's on, and clicks on the video place points instead of pausing. Click a spot on the video that you can place on the field (a corner, a goal post,
           the centre spot, where the circle meets the halfway line, or anywhere on a line or the circle), then click that spot on the
-          map (magenta dots = landmarks; near a line = somewhere on that line). It solves again each time (a few seconds).
+          map (magenta dots = landmarks; near a line = somewhere on that line). It solves again each time in the background (a few seconds, up to ~30 s on a long game); keep clicking meanwhile, and the clicks made during a solve go into the next one together.
           <kbd>Q</kbd> / <kbd>Esc</kbd> stops · <kbd>U</kbd> takes back the last click · click one of your clicks (cyan ×) on the video to remove it</li>
         <li>To start: 4 landmarks not all on one line, or at kickoff the centre spot, both places the circle crosses the halfway line and 3
           more points on the circle. Then click goal posts or corners at both ends: they tell it how long and wide the field is</li>
@@ -1695,6 +1695,9 @@ let pitchHs = null;  // pitchFrames(game) for the calibration in use
 let showPitchLines = false, showPitchMap = true;
 let pitchMode = null;  // calibrating: {stage: "video"} waiting for a click on the video, {stage: "map", frame, x, y} then on the map
 let pitchBusy = false, mapHover = null, mapLast = null;  // mapLast: the map's transforms from the last draw
+// clicks placed but not in a solve yet ({frame, x, y, target, at: where on the map}), shown straight away.
+// The first pitchSent of them are saved on the server; the rest wait for the solve that's running.
+let pitchQueue = [], pitchSent = 0;
 let mapMem = mapMemory();  // players who just left the view, fading out where they were last seen
 try {
   showPitchLines = localStorage.getItem("showPitchLines") === "1";
@@ -1745,10 +1748,10 @@ function renderPitchInfo() {
   const n = pitch.points.length, bad = pitch.points.filter((p) => p.bad).length;
   const lines = [];
   if (pitchMode) {
-    $("calBanner").innerHTML = pitchBusy ? "<b>✏️ Calibrating</b> · solving…"
-      : pitchMode.stage === "video"
+    $("calBanner").innerHTML = (pitchMode.stage === "video"
       ? "<b>✏️ Calibrating</b> · click a spot on the video you can place on the field: a corner, a goal post, the centre spot, or anywhere on a line or the circle. Click one of your × to remove it · <kbd>U</kbd> undo · <kbd>Q</kbd> / <kbd>Esc</kbd> done"
-      : "<b>✏️ Calibrating</b> · now click where that is on the <b>map below</b> (magenta dots = landmarks; near a line = on that line) · <kbd>Esc</kbd> cancels";
+      : "<b>✏️ Calibrating</b> · now click where that is on the <b>map below</b> (magenta dots = landmarks; near a line = on that line) · <kbd>Esc</kbd> cancels")
+      + (pitchBusy ? " · <i>solving… keep clicking</i>" : "");
   }
   if (!pitch.registered) {
     lines.push("This game's frames aren't registered yet: run <code>soccer-clips ball fixed-objects " + esc(game.id) + "</code>.");
@@ -1765,7 +1768,7 @@ function renderPitchInfo() {
   } else {
     lines.push(n ? `Not calibrated yet (${n} click${n === 1 ? "" : "s"}): ${esc(pitch.error || "")}` : "Not calibrated yet: press <kbd>Q</kbd> to start.");
   }
-  if (pitchBusy) lines.push("<b>solving…</b>");
+  if (pitchBusy) lines.push(`<b>solving…</b>${pitchQueue.length > pitchSent ? ` (${pitchQueue.length - pitchSent} more click${pitchQueue.length - pitchSent === 1 ? "" : "s"} after it)` : ""}`);
   el.innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
 }
 function startPitchMode() {
@@ -1799,33 +1802,86 @@ async function pitchChange(method, url, body, what) {
   }
 }
 const pitchUrl = () => `/api/games/${encodeURIComponent(game.id)}/pitch/points`;
+function addPitchPoint(p) {
+  // shown at once; saved and solved in the background, one solve for however many clicks came in meanwhile
+  pitchQueue.push(p);
+  renderPitchInfo();
+  flushPitch();
+}
+async function flushPitch() {
+  if (pitchBusy || pitchSent >= pitchQueue.length) return;
+  pitchBusy = true;
+  renderPitchInfo();
+  const id = game.id;
+  try {
+    while (pitchSent < pitchQueue.length) {
+      const p = pitchQueue[pitchSent], solve = pitchSent === pitchQueue.length - 1;
+      pitchSent++;
+      renderPitchInfo();
+      const s = await api("POST", pitchUrl(), { frame: p.frame, x: p.x, y: p.y, target: p.target, solve });
+      if (game?.id !== id) return;
+      if (!solve) continue;
+      const n = pitchSent;
+      pitchQueue.splice(0, n);
+      pitchSent = 0;
+      setPitch(s, id);
+      const what = n === 1 ? `added: ${pitch.label[p.target] || p.target}` : `added ${n} clicks`;
+      flash(s.calibrated ? `${what}; solved again` : `${what}; ${s.error || "not calibrated yet"}`, !s.calibrated && s.points.length >= 4);
+    }
+  } catch {
+    if (game?.id === id) { pitchQueue = []; pitchSent = 0; loadPitch(); }  // api() said what went wrong
+  } finally {
+    if (game?.id === id) { pitchBusy = false; renderPitchInfo(); }
+  }
+}
 function removePitchPoint(i) {
+  if (pitchBusy) return flash("still solving: take that one back when it's done", true);
   const p = pitch.points[i];
   return pitchChange("DELETE", `${pitchUrl()}/${i}`, null, `removed the click on ${pitch.label[p.target] || p.target}`);
 }
 function undoPitchPoint() {
+  if (pitchQueue.length > pitchSent) {  // not sent yet: just drop it
+    const p = pitchQueue.pop();
+    renderPitchInfo();
+    return flash(`took back: ${pitch.label[p.target] || p.target}`);
+  }
+  if (pitchBusy) return flash("still solving: U again when it's done", true);
   if (!pitch?.points.length) return flash("no clicks to take back", true);
   return removePitchPoint(pitch.points.length - 1);
 }
-function pitchClickNear(e, G) {
-  // index of one of the calibration clicks drawn within 10 px of the pointer, or -1
+function pitchClickAt(p, f, G) {
+  // where a calibration click is in frame f (frame pixels), or null: through the field where the solve
+  // placed it, else as clicked when it's this frame, else through the field from the frame it was clicked in
+  if (p.pitch && G) return projectH(G, ...p.pitch);
+  if (p.frame === f) return [p.x * game.width, p.y * game.height];
+  const Gp = G && pitchHs?.at(p.frame);
+  const at = Gp && pixelToPitch(inv3(Gp), p.x * game.width, p.y * game.height);
+  return at && projectH(G, ...at);
+}
+function pitchClickNear(e) {
+  // the calibration click drawn within 10 px of the pointer: {i} (saved) or {queued} (not sent yet), or null
   const r = videoRect(), box = overlay.getBoundingClientRect(), k = r.w / game.width;
+  const f = Math.round(v.currentTime * fps), G = pitch?.calibrated ? pitchHs?.at(f) : null;
   const mx = e.clientX - box.left, my = e.clientY - box.top;
-  let best = -1, bd = 10;
-  pitch.points.forEach((p, i) => {
-    if (!p.pitch || !G) return;
-    const q = projectH(G, ...p.pitch);
-    if (!q) return;
-    const d = Math.hypot(r.x + q[0] * k - mx, r.y + q[1] * k - my);
-    if (d < bd) { bd = d; best = i; }
-  });
+  let best = null, bd = 10;
+  const check = (p, hit) => {
+    const q = pitchClickAt(p, f, G);
+    const d = q ? Math.hypot(r.x + q[0] * k - mx, r.y + q[1] * k - my) : Infinity;
+    if (d < bd) { bd = d; best = hit; }
+  };
+  (pitch?.points || []).forEach((p, i) => check(p, { i }));
+  pitchQueue.forEach((p, j) => j >= pitchSent && check(p, { queued: j }));
   return best;
 }
 function pitchVideoClick(e) {
-  if (pitchBusy) return flash("still solving…", true);
-  const f = Math.round(v.currentTime * fps), G = pitchHs?.at(f);
-  const near = pitch?.calibrated ? pitchClickNear(e, G) : -1;
-  if (near >= 0) { removePitchPoint(near); return; }
+  const f = Math.round(v.currentTime * fps);
+  const near = pitchClickNear(e);
+  if (near?.queued != null) {
+    const [p] = pitchQueue.splice(near.queued, 1);
+    renderPitchInfo();
+    return flash(`took back: ${pitch.label[p.target] || p.target}`);
+  }
+  if (near) return removePitchPoint(near.i);
   pitchMode = { stage: "map", frame: f, ...pointerToFrame(e) };
   renderPitchInfo();
 }
@@ -1840,9 +1896,9 @@ pitchMap.addEventListener("pointerdown", (e) => {
   if (!pitchMode) return;
   if (pitchMode.stage !== "map") return flash("click the spot on the video first", true);
   if (!mapHover) return flash("click on a landmark (magenta dot), a line or the circle", true);
-  const { frame, x, y } = pitchMode, target = mapHover;
+  const { frame, x, y } = pitchMode, target = mapHover, b = pitchMap.getBoundingClientRect();
   pitchMode = { stage: "video" };
-  pitchChange("POST", pitchUrl(), { frame, x, y, target }, `added: ${pitch.label[target]}`);
+  addPitchPoint({ frame, x, y, target, at: mapLast.from(e.clientX - b.left, e.clientY - b.top) });
 });
 
 function drawPitchLines(ctx) {
@@ -1877,17 +1933,21 @@ function drawPitchLines(ctx) {
       const q = to(p);
       if (q) { ctx.beginPath(); ctx.arc(q[0], q[1], 3.5, 0, 2 * Math.PI); ctx.fill(); }
     }
-    for (const p of pitch.points) {  // each calibration click, where it is in this frame
-      const q = p.pitch && to(p.pitch);
-      if (!q) continue;
-      const lm = pitch.drawing.landmarks[p.target], t = lm && to(lm);
-      ctx.strokeStyle = p.bad ? "#ff4d4d" : "#4dfcff";
-      ctx.lineWidth = 2;
-      if (t) { ctx.beginPath(); ctx.moveTo(...q); ctx.lineTo(...t); ctx.stroke(); }
-      ctx.beginPath();
-      ctx.moveTo(q[0] - 5, q[1] - 5); ctx.lineTo(q[0] + 5, q[1] + 5); ctx.moveTo(q[0] + 5, q[1] - 5); ctx.lineTo(q[0] - 5, q[1] + 5);
-      ctx.stroke();
-    }
+  }
+  // each calibration click, where it is in this frame (also before there's a solve, and while one runs)
+  const fromFrame = (q) => q && [r.x + q[0] * k, r.y + q[1] * k];
+  for (const p of [...pitch.points, ...pitchQueue.map((q) => ({ ...q, queued: true }))]) {
+    const q = fromFrame(pitchClickAt(p, f, G));
+    if (!q) continue;
+    const lm = G && p.pitch && pitch.drawing.landmarks[p.target], t = lm && to(lm);
+    ctx.strokeStyle = p.bad ? "#ff4d4d" : "#4dfcff";
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = p.queued ? 0.7 : 1;
+    if (t) { ctx.beginPath(); ctx.moveTo(...q); ctx.lineTo(...t); ctx.stroke(); }
+    ctx.beginPath();
+    ctx.moveTo(q[0] - 5, q[1] - 5); ctx.lineTo(q[0] + 5, q[1] + 5); ctx.moveTo(q[0] + 5, q[1] - 5); ctx.lineTo(q[0] - 5, q[1] + 5);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
   if (pitchMode?.stage === "map") {  // the spot clicked, waiting for its place on the map
     const x = r.x + pitchMode.x * r.w, y = r.y + pitchMode.y * r.h;
@@ -1921,7 +1981,8 @@ function drawMap() {
   const note = !pitch.calibrated ? "not calibrated: press Q" : !G ? "this view isn't placed" : "";
   mapLast = drawPitchMap(pitchMap, {
     drawing: pitch.drawing, footprint, players, ball: ballAtPitch,
-    targets: !!pitchMode, hover: mapHover, clicks: pitchMode ? pitch.points : [], note,
+    targets: !!pitchMode, hover: mapHover, note,
+    clicks: pitchMode ? [...pitch.points, ...pitchQueue.map((q) => ({ pitch: q.at }))] : [],
   });
 }
 showPitchButtons();
@@ -2141,6 +2202,9 @@ async function loadGame(id, startT = 0, clipId = null) {
   boxChunks.clear();
   loadPeople();
   pitch = null;
+  pitchQueue = [];
+  pitchSent = 0;
+  pitchBusy = false;
   mapMem = mapMemory();
   if (pitchMode) stopPitchMode();
   loadPitch();

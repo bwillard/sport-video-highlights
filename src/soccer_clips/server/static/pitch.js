@@ -106,22 +106,26 @@ function segmentDistance(p, a, b) {
 }
 
 function nearestTarget(drawing, p, perMetre) {
-  // what a click at pitch point p means: a landmark within ~12 map pixels, else a line or the circle
-  // within ~8; null if nothing is close
-  let best = null, bd = 12 / perMetre;
-  for (const [id, q] of Object.entries(drawing.landmarks)) {
-    const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
-    if (d < bd) { bd = d; best = id; }
-  }
+  // what a click at pitch point p means: a landmark within ~7 map pixels, else a line or the circle within
+  // ~7, else a landmark within ~12; null if nothing is close. (Landmarks first only when close: a goal
+  // area's side is ~20 map pixels long, and its middle has to be the side, not a corner.)
+  const near = (r) => {
+    let best = null, bd = r / perMetre;
+    for (const [id, q] of Object.entries(drawing.landmarks)) {
+      const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      if (d < bd) { bd = d; best = id; }
+    }
+    return best;
+  };
+  let best = near(7), bd = 7 / perMetre;
   if (best) return best;
-  bd = 8 / perMetre;
   for (const [id, [a, b]] of Object.entries(drawing.segments)) {
     const d = segmentDistance(p, a, b);
     if (d < bd) { bd = d; best = id; }
   }
   const dc = Math.abs(Math.hypot(p[0], p[1]) - drawing.circle);
   if (dc < bd) best = "circle";
-  return best;
+  return best || near(12);
 }
 
 function mapFrame(canvas, drawing) {

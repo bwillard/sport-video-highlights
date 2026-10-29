@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -169,7 +171,8 @@ def test_pitch_api(settings):
         s = client.get(f"/api/games/{game_id}/pitch").json()
         assert s["registered"] and not s["calibrated"] and not s["points"] and len(s["targets"]) > 40
         assert client.post(f"/api/games/{game_id}/pitch/points", json={**points[0], "target": "nowhere"}).status_code == 422
-        pitch.save_points(store, game, points[:-1])
+        pitch.save_points(store, game, points[:-2])
+        assert client.post(f"/api/games/{game_id}/pitch/points", json={**points[-2], "solve": False}).json() == {"count": len(points) - 1}
         s = client.post(f"/api/games/{game_id}/pitch/points", json=points[-1]).json()
         assert s["calibrated"] and len(s["points"]) == len(points) and s["coverage"] == 1.0
         assert not any(p["bad"] for p in s["points"]) and s["points"][0]["pitch"] is not None
@@ -185,3 +188,26 @@ def test_pitch_api(settings):
         s = client.get(f"/api/games/{game_id}/pitch").json()  # clicks changed by hand: solved again on the way
         assert not s["calibrated"] and "landmarks" in s["error"]
 
+
+
+def test_box_sides_are_not_their_corners(tmp_path, monkeypatch):
+    # a box's side line and its corner in the field once shared an id (ga_lf), and side clicks were solved as
+    # the corner; saved clicks from then are read as the side, which holds whichever was meant
+    assert not set(pitch.LINES) & set(pitch.LANDMARKS)
+    assert {"ga_lf", "ga_lf_line"} <= set(pitch.LANDMARKS) and pitch.LINES["ga_lf_side"][:2] == ("ga_lf_line", "ga_lf")
+    path = tmp_path / "pitch_points.json"
+    monkeypatch.setattr(pitch, "points_path", lambda store, game: path)
+    old = [{"frame": 1, "x": 0.5, "y": 0.5, "target": t} for t in ("ga_lf", "pa_rn", "ga_lf_line", "corner_ln", "goal_l")]
+    path.write_text(json.dumps({"points": old}))
+    assert [p["target"] for p in pitch.load_points(None, None)] == ["ga_lf_side", "pa_rn_side", "ga_lf_line", "corner_ln", "goal_l"]
+    pitch.save_points(None, None, old)  # saved now: the ids mean what they say
+    assert pitch.load_points(None, None) == old
+
+
+def test_start_needs_four_landmarks_no_three_on_a_line():
+    s = pitch.S0
+    on = lambda *ts: np.array([pitch.landmark(t, s) for t in ts])
+    assert pitch._general(on("corner_ln", "corner_lf", "corner_rn", "corner_rf"))
+    assert not pitch._general(on("half_n", "circle_n", "circle_f", "ga_rn_line"))  # three on the halfway line
+    assert not pitch._general(on("half_n", "circle_n", "circle_f", "half_f"))
+    assert pitch._general(on("half_n", "circle_n", "circle_f", "ga_rn_line", "pa_rf"))
