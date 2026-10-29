@@ -803,7 +803,8 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.get("/api/games/{game_id}/people/auto")
     def game_people_auto(game_id: str, min_score: float | None = None, margin: float | None = None) -> dict:
-        """Automatic labels (reid.auto_all): {player: [{track, start, end, margin}]} for every labelled player;
+        """Automatic labels (reid.auto_all): {player: [{track, start, end, margin, by?}]} for every labelled player
+        (by "place": followed on by place on the field, bridge.extend; else by appearance);
         min_score / margin: how alike a stretch must look to be claimed (the tagger's setting), else the defaults."""
         from soccer_clips.track import reid
 

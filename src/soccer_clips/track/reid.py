@@ -1081,17 +1081,20 @@ _auto_cache: dict = {}
 
 
 def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: float = AUTO_MARGIN) -> dict[int, list[dict]]:
-    """auto_label for every player labelled in any game; a stretch two players both claim is dropped.
-    Cached until the game's signatures, tracklets or picks change, labels change in another game, or the
-    thresholds do (min_score, margin: see auto_label)."""
-    from soccer_clips.track import people
+    """auto_label for every player labelled in any game; a stretch two players both claim is dropped. Then
+    bridge.extend: on from those and the labels by place on the field (claims with by: "place"). Cached until
+    the game's signatures, tracklets, picks or field calibration change, labels change in another game, or
+    the thresholds do (min_score, margin: see auto_label)."""
+    from soccer_clips.track import bridge, people, pitch
 
     files = [sigs_path(store, game), people.path(store, game, people.DEFAULT_MODEL)]
     if not all(f.exists() for f in files):
         return {}
     looks = [_looks_path(store, g) for g in store.list_games()]
     pp = people._picks_path(store, game)
+    cp = pitch.cal_path(store, game)
     key = (game.id, min_score, margin, *(f.stat().st_mtime_ns for f in files), pp.stat().st_mtime_ns if pp.exists() else 0,
+           cp.stat().st_mtime_ns if cp.exists() else 0,
            *(f.stat().st_mtime_ns if f.exists() else 0 for f in looks))
     if _auto_cache.get(game.id, (None,))[0] != key:  # one entry per game (the player view reads every game)
         players = sorted({p for g in store.list_games() for p in player_sums(store, g)})
@@ -1102,5 +1105,14 @@ def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: floa
             if k1 == k2 and a2 < b1 and p1 != p2:
                 clash |= {(k1, a1, p1), (k2, a2, p2)}
         out = {p: [c for c in cs if (c["track"], c["start"], p) not in clash] for p, cs in claims.items()}
+        # then where a player labelled or guessed goes on, by place on the field, while it's plain who it is
+        t = people.tracks(store, game)
+        picks = people.load_picks(store, game)
+        rejected: dict[int, set[int]] = {}
+        for p in picks:
+            if p["kind"] != "is" and p.get("track") is not None:
+                rejected.setdefault(p["player"], set()).add(p["track"])
+        for p, cs in bridge.extend(store, game, people.segments(t, picks), out, rejected).items():
+            out[p] = sorted(out.get(p, []) + cs, key=lambda c: c["start"])
         _auto_cache[game.id] = (key, {p: cs for p, cs in out.items() if cs})
     return _auto_cache[game.id][1]

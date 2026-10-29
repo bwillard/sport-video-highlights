@@ -47,7 +47,7 @@
 <div class="bar">
   <select id="who" aria-label="player" title="Whose game to watch"></select>
   <select id="game" aria-label="game" title="One game, or every game back to back"></select>
-  <label class="opt" title="Also play the stretches the appearance model is sure are them but nobody has labelled yet (the dashed #n? guesses in the tagger, at the tagger's 'auto-label at' setting). Off = only stretches you labelled.">
+  <label class="opt" title="Also play the stretches the appearance model is sure are them, or that follow on from where they're labelled by place on the field, but nobody has labelled yet (the dashed #n? guesses in the tagger, at the tagger's 'auto-label at' setting). Off = only stretches you labelled.">
     <input type="checkbox" id="guesses" checked> likely too</label>
   <label class="opt" id="ballOpt" title="Only the moments the game ball comes this close to them, measured in their own heights (so near and far players count alike; 0 = touching them), each with the build-up before and a little after (set beside it). Leftmost = any time they're on screen.&#10;Needs the game to be ball-tracked; where the ball path is wrong or missing, moments are missed or extra.">
     ⚽ <input type="range" id="ball" min="0" max="7" step="1" aria-label="ball within"> <b id="ballV"></b></label>
@@ -81,7 +81,7 @@
     <div class="lbl" id="gamelbl"></div>
     <canvas id="gamebar" title="This game: where the stretches are (blue) and what's skipped. Click to jump to the nearest stretch."></canvas>
     <div id="pitchBox" hidden>
-      <canvas id="pitchMap" title="The field from above: the camera's view (lighter), them (orange ring), our players as their number where it's known (fainter = guessed by appearance, at the tagger's 'auto-label at' setting) or a white dot, opponents (blue dots), the ball (yellow; hollow = where it was last seen, for a moment after it's lost). Players who leave the view fade out where they were last seen."></canvas>
+      <canvas id="pitchMap" title="The field from above: the camera's view (lighter), them (orange ring), our players as their number where it's known (fainter = guessed: by appearance, at the tagger's 'auto-label at' setting, or followed on the field) or a white dot, opponents (blue dots), the ball (yellow; hollow = where it was last seen, for a moment after it's lost). Players who leave the view fade out where they were last seen."></canvas>
       <div id="pitchInfo"></div>
     </div>
   </main>
@@ -110,7 +110,7 @@
     </div>
     <div class="box help">
       Plays straight from the game video, skipping the time the player isn't on screen: a stretch is where they're
-      labelled (or, with <i>likely too</i>, where the appearance model is sure it's them), with a second of lead-in
+      labelled (or, with <i>likely too</i>, where the appearance model is sure it's them, or the field map can follow them on from there), with a second of lead-in
       and lead-out, and gaps under 3 s played through. With ⚽ set, only the moments the ball comes that close (in
       their own heights: about 1 = an arm's reach and a step), with some build-up before and a little after (<i>before</i> / <i>after</i>, 3 s and 2 s to start).<br>
       <kbd>Space</kbd> play / pause · <kbd>←</kbd> <kbd>→</kbd> 5 s · <kbd>[</kbd> <kbd>]</kbd> previous / next stretch ·
@@ -313,7 +313,7 @@ function drawList() {
       const head = multi && r.game !== lastGame ? `<li class="gh">${esc(games[r.game].description || shortGame(r.game))}</li>` : "";
       lastGame = r.game;
       const gi = games[r.game], clock = matchClockFor(r.start_s, gi.kickoff_1h_s, gi.kickoff_2h_s);
-      const g = r.labelled >= 0.995 ? "" : `<span class="guess" title="${Math.round((1 - r.labelled) * 100)}% of it guessed by appearance, not labelled">${r.labelled <= 0.005 ? "likely" : `${Math.round((1 - r.labelled) * 100)}% likely`}</span>`;
+      const g = r.labelled >= 0.995 ? "" : `<span class="guess" title="${Math.round((1 - r.labelled) * 100)}% of it guessed (by appearance or by place on the field), not labelled">${r.labelled <= 0.005 ? "likely" : `${Math.round((1 - r.labelled) * 100)}% likely`}</span>`;
       return `${head}<li data-i="${i}"><span class="d">${i + 1}</span><span class="t">${fmt(r.start_s)}</span><span class="d">${fmtLong(r.end_s - r.start_s)}</span><span class="g">${clock}</span>${g}</li>`;
     }).join("") || `<li class="empty">Nothing: ${ballWithin() != null ? "the ball never comes that close while they're tracked, or " : ""}they aren't labelled in ${$("game").value ? "this game" : "any game"}${$("guesses").checked ? ", and the model isn't sure of them anywhere" : " (try 'likely too')"}.</li>`;
   }

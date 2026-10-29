@@ -777,6 +777,32 @@ def remove_point(store: Store, game: Game, i: int) -> dict:
     return state(store, game)
 
 
+def frame_matrices(store: Store, game: Game, frames: np.ndarray) -> np.ndarray | None:
+    """Pitch metres -> frame pixels (full size) at each frame (n, 3, 3), NaN where the frame isn't placed;
+    None when the game isn't calibrated."""
+    reg, cal = _registration(store, game), load_cal(store, game)
+    if reg is None or cal is None or "P" not in cal:
+        return None
+    key, Hs = frame_homographies(*reg, np.asarray(frames, int))
+    return pitch_to_frame(cal["P"], key, Hs)
+
+
+def ground(store: Store, game: Game, frames: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray | None:
+    """Points on the ground in frame pixels (full size) at the given frames -> pitch metres (n, 2), NaN where
+    the frame isn't placed; None when the game isn't calibrated."""
+    out = np.full((len(frames), 2), np.nan)
+    uf, inv = np.unique(np.asarray(frames, int), return_inverse=True)
+    G = frame_matrices(store, game, uf)
+    if G is None or not len(frames):
+        return None if G is None else out
+    ok = np.isfinite(G).all(axis=(1, 2))
+    Gi = np.full_like(G, np.nan)
+    Gi[ok] = np.linalg.inv(G[ok])
+    m = ok[inv]
+    out[m] = project(Gi[inv[m]], np.column_stack([x, y])[m])
+    return out
+
+
 def frame_rows(store: Store, game: Game, start: int, end: int) -> np.ndarray:
     """(n, 10) float32 for frames [start, end): frame, then the 3x3 pitch metres -> frame pixels (full size,
     row-major, scaled to a largest entry of 1), NaN where the frame or its view isn't calibrated."""

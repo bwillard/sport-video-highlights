@@ -286,7 +286,9 @@ function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
     const p = pixelToPitch(Gi, (rows[o + 2] + rows[o + 4]) / 2 * frameW, rows[o + 5] * frameH);
     if (!p || Math.abs(p[0]) > L / 2 + 3 || Math.abs(p[1]) > Wd / 2 + 3) continue;
     const track = rows[o + 1];
-    const team = rows[o + 6], n = team === 1 || team === 2 ? null : opts.num?.(track);  // numbers for our team only
+    // numbers for our team, and for anyone labelled or guessed as one of ours whose kit didn't read as ours
+    // (half hidden behind the referee); never on the opponents
+    const kit = rows[o + 6], n = kit === 1 ? null : opts.num?.(track), team = n ? 0 : kit;
     out.push({ x: p[0], y: p[1], track, team, ring: opts.ring?.(track), num: n?.[0], guessed: n?.[1] });
   }
   return out;

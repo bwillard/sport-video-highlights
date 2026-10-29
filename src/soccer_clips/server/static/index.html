@@ -82,7 +82,7 @@
     <option value="">fixes → don't label</option>
   </select>
   <button id="loupeBtn" title="Magnifier (Z): a 3× close-up follows the mouse over the video, boxes and rings included.&#10;Shift+Z switches between 3× and 6×.">🔎 magnifier</button>
-  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;A small white #number over a box = already labelled as that player.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.&#10;Dashed ring / faint #n? = probably that player, by appearance; Y / X confirm or reject the dashed ring.">👥 players</button>
+  <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;A small white #number over a box = already labelled as that player.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.&#10;Dashed ring / faint #n? = probably that player, by appearance, or followed on the field from where they're labelled or guessed (in a calibrated game); Y / X confirm or reject the dashed ring.">👥 players</button>
   <select id="followWho" hidden title="Who the orange ring follows. L then click labels a player as this number."></select>
   <button id="onlyBtn" hidden title="Only them (W): play just the stretches where the player you follow is on screen (labelled, or the dashed #n? guesses), skipping the rest, as the Player view page does: a second either side, gaps under 3 s played through. The timeline darkens what's skipped.&#10;W again = play everything.">⏭ only them <span class="hk">W</span></button>
   <span class="stat" id="peopleStat" hidden title="The followed player in this frame:&#10;here = labelled in this frame (from your L clicks: each labels a whole tracklet, up to a Shift+L);&#10;not labelled here = no labelled tracklet in this frame (L then click to label one);&#10;not tracked here = this part of the game hasn't been through player tracking"></span>
@@ -113,7 +113,7 @@
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <div id="pitchBox" hidden>
-      <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed by appearance, at the 'auto-label at' setting in 🔍 layers), a white dot where not; opponents (blue dots); the ball (yellow; hollow = where it was last seen, for a moment after it's lost); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
+      <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed: by appearance, at the 'auto-label at' setting in 🔍 layers, or followed on the field), a white dot where not; opponents (blue dots); the ball (yellow; hollow = where it was last seen, for a moment after it's lost); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
       <div id="pitchInfo"></div>
     </div>
     <div class="help help-secs" id="help">
@@ -154,7 +154,7 @@
       </ul></details>
       <details data-sec="field"><summary>Field map</summary><ul>
         <li>The <b>field map</b> below the video shows everyone the camera sees, from above (🔍 layers turns it on / off): our players
-          as their number where it's known (fainter = guessed by appearance, at the "auto-label at" setting), a white dot where not; opponents as blue dots.
+          as their number where it's known (fainter = guessed: by appearance, at the "auto-label at" setting, or followed on the field from where they're known), a white dot where not; opponents as blue dots.
           It needs the game's field calibrated once: a few clicks tie the video to the field</li>
         <li><kbd>Q</kbd> (or ✏️ calibrate) calibrate / correct: a magenta banner over the video says it's on, and clicks on the video place points instead of pausing. Click a spot on the video that you can place on the field (a corner, a goal post,
           the centre spot, where the circle meets the halfway line, or anywhere on a line or the circle), then click that spot on the
