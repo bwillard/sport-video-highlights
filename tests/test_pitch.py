@@ -184,6 +184,14 @@ def test_pitch_api(settings):
         s = client.delete(f"/api/games/{game_id}/pitch/points/{len(points) - 1}").json()
         assert s["calibrated"] and len(s["points"]) == len(points) - 1
         assert client.delete(f"/api/games/{game_id}/pitch/points/999").status_code == 404
+        drop = [{k: q[k] for k in ("frame", "x", "y", "target")} for q in s["points"][:2]]
+        s = client.post(f"/api/games/{game_id}/pitch/points/remove", json={"points": drop}).json()
+        assert s["calibrated"] and len(s["points"]) == len(points) - 3
+        assert not any((q["frame"], q["target"]) == (d["frame"], d["target"]) for q in s["points"] for d in drop[:1])
+        s = client.delete(f"/api/games/{game_id}/pitch/points").json()  # start over
+        assert not s["calibrated"] and s["points"] == [] and not pitch.cal_path(store, game).exists()
+        kept = json.loads(pitch.points_path(store, game).with_name("pitch_points.before-reset.json").read_text())
+        assert len(kept["points"]) == len(points) - 3
         pitch.save_points(store, game, points[:2])
         s = client.get(f"/api/games/{game_id}/pitch").json()  # clicks changed by hand: solved again on the way
         assert not s["calibrated"] and "landmarks" in s["error"]

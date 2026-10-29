@@ -177,6 +177,17 @@ class StretchIn(RequestBody):
     label: int | None = None  # who it's labelled as now (None: unlabelled)
 
 
+class PitchRef(RequestBody):
+    frame: int
+    x: float
+    y: float
+    target: str
+
+
+class PitchRemoveIn(RequestBody):
+    points: list[PitchRef] = Field(max_length=500)
+
+
 class NotOursIn(RequestBody):
     track: int
     frame: int = Field(ge=0)
@@ -732,6 +743,20 @@ def create_app(store: Store | None = None) -> FastAPI:
             return pitch.add_point(store, load(game_id), body.frame, body.x, body.y, body.target, body.solve)
         except ValueError as e:
             raise HTTPException(422, str(e))
+
+    @app.post("/api/games/{game_id}/pitch/points/remove")
+    def game_pitch_remove_some(game_id: str, body: PitchRemoveIn) -> dict:
+        """Remove these clicks (as the state lists them) and solve once."""
+        from soccer_clips.track import pitch
+
+        return pitch.remove_points(store, load(game_id), [p.model_dump() for p in body.points])
+
+    @app.delete("/api/games/{game_id}/pitch/points")
+    def game_pitch_reset(game_id: str) -> dict:
+        """Start the field calibration over (the clicks are kept in pitch_points.before-reset.json)."""
+        from soccer_clips.track import pitch
+
+        return pitch.reset_points(store, load(game_id))
 
     @app.delete("/api/games/{game_id}/pitch/points/{index}")
     def game_pitch_remove(game_id: str, index: int) -> dict:

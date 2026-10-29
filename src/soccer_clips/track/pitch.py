@@ -777,6 +777,34 @@ def remove_point(store: Store, game: Game, i: int) -> dict:
     return state(store, game)
 
 
+def remove_points(store: Store, game: Game, drop: list[dict]) -> dict:
+    """Remove the clicks given as {frame, x, y, target} (as state() lists them) and solve once."""
+    points = load_points(store, game)
+    for d in drop:
+        i = next((i for i, p in enumerate(points) if p["frame"] == d["frame"] and p["target"] == d["target"]
+                  and abs(p["x"] - d["x"]) < 1e-6 and abs(p["y"] - d["y"]) < 1e-6), None)
+        if i is not None:
+            points.pop(i)
+    save_points(store, game, points)
+    if points:
+        calibrate(store, game)
+    else:
+        cal_path(store, game).unlink(missing_ok=True)
+    return state(store, game)
+
+
+def reset_points(store: Store, game: Game) -> dict:
+    """Start the calibration over: no clicks, no solve. The clicks are kept in pitch_points.before-reset.json."""
+    from soccer_clips.store import atomic_write_text
+
+    p = points_path(store, game)
+    if p.exists():
+        atomic_write_text(p.with_name("pitch_points.before-reset.json"), p.read_text())
+    save_points(store, game, [])
+    cal_path(store, game).unlink(missing_ok=True)
+    return state(store, game)
+
+
 def frame_matrices(store: Store, game: Game, frames: np.ndarray) -> np.ndarray | None:
     """Pitch metres -> frame pixels (full size) at each frame (n, 3, 3), NaN where the frame isn't placed;
     None when the game isn't calibrated."""

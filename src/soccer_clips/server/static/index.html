@@ -58,6 +58,12 @@
   #pitchInfo { color: var(--muted); font-size: 13px; line-height: 1.5; }
   #pitchInfo b { color: var(--text); }
   #pitchInfo .bad { color: #ff6b6b; }
+  #pitchInfo summary { cursor: pointer; }
+  #pitchInfo table.clicks { border-collapse: collapse; margin: 4px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #pitchInfo table.clicks td { padding: 1px 8px 1px 0; }
+  #pitchInfo table.clicks td.px { text-align: right; }
+  #pitchInfo table.clicks a { text-decoration: none; }
+  #pitchInfo button[data-reset] { margin-top: 4px; font-size: 12px; }
   /* while calibrating: says so over the video, since clicks there place points instead of pausing */
   #calBanner { position: absolute; top: 8px; left: 8px; max-width: 60%; padding: 6px 10px; border-radius: 5px; z-index: 2;
                background: rgba(40, 0, 40, 0.85); border: 2px solid #ff3df5; color: #fff; font-size: 13px; pointer-events: none; }
@@ -1755,6 +1761,10 @@ let pitchBusy = false, mapHover = null, mapLast = null;  // mapLast: the map's t
 // clicks placed but not in a solve yet ({frame, x, y, target, at: where on the map}), shown straight away.
 // The first pitchSent of them are saved on the server; the rest wait for the solve that's running.
 let pitchQueue = [], pitchSent = 0;
+// clicks taken back but not in a solve yet (pitchKey), hidden straight away; the first pitchDropSent are on their way
+let pitchDrops = [], pitchDropSent = 0, pitchListOpen = false;
+const pitchKey = (p) => `${p.frame}|${p.x}|${p.y}|${p.target}`;
+const pitchDropped = (p) => pitchDrops.includes(pitchKey(p));
 let mapMem = mapMemory();  // players who just left the view, fading out where they were last seen
 try {
   showPitchLines = localStorage.getItem("showPitchLines") === "1";
@@ -1822,11 +1832,21 @@ function renderPitchInfo() {
       size += `: ${unsure(L) && unsure(W) ? "size" : unsure(L) ? "length" : "width"} not measured yet, so the 9v9 middle. Click goal posts or corners at both ends to measure it.`;
     }
     lines.push(esc(size));
-    if (bad) lines.push(`<span class="bad">${bad} click${bad === 1 ? " disagrees" : "s disagree"} with the rest (red ×): Q, then click it on the video to remove it.</span>`);
+    if (bad) lines.push(`<span class="bad">${bad} click${bad === 1 ? " disagrees" : "s disagree"} with the rest (red ×): remove them with ✕ in the list below (or Q, then click the × on the video), or start over.</span>`);
   } else {
     lines.push(n ? `Not calibrated yet (${n} click${n === 1 ? "" : "s"}): ${esc(pitch.error || "")}` : "Not calibrated yet: press <kbd>Q</kbd> to start.");
   }
-  if (pitchBusy) lines.push(`<b>solving…</b>${pitchQueue.length > pitchSent ? ` (${pitchQueue.length - pitchSent} more click${pitchQueue.length - pitchSent === 1 ? "" : "s"} after it)` : ""}`);
+  if (pitchBusy) lines.push(`<b>solving…</b> (up to a minute)${pitchQueue.length > pitchSent ? ` (${pitchQueue.length - pitchSent} more click${pitchQueue.length - pitchSent === 1 ? "" : "s"} after it)` : ""}${pitchDrops.length > pitchDropSent ? ` (${pitchDrops.length - pitchDropSent} to remove after it)` : ""}`);
+  if (n) {
+    const rows = pitch.points.map((p, i) => pitchDropped(p) ? "" : `<tr${p.bad ? ' class="bad"' : ""}>
+      <td><a href="#" data-seek="${p.frame}" title="Go to the frame it was clicked in: its × is where you clicked, the line goes to where the solve puts it">${fmt(p.frame / fps)}</a></td>
+      <td>${esc(pitch.label[p.target] || p.target)}</td>
+      <td class="px" title="How far the solve puts it from where you clicked">${p.px == null ? "" : `${Math.round(p.px)} px`}</td>
+      <td><a href="#" data-drop="${i}" title="Remove this click">✕</a></td></tr>`).join("");
+    lines.push(`<details id="pitchList"${pitchListOpen ? " open" : ""}><summary>the clicks (${n - pitch.points.filter(pitchDropped).length})</summary>
+      <table class="clicks">${rows}</table></details>
+      <button type="button" data-reset title="Remove every click for this game and calibrate from scratch (the clicks are kept in pitch_points.before-reset.json)">start over…</button>`);
+  }
   el.innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
 }
 function startPitchMode() {
@@ -1867,7 +1887,8 @@ function addPitchPoint(p) {
   flushPitch();
 }
 async function flushPitch() {
-  if (pitchBusy || pitchSent >= pitchQueue.length) return;
+  if (pitchBusy) return;
+  if (pitchSent >= pitchQueue.length) return flushDrops();
   pitchBusy = true;
   renderPitchInfo();
   const id = game.id;
@@ -1889,13 +1910,37 @@ async function flushPitch() {
   } catch {
     if (game?.id === id) { pitchQueue = []; pitchSent = 0; loadPitch(); }  // api() said what went wrong
   } finally {
-    if (game?.id === id) { pitchBusy = false; renderPitchInfo(); }
+    if (game?.id === id) { pitchBusy = false; renderPitchInfo(); flushDrops(); }
   }
 }
 function removePitchPoint(i) {
-  if (pitchBusy) return flash("still solving: take that one back when it's done", true);
+  // hidden at once; removed and solved in the background, one solve for however many are taken back meanwhile
   const p = pitch.points[i];
-  return pitchChange("DELETE", `${pitchUrl()}/${i}`, null, `removed the click on ${pitch.label[p.target] || p.target}`);
+  if (!p || pitchDropped(p)) return;
+  pitchDrops.push(pitchKey(p));
+  flash(`removed the click on ${pitch.label[p.target] || p.target}${pitchBusy ? " (solving again after the current solve)" : ""}`);
+  renderPitchInfo();
+  flushPitch();
+}
+async function flushDrops() {
+  if (pitchBusy || pitchDropSent >= pitchDrops.length) return;
+  pitchBusy = true;
+  const id = game.id, sent = pitchDrops.slice();
+  pitchDropSent = sent.length;
+  renderPitchInfo();
+  try {
+    const points = pitch.points.filter((p) => sent.includes(pitchKey(p))).map(({ frame, x, y, target }) => ({ frame, x, y, target }));
+    const s = await api("POST", `${pitchUrl()}/remove`, { points });
+    if (game?.id !== id) return;
+    pitchDrops = pitchDrops.filter((k) => !sent.includes(k));
+    setPitch(s, id);
+    flash(s.calibrated ? `removed ${sent.length} click${sent.length === 1 ? "" : "s"}; solved again`
+      : s.points.length ? `removed; ${s.error || "not calibrated yet"}` : "all clicks removed");
+  } catch {
+    if (game?.id === id) { pitchDrops = []; loadPitch(); }  // api() said what went wrong
+  } finally {
+    if (game?.id === id) { pitchDropSent = 0; pitchBusy = false; renderPitchInfo(); flushPitch(); }
+  }
 }
 function undoPitchPoint() {
   if (pitchQueue.length > pitchSent) {  // not sent yet: just drop it
@@ -1903,15 +1948,33 @@ function undoPitchPoint() {
     renderPitchInfo();
     return flash(`took back: ${pitch.label[p.target] || p.target}`);
   }
-  if (pitchBusy) return flash("still solving: U again when it's done", true);
-  if (!pitch?.points.length) return flash("no clicks to take back", true);
-  return removePitchPoint(pitch.points.length - 1);
+  const left = (pitch?.points || []).map((p, i) => i).filter((i) => !pitchDropped(pitch.points[i]));
+  if (!left.length) return flash("no clicks to take back", true);
+  return removePitchPoint(left.at(-1));
 }
+async function resetPitch() {
+  const n = pitch?.points.length || 0;
+  if (!n) return flash("no clicks to remove");
+  if (pitchBusy) return flash("still solving: start over when it's done", true);
+  if (!confirm(`Remove all ${n} field calibration clicks for this game and start over?\n(They're kept in pitch_points.before-reset.json.)`)) return;
+  pitchQueue = []; pitchSent = 0; pitchDrops = []; pitchDropSent = 0;
+  await pitchChange("DELETE", pitchUrl(), null, "all clicks removed");
+}
+$("pitchInfo").addEventListener("click", (e) => {
+  const el = e.target.closest("[data-drop], [data-seek], [data-reset]");
+  if (!el || !pitch) return;
+  e.preventDefault();
+  if (el.dataset.reset != null) return resetPitch();
+  if (el.dataset.drop != null) return removePitchPoint(+el.dataset.drop);
+  v.pause();
+  seekTo(+el.dataset.seek / fps);
+});
+$("pitchInfo").addEventListener("toggle", (e) => { if (e.target.id === "pitchList") pitchListOpen = e.target.open; }, true);
 function pitchClickAt(p, f, G) {
-  // where a calibration click is in frame f (frame pixels), or null: through the field where the solve
-  // placed it, else as clicked when it's this frame, else through the field from the frame it was clicked in
-  if (p.pitch && G) return projectH(G, ...p.pitch);
+  // where a calibration click is in frame f (frame pixels), or null: as clicked when it's this frame, else
+  // through the field where the solve placed it, else through the field from the frame it was clicked in
   if (p.frame === f) return [p.x * game.width, p.y * game.height];
+  if (p.pitch && G) return projectH(G, ...p.pitch);
   const Gp = G && pitchHs?.at(p.frame);
   const at = Gp && pixelToPitch(inv3(Gp), p.x * game.width, p.y * game.height);
   return at && projectH(G, ...at);
@@ -1927,7 +1990,7 @@ function pitchClickNear(e) {
     const d = q ? Math.hypot(r.x + q[0] * k - mx, r.y + q[1] * k - my) : Infinity;
     if (d < bd) { bd = d; best = hit; }
   };
-  (pitch?.points || []).forEach((p, i) => check(p, { i }));
+  (pitch?.points || []).forEach((p, i) => pitchDropped(p) || check(p, { i }));
   pitchQueue.forEach((p, j) => j >= pitchSent && check(p, { queued: j }));
   return best;
 }
@@ -1994,7 +2057,7 @@ function drawPitchLines(ctx) {
   }
   // each calibration click, where it is in this frame (also before there's a solve, and while one runs)
   const fromFrame = (q) => q && [r.x + q[0] * k, r.y + q[1] * k];
-  for (const p of [...pitch.points, ...pitchQueue.map((q) => ({ ...q, queued: true }))]) {
+  for (const p of [...pitch.points.filter((p) => !pitchDropped(p)), ...pitchQueue.map((q) => ({ ...q, queued: true }))]) {
     const q = fromFrame(pitchClickAt(p, f, G));
     if (!q) continue;
     const lm = G && p.pitch && pitch.drawing.landmarks[p.target], t = lm && to(lm);
@@ -2260,6 +2323,8 @@ async function loadGame(id, startT = 0, clipId = null) {
   pitchQueue = [];
   pitchSent = 0;
   pitchBusy = false;
+  pitchDrops = [];
+  pitchDropSent = 0;
   mapMem = mapMemory();
   if (pitchMode) stopPitchMode();
   loadPitch();
