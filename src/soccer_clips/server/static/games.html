@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Clips — Games</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  main { padding: 12px 16px 40px; }
+  .intro { color: var(--muted); line-height: 1.6; margin: 0 0 12px; max-width: 980px; }
+  .key { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; white-space: nowrap; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+  .lab { background: var(--in); } .app { background: var(--accent); } .plc { background: var(--team); } .unk { background: #4a4a4a; }
+  table.games { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  table.games th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 6px 8px;
+                   border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.games td { padding: 8px; border-bottom: 1px solid #222; vertical-align: middle; }
+  tr.game { cursor: pointer; }
+  tr.game:hover td { background: #191919; }
+  tr.game.open td { background: #1c222b; }
+  .name a { color: var(--text); font-weight: 600; text-decoration: none; }
+  .name a:hover { text-decoration: underline; }
+  .name .d { color: var(--muted); font-size: 12px; }
+  .num { text-align: right; white-space: nowrap; }
+  .chips { display: flex; gap: 3px; flex-wrap: wrap; }
+  .chip { font-size: 11px; padding: 1px 6px; border-radius: 9px; border: 1px solid; white-space: nowrap; }
+  .chip.ok { color: var(--in); border-color: #2c6b48; background: #13261b; }
+  .chip.partial, .chip.stale { color: var(--warn); border-color: #7a6427; background: #2a2412; }
+  .chip.missing { color: var(--bad); border-color: #7a2c2c; background: #2a1414; }
+  .bar2 { display: flex; height: 12px; width: 220px; border-radius: 3px; overflow: hidden; background: #2a2a2a; }
+  .bar2 span { display: block; height: 100%; }
+  .bar2.small { width: 160px; height: 9px; }
+  .named { display: flex; align-items: center; gap: 8px; }
+  .named b { min-width: 38px; text-align: right; }
+  .old { opacity: 0.45; }
+  .busy { color: var(--muted); font-size: 12px; }
+  tr.detail > td { background: #141414; padding: 12px 16px 18px; }
+  .cols { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr); gap: 20px; }
+  @media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
+  .detail h4 { margin: 4px 0 6px; font-size: 13px; }
+  .detail p { color: var(--muted); margin: 4px 0 8px; line-height: 1.5; font-size: 12.5px; }
+  .detail table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  .detail table td, .detail table th { padding: 3px 6px; border-bottom: 1px solid #222; text-align: left; white-space: nowrap; }
+  .detail table th { color: var(--muted); font-weight: 500; }
+  .lens { display: flex; gap: 6px; align-items: end; height: 70px; margin: 6px 0 2px; }
+  .lens div { flex: 1; background: #4a4a4a; border-radius: 2px 2px 0 0; min-height: 1px; position: relative; }
+  .lens div span { position: absolute; top: -16px; left: 0; right: 0; text-align: center; font-size: 11px; color: var(--text); }
+  .lenl { display: flex; gap: 6px; font-size: 11px; color: var(--muted); }
+  .lenl span { flex: 1; text-align: center; }
+  .sure { color: var(--warn); font-weight: 600; }
+  code { background: #222; padding: 1px 5px; border-radius: 3px; font-size: 12px; user-select: all; }
+  .fixes li { margin: 3px 0; color: var(--muted); }
+  .links { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="stat" title="Games registered"><b id="nGames">–</b> games</span>
+  <span class="stat" title="Our team's time on the field in game time, summed over the games (a player on screen for a minute is a minute)">our team on the field <b id="total">–</b></span>
+  <span class="stat" title="Of that, labelled or guessed (by appearance or by place on the field)">named <b id="named">–</b></span>
+  <span class="stat" title="Of that, nobody yet">unknown <b id="unknown">–</b></span>
+  <label class="stat">sort
+    <select id="sort">
+      <option value="unknown">most unknown first</option>
+      <option value="share">least named first</option>
+      <option value="date">newest first</option>
+    </select>
+  </label>
+  <span id="flash"></span>
+</div>
+<main>
+  <p class="intro">
+    Every game: which steps have been run on it (hover a step for what it says and how to fix it), and how much of our
+    team's time on the field the tracking names:
+    <span class="key"><span class="sw lab"></span>labelled</span>
+    <span class="key"><span class="sw app"></span>guessed by appearance</span>
+    <span class="key"><span class="sw plc"></span>followed by place on the field</span>
+    <span class="key"><span class="sw unk"></span>nobody yet</span>.
+    Counted over game time, players within 3 m of the lines (the bench and parents left out), at the default guessing
+    threshold. Click a game for its players, where the unknown time is and the longest unknown tracklets to label.
+  </p>
+  <table class="games">
+    <thead><tr>
+      <th>Game</th><th class="num">Clips</th><th>Steps</th><th>Named</th>
+      <th class="num" title="Our team's time on the field nobody is named for">Unknown</th>
+      <th class="num" title="Our players on screen and on the field, on average (the camera sees part of the field). 9 a side: more than 9 means others (subs warming up by the line, opponents, a ref) are being taken for ours">On screen</th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="6" class="busy">loading…</td></tr></tbody>
+  </table>
+</main>
+<script src="/static/common.js"></script>
+<script>
+const STEPS = [
+  ["gametime", "Game time"], ["detect", "Detect"], ["kit", "Kit"], ["track", "Track"], ["crops", "Crops"],
+  ["sigs", "Signatures"], ["ball", "Ball"], ["field", "Field"], ["labels", "Labels"],
+];
+let games = [], names = {}, open = null, working = null;
+
+const mins = (s) => s == null ? "–" : s < 60 ? `${Math.round(s)} s` : s < 5940 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+const dur = (s) => s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+const pct = (x) => `${Math.round(100 * x)}%`;
+const totalOf = (r) => r ? r.seconds.labelled + r.seconds.appearance + r.seconds.place + r.seconds.unknown : 0;
+const namedOf = (r) => totalOf(r) ? 1 - r.seconds.unknown / totalOf(r) : null;
+const who = (n) => `#${n}${names[n] ? ` ${esc(names[n])}` : ""}`;
+const tagger = (id, t) => `/${makeHash({ game: id, t: t != null ? t.toFixed(1) : null })}`;
+
+function stackBar(parts, total, cls = "") {
+  const w = (v) => total ? (100 * v / total).toFixed(2) : 0;
+  return `<div class="bar2 ${cls}">${parts.map(([v, c, tip]) => v > 0 ? `<span class="${c}" style="width:${w(v)}%" title="${esc(tip)}"></span>` : "").join("")}</div>`;
+}
+
+function chips(g) {
+  return `<div class="chips">${STEPS.map(([k, label]) => {
+    const s = g.stages[k];
+    const tip = `${label}: ${s.tip || s.text}` + (s.state === "stale" ? "\n(out of date)" : "") + (s.fix ? `\nFix: ${s.fix}` : "");
+    const text = s.state === "ok" && s.text === "✓" ? label : `${label} ${s.text}`;
+    return `<span class="chip ${s.state}" title="${esc(tip)}">${esc(text)}</span>`;
+  }).join("")}</div>`;
+}
+
+function row(g) {
+  const r = g.recognition, total = totalOf(r), s = r?.seconds;
+  const state = !r ? (g.id === working ? "working it out…" : g.stages.track.state === "missing" ? "not tracked" : "waiting…")
+    : r.current ? "" : g.id === working ? "updating…" : "out of date";
+  const named = r ? `<div class="named ${r.current ? "" : "old"}">${stackBar([
+      [s.labelled, "lab", `labelled ${mins(s.labelled)}`], [s.appearance, "app", `guessed by appearance ${mins(s.appearance)}`],
+      [s.place, "plc", `followed by place ${mins(s.place)}`], [s.unknown, "unk", `nobody yet ${mins(s.unknown)}`]], total)}
+      <b>${pct(namedOf(r))}</b></div>` : "";
+  const notes = [state, r && !r.game_time ? "whole video: no game time set" : "", r && !r.field ? "field not calibrated: bench included" : ""]
+    .filter(Boolean).map((x) => `<div class="busy">${x}</div>`).join("");
+  const date = g.played_on ? new Date(g.played_on + "T12:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+  return `<tr class="game ${open === g.id ? "open" : ""}" data-id="${esc(g.id)}">
+    <td class="name"><a href="${tagger(g.id)}" title="Open in the tagger">${esc(shortGame(g.id))}</a>
+      <div class="d">${esc([date, g.description].filter(Boolean).join(" · "))}</div></td>
+    <td class="num">${g.clips}</td>
+    <td>${chips(g)}</td>
+    <td>${named}${notes}</td>
+    <td class="num ${r && !r.current ? "old" : ""}"><b>${r ? mins(s.unknown) : "–"}</b></td>
+    <td class="num ${r && !r.current ? "old" : ""}">${r ? r.per_frame.toFixed(1) : "–"}</td>
+  </tr>${open === g.id ? `<tr class="detail"><td colspan="6">${detail(g)}</td></tr>` : ""}`;
+}
+
+function detail(g) {
+  const r = g.recognition;
+  const fixes = STEPS.map(([k, label]) => [label, g.stages[k]]).filter(([, s]) => s.fix);
+  const links = `<div class="links">
+    <a href="${tagger(g.id)}">Open in the tagger</a>
+    <a href="/roster${makeHash({ view: "unassigned", game: g.id, sort: "long" })}" title="Our team's pictures in this game with nobody named yet, longest first: select and type a number">Unassigned pictures in this game</a>
+  </div>`;
+  const fixList = fixes.length ? `<h4>To do</h4><ul class="fixes">${fixes.map(([label, s]) =>
+    `<li><b>${label}</b> (${s.state}): ${esc(s.tip)} — <code>${esc(s.fix)}</code></li>`).join("")}</ul>` : "";
+  if (!r) return links + fixList + `<p>No recognition numbers yet.</p>`;
+  const s = r.seconds, total = totalOf(r);
+  const players = r.players.map((p) => ({ ...p, sum: p.labelled + p.appearance + p.place })).sort((a, b) => b.sum - a.sum);
+  const most = Math.max(1, ...players.map((p) => p.sum));
+  const playerRows = players.map((p) => `<tr><td>${who(p.player)}</td>
+    <td>${stackBar([[p.labelled, "lab", `labelled ${mins(p.labelled)}`], [p.appearance, "app", `by appearance ${mins(p.appearance)}`],
+      [p.place, "plc", `by place ${mins(p.place)}`], [most - p.sum, "", ""]], most, "small")}</td>
+    <td class="num">${mins(p.sum)}</td><td class="num">${pct(p.labelled / Math.max(p.sum, 1))}</td>
+    <td><a href="/watch${makeHash({ player: p.player, game: g.id })}" title="Watch them in this game">▶</a></td></tr>`).join("");
+  const biggest = Math.max(1, ...r.unknown_by_length.map((b) => b.s));
+  const lenLabel = (b) => b.to == null ? `${b.from} s +` : b.from === 0 ? `under ${b.to} s` : `${b.from}–${b.to} s`;
+  const longRows = r.longest.map((x) => {
+    const top = x.looks[0], sure = top && top.score >= r.auto_min;
+    const looks = x.looks.length ? x.looks.map((l, i) => `<span class="${i === 0 && sure ? "sure" : ""}">${who(l.player)} ${l.score.toFixed(2)}</span>`).join(", ")
+      : `<span class="busy">no crops (too small)</span>`;
+    return `<tr><td><a href="${tagger(g.id, x.t)}" title="Open the tagger here (V shows the players, L labels one)">${fmt(x.t)}</a></td>
+      <td class="num">${dur(x.s)}</td><td class="num">${dur(x.length)}</td>
+      <td ${sure ? `title="Looks at least ${r.auto_min} like them but wasn't guessed: another teammate on screen looked nearly as alike, two players claimed it, or they were labelled elsewhere then"` : ""}>${looks}</td></tr>`;
+  }).join("");
+  return links + `<div class="cols">
+    <div>
+      <h4>Players</h4>
+      <table><tr><th>Player</th><th>Time named in this game</th><th class="num">Total</th><th class="num" title="Share of it that's labelled rather than guessed">Labelled</th><th></th></tr>${playerRows || `<tr><td colspan="5" class="busy">nobody named yet</td></tr>`}</table>
+      <p>Players with no labels in any game can't be guessed: label a stretch of each (tagger <kbd>L</kbd>).
+        Off the field (bench, warm-ups, parents): ${mins(s.off_field)}, not counted.</p>
+      ${fixList}
+    </div>
+    <div>
+      <h4>Unknown time (${mins(s.unknown)} of ${mins(total)}) by how long its tracklet is</h4>
+      <div class="lens">${r.unknown_by_length.map((b) => `<div style="height:${(100 * b.s / biggest).toFixed(1)}%"><span>${mins(b.s)}</span></div>`).join("")}</div>
+      <div class="lenl">${r.unknown_by_length.map((b) => `<span>${lenLabel(b)}</span>`).join("")}</div>
+      <p>Short scraps are the tracking breaking people up (they're too short to recognise; following by place helps).
+        Long tracklets nobody's named are where a label goes furthest, or where the appearance model isn't sure enough.</p>
+      <h4>Longest unknown tracklets</h4>
+      <table><tr><th>Video time</th><th class="num">Unknown</th><th class="num" title="The whole tracklet">Tracklet</th><th>Looks most like</th></tr>${longRows || `<tr><td colspan="4" class="busy">none</td></tr>`}</table>
+      <p>Highlighted: looks at least ${r.auto_min} like them, yet not guessed. Worked out ${esc(new Date(r.made_at).toLocaleString())}.</p>
+    </div>
+  </div>`;
+}
+
+function sorted() {
+  const by = $("sort").value;
+  const key = (g) => by === "date" ? (g.played_on || "") : by === "share" ? -(namedOf(g.recognition) ?? 2) : g.recognition?.seconds.unknown ?? -1;
+  return [...games].sort((a, b) => key(b) > key(a) ? 1 : key(b) < key(a) ? -1 : 0);
+}
+
+function render() {
+  $("nGames").textContent = games.length;
+  const rs = games.map((g) => g.recognition).filter(Boolean);
+  const total = rs.reduce((a, r) => a + totalOf(r), 0), unknown = rs.reduce((a, r) => a + r.seconds.unknown, 0);
+  $("total").textContent = rs.length ? mins(total) : "–";
+  $("named").textContent = total ? pct(1 - unknown / total) : "–";
+  $("unknown").textContent = rs.length ? mins(unknown) : "–";
+  $("rows").innerHTML = games.length ? sorted().map(row).join("") : `<tr><td colspan="6" class="busy">no games yet</td></tr>`;
+}
+
+$("rows").addEventListener("click", (e) => {
+  if (e.target.closest("a, code, tr.detail")) return;
+  const tr = e.target.closest("tr.game");
+  if (!tr) return;
+  open = open === tr.dataset.id ? null : tr.dataset.id;
+  history.replaceState(null, "", location.pathname + (open ? makeHash({ game: open }) : ""));
+  render();
+});
+$("sort").addEventListener("change", () => {
+  try { localStorage.setItem("gamesSort", $("sort").value); } catch {}
+  render();
+});
+
+// Work out the numbers that are missing or out of date, one game at a time (each takes seconds, and the server
+// keeps one game's tracklets in memory at a time).
+async function refresh() {
+  const todo = sorted().filter((g) => g.stages.track.state !== "missing" && !g.recognition?.current);
+  for (const [i, g] of todo.entries()) {
+    working = g.id;
+    flash(`working out ${shortGame(g.id)} (${i + 1}/${todo.length})…`);
+    render();
+    try {
+      g.recognition = await getJson(`/api/games/${encodeURIComponent(g.id)}/recognition`);
+    } catch { /* api() flashed it */ }
+  }
+  working = null;
+  if (todo.length) flash("up to date");
+  render();
+}
+
+(async () => {
+  try { const s = localStorage.getItem("gamesSort"); if (s && [...$("sort").options].some((o) => o.value === s)) $("sort").value = s; } catch {}
+  const [list, settings] = await Promise.all([getJson("/api/status"), getJson("/api/settings")]);
+  games = list;
+  names = settings.first_names || {};
+  open = readHash().game || null;
+  render();
+  refresh();
+})();
+</script>
+</body>
+</html>

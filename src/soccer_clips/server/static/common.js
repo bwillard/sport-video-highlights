@@ -127,6 +127,7 @@ function setupMute(video) {
 // The links between the pages, in a row at the top of every page (this script loads at the end of <body>).
 // A page can point a link at what it's showing: navLink("/watch", makeHash({player: 38, game: id})).
 const NAV = [
+  ["/games", "Games", "Every game: which steps have been run, and how much of our team is named"],
   ["/", "Tagger", "Tag clips in a game, label players and fix the ball while watching"],
   ["/watch", "Player view", "Watch one player's games with everything else skipped: only the stretches where they're on screen"],
   ["/roster", "Roster", "Names for numbers, each player's pictures from every game, and the unassigned ones to sort"],

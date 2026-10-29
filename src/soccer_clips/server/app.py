@@ -964,6 +964,29 @@ def create_app(store: Store | None = None) -> FastAPI:
         rows = watch.boxes(store, load(game), player, guesses, ms)
         return Response(rows.astype("<f4").tobytes(), media_type="application/octet-stream")
 
+    @app.get("/games")
+    def games_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "games.html")
+
+    @app.get("/api/status")
+    def games_status() -> list[dict]:
+        """The games page (status.overview): every game's steps run and its last recognition score, which may be
+        out of date (`current`); fast."""
+        from soccer_clips.track import status
+
+        return status.overview(store)
+
+    @app.get("/api/games/{game_id}/recognition")
+    def game_recognition(game_id: str) -> dict:
+        """How much of our team on the field is named in the game (status.recognition), worked out again if
+        anything it reads changed (seconds)."""
+        from soccer_clips.track import status
+
+        got = status.recognition(store, load(game_id))
+        if got is None:
+            raise HTTPException(404, "the game isn't tracked yet")
+        return got
+
     @app.get("/label-ball")
     def label_ball_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "label-ball.html")
@@ -990,7 +1013,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     async def revalidate_pages(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path in ("/", "/reel", "/label-ball", "/review-balls") or path.startswith("/static/"):
+        if path in ("/", "/games", "/reel", "/label-ball", "/review-balls") or path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
 

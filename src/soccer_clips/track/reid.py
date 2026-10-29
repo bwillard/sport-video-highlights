@@ -982,6 +982,8 @@ def auto_label(store: Store, game: Game, player: int, margin: float = AUTO_MARGI
         if x["player"] == player:
             ok &= ~over
     idx = np.flatnonzero(ok)
+    if not len(idx):  # every piece labelled, turned down or while the player is labelled elsewhere
+        return []
     score = pc["vec"][idx] @ look
     # each piece against the best other candidate on screen at any of its crop frames
     lo, hi = pc["lo"][idx] // CROP_EVERY, pc["hi"][idx] // CROP_EVERY
