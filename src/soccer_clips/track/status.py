@@ -7,7 +7,8 @@ The games page: where each game is in the pipeline, and how much of our team the
 - `recognition`: of our team's time on the field (players on screen, within FIELD_PAD_M of the lines and not
   standing still by a touchline, in game time), how much is labelled, guessed by appearance, guessed by place on the field, or nobody yet; per player,
   the unknown time by how long its tracklets are (short scraps: the tracking; long ones: labels or the
-  appearance model), and the longest unknown tracklets to go and label, with who each looks most like. Seconds
+  appearance model), and the longest unknown tracklets to go and label, with who each looks most like (and a
+  longer queue of them for the tagger's S key). Seconds
   a game (cached on disk in tracks/recognition.json until anything it reads changes).
 """
 
@@ -21,7 +22,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 3  # bump when recognition's numbers change meaning, to redo every game's cache
+VERSION = 4  # bump when recognition's numbers change meaning, to redo every game's cache
 STEP = 5  # every 5th frame (6 a second): plenty for totals, a fifth of the work
 FIELD_PAD_M = 1.0  # further off the lines than this is the bench, warm-ups or parents, not the game. Not 3 m:
 # every game has a crowd 1-3 m behind a touchline (at FC Stars, 1.3 of "our" players a frame were spectators)
@@ -30,6 +31,7 @@ SIDELINE_SD_M = 1.0  # side's people read up to 4 m inside the line (a few pixel
 SIDELINE_S = 10.0  # and players rarely stay put by the line. Still = this spread over this long, each way
 LENGTHS_S = (2, 10, 30)  # unknown time by tracklet length: under 2 s, 2-10 s, 10-30 s, 30 s and more
 LONGEST = 15  # unknown tracklets listed
+QUEUE = 200  # unknown tracklets queued for the tagger's S (no looks: those take a while each)
 FULL = 0.98  # share of the video detected / tracked that counts as the whole game
 
 
@@ -342,13 +344,15 @@ def _work_out(store: Store, game: Game) -> dict:
         longest.append({"track": k, "t": round(f / fps, 1), "s": secs(n[i]), "length": round(float(length[first_row[i]]), 1),
                         "looks": [{"player": x["player"], "score": x["score"]} for x in looks
                                   if not (x["busy"] or x["rejected"])]})
+    queue = [{"track": int(uk[i]), "t": round(int(t.frame[unknown[first_row[i]]]) / fps, 2), "s": secs(n[i])}
+             for i in np.argsort(-n, kind="stable")[:QUEUE] if secs(n[i]) >= LENGTHS_S[0]]
 
     return {"version": VERSION, "made_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "game_time": spans is not None, "field": field, "auto_min": reid.AUTO_MIN,
             "seconds": {"labelled": secs(counts[1]), "appearance": secs(counts[2]), "place": secs(counts[3]),
                         "unknown": secs(counts[0]), "off_field": secs(len(off_rows))},
             "per_frame": round(len(rows) / max(frames_seen, 1), 2),
-            "players": players, "unknown_by_length": by_length, "longest": longest}
+            "players": players, "unknown_by_length": by_length, "longest": longest, "queue": queue}
 
 
 def overview(store: Store) -> list[dict]:

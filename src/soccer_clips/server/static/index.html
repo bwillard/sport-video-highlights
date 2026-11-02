@@ -190,6 +190,9 @@
           best guess outlined: click it, or <kbd>Enter</kbd>; or type a number then <kbd>Enter</kbd>)</li>
         <li>From the <b>Games</b> page's longest unknown tracklets: the game opens there with that tracklet outlined in yellow
           ("who is this?"); click it to name them. The outline goes once it's labelled</li>
+        <li><kbd>S</kbd> next unknown tracklet (<kbd>Shift</kbd>+<kbd>S</kbd> back): the same yellow outline, on this game's
+          tracklets of our team nobody's named, longest first (2 s or more). Name them (click), or <kbd>Shift</kbd>+<kbd>X</kbd>
+          if not our team, and it goes straight on to the next; <kbd>S</kbd> again skips one</li>
         <li><kbd>A</kbd> next automatic guess, any player (<kbd>Shift</kbd>+<kbd>A</kbd> back): jumps to a <i>#n?</i> and asks
           (magenta box) · <kbd>Y</kbd> yes · <kbd>X</kbd> no, and on to the next · <kbd>A</kbd> again skips it</li>
         <li><kbd>G</kbd> next suggestion: jumps to an unlabelled teammate who looks like the player you follow (magenta box, best
@@ -1101,7 +1104,7 @@ const TEAM_STYLE = { 0: ["rgba(255,255,255,0.75)", []], 1: ["rgba(90,176,255,0.7
 let showPeople = false, people = null;  // people: {gameId, ranges, teams, picks, segments}
 let followWho = null, picking = false;
 let suggestion = null;  // {track, frame, x, y, box, score, start, end, n, of} being asked about
-let wanted = null;  // {gameId, track}: a tracklet sent from the games page (#track=), outlined until it's labelled
+let wanted = null;  // {gameId, track, from}: a tracklet sent from the games page (#track=) or S, outlined until it's labelled
 const skippedSuggestions = new Set();  // "player:track" skipped with G
 const boxChunks = new Map();  // chunk index -> Float32Array, or "loading"
 try { showPeople = localStorage.getItem("showPeople") === "1"; } catch {}
@@ -1214,7 +1217,7 @@ function loadPeople() {
 }
 function setLabels(r) {
   if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
-  if (wanted?.gameId === game.id && r.segments.some((sg) => sg.track === wanted.track)) wanted = null;  // named: done
+  if (wanted?.gameId === game.id && r.segments.some((sg) => sg.track === wanted.track)) wantedDone();  // named
   loadAuto();  // labels move the automatic ones
   looks.clear();  // and the players' looks, and who's busy where
   boxChunks.clear();  // which kit is "ours" comes from the labels, so box teams may have changed
@@ -1414,6 +1417,9 @@ function drawPeople(ctx) {
     ? `players: is this #${suggestion.player}? (guess ${suggestion.n} of ${suggestion.of} by appearance) Y yes · X no · A skip`
     : suggestion
     ? `players: is this #${suggestion.player}? (best match ${suggestion.n} of ${suggestion.of} unlabelled tracklets of our team)`
+    : wanted?.gameId === game.id && wanted.from === "unknown"
+    ? (wantedHere ? `players: who is the yellow box? (unknown tracklet ${wanted.n} of ${wanted.of}) click it to name them · Shift+X not our team · S skip · Shift+S back`
+                  : `players: unknown tracklet ${wanted.n} of ${wanted.of} isn't on screen here · S next`)
     : wanted?.gameId === game.id
     ? (wantedHere ? "players: the yellow box is the tracklet from the games page: paused, click it to name them"
                   : "players: the tracklet from the games page isn't on screen here")
@@ -1460,6 +1466,68 @@ function yxTarget() {
   return null;
 }
 let lastNotOurs = null;  // {gameId, batch} of the last "not our team", while it's the last change (U takes it back)
+// S: the longest tracklets of our team nobody's named yet, one after another (the Games page's list, longer)
+let unknownList = null;  // {gameId, items: [{track, t, s}]}, longest unknown time first
+let unknownAt = -1;  // index of the one outlined
+let unknownBusy = false;
+const unknownPassed = new Set();  // gameId:track named, marked not ours or skipped
+function unknownLeft(it) {
+  return !unknownPassed.has(`${game.id}:${it.track}`) && !people.segments.some((sg) => sg.track === it.track);
+}
+function wantedDone() {
+  // the outlined tracklet was named or marked not ours: from S, straight on to the next
+  const was = wanted;
+  wanted = null;
+  if (was.from !== "unknown") return;
+  unknownPassed.add(`${was.gameId}:${was.track}`);
+  setTimeout(() => { if (game?.id === was.gameId && !wanted) nextUnknown(); }, 800);
+}
+async function loadUnknown() {
+  const id = game.id;
+  flash("finding the longest unknown tracklets… (a few seconds)");
+  const r = await getJson(`/api/games/${encodeURIComponent(id)}/recognition`);
+  if (game?.id !== id) return false;
+  unknownList = { gameId: id, items: r.queue || [] };
+  unknownAt = -1;
+  return true;
+}
+async function nextUnknown(back) {
+  if (!game || unknownBusy) return;
+  if (!showPeople) togglePeople();
+  if (!people && peopleLoading) await peopleLoading.catch(() => {});
+  if (people?.gameId !== game.id) return flash("players still loading…", true);
+  if (!back && wanted?.from === "unknown" && wanted.gameId === game.id) unknownPassed.add(`${game.id}:${wanted.track}`);  // S again skips it
+  unknownBusy = true;
+  try {
+    if (unknownList?.gameId !== game.id && !(await loadUnknown())) return;
+    let i = unknownAt;
+    if (back) {
+      const items = unknownList.items;
+      do i--; while (i >= 0 && people.segments.some((sg) => sg.track === items[i].track));
+      if (i < 0) return flash("no unknown tracklet before this one");
+    } else {
+      do i++; while (i < unknownList.items.length && !unknownLeft(unknownList.items[i]));
+      if (i >= unknownList.items.length) {
+        if (!(await loadUnknown())) return;  // worked out again, with the labels since
+        i = unknownList.items.findIndex(unknownLeft);
+        if (i < 0) return flash("no unknown tracklets of 2 s or more left in this game", true);
+      }
+    }
+    unknownAt = i;
+    const it = unknownList.items[i];
+    wanted = { gameId: game.id, track: it.track, from: "unknown", n: i + 1, of: unknownList.items.length };
+    suggestion = null;
+    hoverLive = false;
+    v.pause();
+    seekTo(it.t + 0.1);
+    flash(`unknown tracklet ${i + 1} of ${unknownList.items.length}: ${Math.round(it.s)} s of our team nobody's named`);
+    render();
+  } catch (e) {
+    flash(`couldn't find the unknown tracklets: ${e.message}`, true);
+  } finally {
+    unknownBusy = false;
+  }
+}
 async function notOurs(t) {
   // the stretch of the tracklet under the mouse isn't anyone on our team: grey from then on, never labelled or guessed
   if (!showPeople || !people) return flash("press V to show the players first", true);
@@ -1472,6 +1540,7 @@ async function notOurs(t) {
   lastNotOurs = r.changed ? { gameId: game.id, batch } : null;
   suggestList = null;
   if (suggestion?.track === t.track) suggestion = null;
+  if (r.changed && wanted?.gameId === game.id && wanted.track === t.track) wantedDone();
   flash(r.changed ? `not our team${t.label != null ? ` (#${t.label}'s label removed)` : ""}: U takes it back` : "already marked not our team");
   render();
 }
@@ -2197,6 +2266,7 @@ document.addEventListener("keydown", (e) => {
     y: () => answer(true),
     x: () => (e.shiftKey ? notOurs(yxTarget()) : answer(false)),
     a: () => nextAuto(e.shiftKey),
+    s: () => nextUnknown(e.shiftKey),
     "[": () => (v.playbackRate = Math.max(v.playbackRate - RATE_STEP, MIN_RATE)),
     "]": () => (v.playbackRate = Math.min(v.playbackRate + RATE_STEP, MAX_RATE)),
     ArrowLeft: () => seekTo(v.currentTime - (e.shiftKey ? 60 : 5)),

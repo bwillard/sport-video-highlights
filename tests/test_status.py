@@ -40,6 +40,7 @@ def test_recognition(settings, monkeypatch):
     assert r["players"] == [{"player": 38, "labelled": s(90), "appearance": s(90), "place": 0}]
     assert r["per_frame"] == 2.5  # 3 on screen until frame 90 (1, 2, 4), then 2 (2, 3)
     assert [x["track"] for x in r["longest"]] == [2, 4] and r["longest"][0]["s"] == s(180)
+    assert [x["track"] for x in r["queue"]] == [2, 4] and r["queue"][0]["t"] == 0  # tracklets of 2 s or more
     assert r["longest"][1]["looks"] == r["longest"][0]["looks"] == []  # she's labelled on another tracklet then
     assert sum(b["s"] for b in r["unknown_by_length"]) == pytest.approx(r["seconds"]["unknown"], abs=0.1)
     assert [b["s"] > 0 for b in r["unknown_by_length"]] == [False, True, False, False]  # 3 s and 6 s tracklets
