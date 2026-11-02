@@ -77,7 +77,7 @@ Detect and track every person (and the ball, see [Phase 4.1](phase4_identify.md#
 - [x] Yardstick (2026-10-24): `soccer-clips people eval` at the callouts
 - [x] Bench run on RunPod (2026-10-24): callout stretches × YOLO11m / YOLO26m / l / x → YOLO11m, default tracker settings (see Findings)
 - [x] Whole-game detection with YOLO11m (2026-10-25: six games, $6.12) and tracking here (52 min)
-- [ ] Pitch filter (drop sideline spectators) — after looking at real tracks; team split (4.2) may do most of it
+- [ ] Pitch filter (drop sideline spectators) — after looking at real tracks; team split (4.2) may do most of it. Now Phase 5.4's off-pitch flag; the Games page already leaves them out (`status.still_by_line`, 2026-11-02)
 - [x] Gap interpolation + smoothing — for the player marker only (2026-10-28, Player view): boxes averaged over 5 frames along a tracklet, gaps up to 10 frames bridged; tracklets themselves are joined across ≤ 1 s gaps in the same kit (4.2)
 - [x] Track store + API (as built: `tracks/people_<model>.npz` with picks in `people_picks.json`; `GET /api/games/{id}/people/boxes` for a window, `GET /api/watch/boxes` for one player's whole game) — the `run.json` / `boxes.npz` / `tracklets.json` design was dropped
 
