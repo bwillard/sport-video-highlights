@@ -47,6 +47,9 @@ SIZES = {
     "spot": (10 * YD, 1 * YD),  # penalty spot from the goal line
 }
 SIZE_NAMES = list(SIZES)
+SIZE_LABELS = {"length": "length", "width": "width", "circle": "centre circle radius", "goal": "goal",
+               "ga_depth": "goal area depth", "ga_width": "goal area width", "pa_depth": "penalty area depth",
+               "pa_width": "penalty area width", "spot": "penalty spot"}
 S0 = np.array([v for v, _ in SIZES.values()])
 S_SIGMA = np.array([s for _, s in SIZES.values()])
 
@@ -165,6 +168,25 @@ TOL = 1e-6  # stop when a step gains less than this share of the cost. Not loose
 
 class NotEnough(ValueError):
     pass
+
+
+FIELD_RANGE = 3.0  # a solved size more than this many times off its 9v9 value (or a negative one) can't be the field
+
+
+def not_a_field(sizes: np.ndarray) -> str | None:
+    """Why solved sizes can't be a field, or None. A solve can settle on a collapsed field that agrees with half
+    the clicks (FC-1: 33 m wide, centre circle -10.5 m, after a few clicks on the wrong landmark). Loose on
+    purpose: some fields' goal areas are half the 9v9 width."""
+    s = dict(zip(SIZE_NAMES, np.asarray(sizes, float)))
+    off = [f"{SIZE_LABELS[k]} {s[k]:.1f} m" for k, (v0, _) in SIZES.items()
+           if not v0 / FIELD_RANGE <= s[k] <= v0 * FIELD_RANGE]
+    for inner, outer in (("ga_width", "pa_width"), ("ga_depth", "pa_depth"), ("pa_width", "width"),
+                         ("goal", "ga_width")):
+        if s[inner] >= s[outer]:
+            off.append(f"{SIZE_LABELS[inner]} {s[inner]:.1f} m, not inside the {SIZE_LABELS[outer]} {s[outer]:.1f} m")
+    if 2 * (s["pa_depth"] + s["circle"]) >= s["length"]:
+        off.append(f"penalty areas and centre circle longer than the field ({s['length']:.1f} m)")
+    return "; ".join(off) or None
 
 
 def _conic(pts: np.ndarray) -> np.ndarray | None:
@@ -684,10 +706,34 @@ def _sig(points: list[dict]) -> str:
     return hashlib.sha1(json.dumps(points, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def click_fit(P: np.ndarray, sizes: np.ndarray, key: np.ndarray, px: np.ndarray, targets: list[str]):
+    """Per click, how far off it is in pixels (inf where the field puts its target behind the view) and where it
+    lands on the pitch; NaN where its frame or keyframe isn't placed."""
+    n = len(key)
+    resid, at = np.full(n, np.nan), np.full((n, 2), np.nan)
+    ok = (key >= 0) & (key < len(P))
+    ok[ok] &= np.isfinite(P[key[ok]]).all(axis=(1, 2))
+    if ok.any():
+        r = _click_residuals(P, sizes, key[ok], px[ok], _click_spec([t for t, o in zip(targets, ok) if o]))
+        r = np.linalg.norm(r, axis=1)
+        resid[ok] = np.where(np.isfinite(r), r, np.inf)
+        at[ok] = to_pitch(P[key[ok]], px[ok, 0], px[ok, 1])
+    return resid, at
+
+
+def _read_cal(store: Store, game: Game) -> dict | None:
+    p = cal_path(store, game)
+    if not p.exists():
+        return None
+    with np.load(p) as z:
+        return {k: z[k] for k in z.files}
+
+
 def calibrate(store: Store, game: Game, log=None) -> dict:
     """
     Solve from the game's clicks and save pitch_cal.npz (or, when the clicks aren't enough yet,
-    just why). Returns what was saved.
+    just why). A solve that can't be a field (`not_a_field`) isn't used: the last one that was is kept,
+    with every click measured against it, and "rejected" says why. Returns what was saved.
     """
     from soccer_clips.track import ball_game
 
@@ -698,34 +744,39 @@ def calibrate(store: Store, game: Game, log=None) -> dict:
     key, px = place_clicks(store, game, points) if points else (np.empty(0, int), np.empty((0, 2)))
     ok = key >= 0
     w = _registration(store, game)[0]
+    tg = [p["target"] for p in points]
     try:
         if not points:
             raise NotEnough("no clicks yet")
-        out = solve(w, key[ok], px[ok], [p["target"] for p, o in zip(points, ok) if o], log=log)
+        out = solve(w, key[ok], px[ok], [t for t, o in zip(tg, ok) if o], log=log)
     except NotEnough as e:
         saved = {"error": np.str_(str(e)), "sig": sig}
     else:
-        resid = np.full(len(points), np.nan)
-        resid[ok] = out["click_px"]
-        at = np.full((len(points), 2), np.nan)
-        P_click = np.full((len(points), 3, 3), np.nan)
-        P_click[ok] = out["P"][key[ok]]
-        at[ok] = to_pitch(P_click[ok], px[ok, 0], px[ok, 1])
-        coverage = float(np.isfinite(out["P"][np.clip(w["key"], 0, None)]).all(axis=(1, 2))[w["key"] >= 0].mean())
-        saved = {"P": out["P"], "sizes": out["sizes"], "size_sd": out["size_sd"], "click_px": resid,
-                 "click_pitch": at, "coverage": np.float64(coverage), "sig": sig}
+        why = not_a_field(out["sizes"])
+        before = _read_cal(store, game) if why else None
+        if why and before is not None and "P" in before:  # keep it
+            out = {k: before[k] for k in ("P", "sizes", "size_sd")}
+        resid, at = click_fit(out["P"], out["sizes"], key, px, tg)
+        if why and not (before is not None and "P" in before):
+            if log:
+                log(f"  not a field: {why}")
+            saved = {"error": np.str_(f"the solve can't be a field ({why})"), "click_px": resid, "sig": sig}
+        else:
+            coverage = float(np.isfinite(out["P"][np.clip(w["key"], 0, None)]).all(axis=(1, 2))[w["key"] >= 0].mean())
+            saved = {"P": out["P"], "sizes": out["sizes"], "size_sd": out["size_sd"], "click_px": resid,
+                     "click_pitch": at, "coverage": np.float64(coverage), "sig": sig}
+            if why:
+                if log:
+                    log(f"  not a field, kept the one before: {why}")
+                saved["rejected"] = np.str_(why)
     ball_game.save_npz(cal_path(store, game), **saved)
     return saved
 
 
 def load_cal(store: Store, game: Game) -> dict | None:
     """The saved calibration, if it was made from the clicks as they are now."""
-    p = cal_path(store, game)
-    if not p.exists():
-        return None
-    with np.load(p) as z:
-        cal = {k: z[k] for k in z.files}
-    return cal if str(cal["sig"]) == _sig(load_points(store, game)) else None
+    cal = _read_cal(store, game)
+    return cal if cal is not None and str(cal["sig"]) == _sig(load_points(store, game)) else None
 
 
 def _num(v) -> float | None:
@@ -741,14 +792,16 @@ def state(store: Store, game: Game) -> dict:
         cal = calibrate(store, game)
     ok = cal is not None and "P" in cal
     sizes = cal["sizes"] if ok else S0
+    resid = cal["click_px"] if cal is not None and "click_px" in cal else np.full(len(points), np.nan)
     out_points = []
     for i, p in enumerate(points):
-        px = _num(cal["click_px"][i]) if ok else None
+        px = _num(resid[i])
         at = cal["click_pitch"][i] if ok else None
-        out_points.append({**p, "i": i, "px": px, "bad": px is not None and px > BAD_CLICK_PX,
+        out_points.append({**p, "i": i, "px": px, "bad": bool(resid[i] > BAD_CLICK_PX),  # inf: behind the view
                            "pitch": None if at is None or not np.isfinite(at).all() else [round(float(v), 3) for v in at]})
     return {"registered": registered, "targets": targets(), "points": out_points, "calibrated": ok,
             "error": None if ok or cal is None else str(cal.get("error", "")) or None,
+            "rejected": str(cal["rejected"]) if ok and "rejected" in cal else None,
             "drawing": drawing(sizes), "coverage": _num(cal["coverage"]) if ok else None,
             "sizes": {k: {"m": round(float(v), 2), "sd": round(float(sd), 2), "prior_sd": round(float(ps), 2)}
                       for k, v, sd, ps in zip(SIZE_NAMES, sizes, cal["size_sd"] if ok else S_SIGMA, S_SIGMA)}}

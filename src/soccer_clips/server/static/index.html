@@ -1832,16 +1832,18 @@ function renderPitchInfo() {
       size += `: ${unsure(L) && unsure(W) ? "size" : unsure(L) ? "length" : "width"} not measured yet, so the 9v9 middle. Click goal posts or corners at both ends to measure it.`;
     }
     lines.push(esc(size));
-    if (bad) lines.push(`<span class="bad">${bad} click${bad === 1 ? " disagrees" : "s disagree"} with the rest (red ×): remove them with ✕ in the list below (or Q, then click the × on the video), or start over.</span>`);
+    if (pitch.rejected) lines.push(`<span class="bad">The latest solve can't be a field (${esc(pitch.rejected)}), so the field from before is kept and every click is measured against it. Remove the red clicks, or start over.</span>`);
+    else if (bad) lines.push(`<span class="bad">${bad} click${bad === 1 ? " disagrees" : "s disagree"} with the rest (red ×): remove them with ✕ in the list below (or Q, then click the × on the video), or start over.</span>`);
   } else {
     lines.push(n ? `Not calibrated yet (${n} click${n === 1 ? "" : "s"}): ${esc(pitch.error || "")}` : "Not calibrated yet: press <kbd>Q</kbd> to start.");
+    if (bad) lines.push(`<span class="bad">${bad} click${bad === 1 ? " is" : "s are"} far off in that solve (red in the list below): probably on the wrong landmark. Remove them, or start over.</span>`);
   }
   if (pitchBusy) lines.push(`<b>solving…</b> (up to a minute)${pitchQueue.length > pitchSent ? ` (${pitchQueue.length - pitchSent} more click${pitchQueue.length - pitchSent === 1 ? "" : "s"} after it)` : ""}${pitchDrops.length > pitchDropSent ? ` (${pitchDrops.length - pitchDropSent} to remove after it)` : ""}`);
   if (n) {
     const rows = pitch.points.map((p, i) => pitchDropped(p) ? "" : `<tr${p.bad ? ' class="bad"' : ""}>
       <td><a href="#" data-seek="${p.frame}" title="Go to the frame it was clicked in: its × is where you clicked, the line goes to where the solve puts it">${fmt(p.frame / fps)}</a></td>
       <td>${esc(pitch.label[p.target] || p.target)}</td>
-      <td class="px" title="How far the solve puts it from where you clicked">${p.px == null ? "" : `${Math.round(p.px)} px`}</td>
+      <td class="px" title="How far the solve puts it from where you clicked">${p.px != null ? `${Math.round(p.px)} px` : p.bad ? "off the view" : ""}</td>
       <td><a href="#" data-drop="${i}" title="Remove this click">✕</a></td></tr>`).join("");
     lines.push(`<details id="pitchList"${pitchListOpen ? " open" : ""}><summary>the clicks (${n - pitch.points.filter(pitchDropped).length})</summary>
       <table class="clicks">${rows}</table></details>

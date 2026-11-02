@@ -164,8 +164,11 @@ def stages(store: Store, game: Game) -> dict:
             L, W = (float(v) for v in cal["sizes"][:2])
             tip = (f"{len(points)} clicks, {bad} off by more than {pitch.BAD_CLICK_PX:.0f} px; field {L:.0f} × {W:.0f} m; "
                    f"{cov:.0%} of the game placed on it")
-            out["field"] = _stage("partial" if bad or cov < 0.9 else "ok", f"{L:.0f}×{W:.0f} m", tip,
-                                  "tagger: ✏️ calibrate (Q); fix or remove the clicks marked off" if bad else
+            if "rejected" in cal:
+                tip = f"The latest clicks' solve can't be a field ({cal['rejected']}), so the one before is kept. " + tip
+            out["field"] = _stage("partial" if bad or cov < 0.9 or "rejected" in cal else "ok", f"{L:.0f}×{W:.0f} m", tip,
+                                  "tagger: ✏️ calibrate (Q); fix or remove the clicks marked off"
+                                  if bad or "rejected" in cal else
                                   "tagger: click spots in the views not placed yet" if cov < 0.9 else None)
 
     picks = people.load_picks(store, game)

@@ -154,8 +154,8 @@ def test_start_from_the_centre_circle_alone():
     assert np.median(e) < 0.3
 
 
-def test_pitch_api(settings):
-    game_id = "gu11-pitch-2026-10-10"
+def _pitch_game(settings, game_id="gu11-pitch-2026-10-10"):
+    """A registered game, one frame of video a view, and right clicks in its frames."""
     make_video(settings, f"2026/{game_id}.mp4", duration_s=1, audio=False, size="1920x1080")
     store = Store(settings)
     scan(settings, store)
@@ -167,6 +167,56 @@ def test_pitch_api(settings):
                        motion_frames=np.arange(n), motion=np.repeat(np.eye(2, 3)[None], n, 0))
     ck, px, tg = _clicks(G, np.random.default_rng(4))
     points = [{"frame": int(k) * 10, "x": float(x) / 1920, "y": float(y) / 1080, "target": t} for k, (x, y), t in zip(ck, px, tg)]
+    return store, game, points, G
+
+
+def test_not_a_field():
+    assert pitch.not_a_field(pitch.S0) is None
+    s = pitch.S0.copy()
+    s[pitch.SIZE_NAMES.index("ga_width")] /= 2  # some fields' goal areas are that narrow
+    assert pitch.not_a_field(s) is None
+    # FC-1's collapsed solve
+    why = pitch.not_a_field([60.5, 32.7, -10.5, 6.4, 0.6, 14.4, 3.3, 26.3, 9.1])
+    assert why.startswith("centre circle radius -10.5 m") and "penalty area depth 3.3 m" in why
+    s = pitch.S0.copy()
+    s[pitch.SIZE_NAMES.index("pa_width")] = 60
+    assert "not inside the width" in pitch.not_a_field(s)
+
+
+def test_a_solve_that_cant_be_a_field_is_not_used(settings, monkeypatch):
+    store, game, points, G = _pitch_game(settings)
+    pitch.save_points(store, game, points[:-1])
+    good = pitch.calibrate(store, game)
+    real = pitch.solve
+
+    def collapsed(*a, **k):
+        out = real(*a, **k)
+        out["sizes"] = out["sizes"].copy()
+        out["sizes"][pitch.SIZE_NAMES.index("circle")] = -10.5
+        return out
+
+    monkeypatch.setattr(pitch, "solve", collapsed)
+    with TestClient(create_app(store)) as client:
+        s = client.post(f"/api/games/{game.id}/pitch/points", json=points[-1]).json()
+        assert s["calibrated"] and s["rejected"].startswith("centre circle radius -10.5")
+        assert s["sizes"]["circle"]["m"] == round(float(good["sizes"][2]), 2)  # the one before, kept
+        assert len(s["points"]) == len(points) and s["points"][-1]["px"] is not None  # measured against it
+        assert status_field(store, game) == "partial"
+        s = client.delete(f"/api/games/{game.id}/pitch/points").json()
+        pitch.save_points(store, game, points)
+        s = client.get(f"/api/games/{game.id}/pitch").json()  # nothing to keep
+        assert not s["calibrated"] and "can't be a field" in s["error"] and s["points"][0]["px"] is not None
+
+
+def status_field(store, game):
+    from soccer_clips.track import status
+
+    return status.stages(store, game)["field"]["state"]
+
+
+def test_pitch_api(settings):
+    store, game, points, G = _pitch_game(settings)
+    game_id = game.id
     with TestClient(create_app(store)) as client:
         s = client.get(f"/api/games/{game_id}/pitch").json()
         assert s["registered"] and not s["calibrated"] and not s["points"] and len(s["targets"]) > 40
