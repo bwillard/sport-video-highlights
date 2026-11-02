@@ -4,8 +4,8 @@ The games page: where each game is in the pipeline, and how much of our team the
 - `stages`: which steps have been run on a game (detection, kit, tracking, crops, signatures, ball, field
   calibration, game time, labels), each ok / partial / stale (made before something it's built from was redone)
   / missing, with what to run to fix it. Only file dates and small arrays: fast enough for every game at once.
-- `recognition`: of our team's time on the field (players on screen, within FIELD_PAD_M of the lines, in game
-  time), how much is labelled, guessed by appearance, guessed by place on the field, or nobody yet; per player,
+- `recognition`: of our team's time on the field (players on screen, within FIELD_PAD_M of the lines and not
+  standing still by a touchline, in game time), how much is labelled, guessed by appearance, guessed by place on the field, or nobody yet; per player,
   the unknown time by how long its tracklets are (short scraps: the tracking; long ones: labels or the
   appearance model), and the longest unknown tracklets to go and label, with who each looks most like. Seconds
   a game (cached on disk in tracks/recognition.json until anything it reads changes).
@@ -21,9 +21,13 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 2  # bump when recognition's numbers change meaning, to redo every game's cache
+VERSION = 3  # bump when recognition's numbers change meaning, to redo every game's cache
 STEP = 5  # every 5th frame (6 a second): plenty for totals, a fifth of the work
-FIELD_PAD_M = 3.0  # further off the lines than this is the bench, warm-ups or parents, not the game
+FIELD_PAD_M = 1.0  # further off the lines than this is the bench, warm-ups or parents, not the game. Not 3 m:
+# every game has a crowd 1-3 m behind a touchline (at FC Stars, 1.3 of "our" players a frame were spectators)
+SIDELINE_M = 4.0  # standing still within this of a touchline, or beyond it, is the bench or parents: the far
+SIDELINE_SD_M = 1.0  # side's people read up to 4 m inside the line (a few pixels at their feet is metres there),
+SIDELINE_S = 10.0  # and players rarely stay put by the line. Still = this spread over this long, each way
 LENGTHS_S = (2, 10, 30)  # unknown time by tracklet length: under 2 s, 2-10 s, 10-30 s, 30 s and more
 LONGEST = 15  # unknown tracklets listed
 FULL = 0.98  # share of the video detected / tracked that counts as the whole game
@@ -237,6 +241,31 @@ def recognition(store: Store, game: Game) -> dict | None:
         return {**out, "current": True}
 
 
+def still_by_line(track: np.ndarray, frame: np.ndarray, xy: np.ndarray, width: float, fps: float) -> np.ndarray:
+    """Per box (sampled every STEP frames): whether its tracklet stays put (x and y each within SIDELINE_SD_M,
+    one standard deviation) within SIDELINE_M of a touchline or beyond it, over SIDELINE_S each way (at least
+    SIDELINE_S of it tracked)."""
+    half = int(round(SIDELINE_S * fps / STEP))
+    order = np.lexsort((frame, track))
+    k = track[order]
+    good = np.isfinite(xy[order]).all(axis=1)
+    x, y = np.where(good, xy[order, 0], 0), np.where(good, xy[order, 1], 0)
+    inside = np.where(good, width / 2 - np.abs(y), 0)
+    c = lambda v: np.concatenate([[0], np.cumsum(v)])  # window sums by differences
+    cn, cx, cy, cxx, cyy, cin = c(good), c(x), c(y), c(x * x), c(y * y), c(inside)
+    i = np.arange(len(k))
+    lo = np.maximum(np.searchsorted(k, k, "left"), i - half)
+    hi = np.minimum(np.searchsorted(k, k, "right"), i + half + 1)
+    n = cn[hi] - cn[lo]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mx, my = (cx[hi] - cx[lo]) / n, (cy[hi] - cy[lo]) / n
+        still = ((cxx[hi] - cxx[lo]) / n - mx ** 2 < SIDELINE_SD_M ** 2) & ((cyy[hi] - cyy[lo]) / n - my ** 2 < SIDELINE_SD_M ** 2)
+        out = (n >= half) & still & ((cin[hi] - cin[lo]) / n < SIDELINE_M)
+    back = np.zeros(len(k), bool)
+    back[order] = out
+    return back
+
+
 def _work_out(store: Store, game: Game) -> dict:
     from soccer_clips.track import people, pitch, reid
 
@@ -282,6 +311,7 @@ def _work_out(store: Store, game: Game) -> dict:
             L, W = (float(v) for v in cal["sizes"][:2])
             with np.errstate(invalid="ignore"):
                 off = (np.abs(xy[:, 0]) > L / 2 + FIELD_PAD_M) | (np.abs(xy[:, 1]) > W / 2 + FIELD_PAD_M)
+            off |= still_by_line(t.track[rows], t.frame[rows], xy, W, fps)
         else:
             field = False
     off_rows, rows, how, who = rows[off], rows[~off], how[~off], who[~off]

@@ -74,3 +74,23 @@ def test_api(settings):
     assert r["current"] and r["seconds"]["labelled"] > 0
     assert client.get("/api/status").json()[0]["recognition"]["current"]
     assert client.get("/api/games/nope/recognition").status_code == 404
+
+
+def test_still_by_line():
+    fps, W = 30.0, 46.0
+    n = int(30 * fps / status.STEP)  # 30 s, sampled
+    frame = np.arange(n) * status.STEP
+    rng = np.random.default_rng(0)
+    jitter = lambda: rng.normal(0, 0.3, (n, 2))
+    people = {
+        1: np.column_stack([np.full(n, 10.0), np.full(n, 21.0)]) + jitter(),  # parent 2 m inside the far line
+        2: np.column_stack([np.full(n, 0.0), np.full(n, 0.0)]) + jitter(),  # keeper-still, mid-field
+        3: np.column_stack([np.linspace(-30, 30, n), np.full(n, 22.0)]) + jitter(),  # winger running the line
+        4: np.column_stack([np.full(n, 5.0), np.full(n, -25.0)]) + jitter(),  # bench, beyond the near line
+    }
+    track = np.concatenate([np.full(n, k) for k in people])
+    xy = np.concatenate(list(people.values()))
+    still = status.still_by_line(track, np.tile(frame, len(people)), xy, W, fps)
+    assert [round(still[track == k].mean(), 2) for k in people] == [1.0, 0.0, 0.0, 1.0]
+    short = status.still_by_line(np.ones(n // 6, int), frame[:n // 6], people[1][:n // 6], W, fps)
+    assert not short.any()  # 5 s: too short to say
