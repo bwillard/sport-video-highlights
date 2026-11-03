@@ -130,7 +130,7 @@
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <div id="pitchBox" hidden>
-      <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed: by appearance, at the 'auto-label at' setting in 🔍 layers, or followed on the field), a white dot where not; opponents (blue dots); the ball (yellow; hollow = where it was last seen, for a moment after it's lost); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
+      <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed: by appearance, at the 'auto-label at' setting in 🔍 layers, or followed on the field), a white dot where not; opponents (blue dots); goalies (green ours, violet theirs); the ball (yellow; hollow = where it was last seen, for a moment after it's lost); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
       <div id="pitchInfo"></div>
     </div>
     <div class="help help-secs" id="help">
@@ -201,7 +201,7 @@
         <li>Paused, point at someone who isn't on our team (a spectator, a parent, a coach, an opponent) and press
           <kbd>Shift</kbd>+<kbd>X</kbd> (or 🚫 in the box a click opens): their stretch of the tracklet turns grey and is
           never labelled or guessed, and a label on it goes. <kbd>U</kbd> takes it back</li>
-        <li><b>Goalies</b>: found ones show <b>GK</b> on their box (green ours, blue theirs). Where one isn't found, point at
+        <li><b>Goalies</b>: found ones show <b>GK</b> on their box (green ours, violet theirs; the same colours on the field map). Where one isn't found, point at
           them and press <kbd>Shift</kbd>+<kbd>G</kbd> for our goalie, or click them and pick 🧤 our / their goalie: that tracklet is
           the goalie, and so is anyone in the same kit staying around the goal that team defends. A goalie in their own kit may
           only have a box with <kbd>Shift</kbd>+<kbd>D</kbd> (other kits) on. How often each is found, and your marks, are in the
@@ -1219,7 +1219,7 @@ const CHUNK = 450;  // frames per request (15 s)
 const STRIDE = 11;  // values per box row (people/boxes: frame, track, x1, y1, x2, y2, team, pitch x, y, off, goalie)
 // a goalie (match.py: 1 ours, 2 theirs) is shown with their team, whatever their kit reads as
 const shownBox = (rows, o) => teamShown(rows[o + 6]) || (rows[o + 10] === 1 && teamShown(0)) || (rows[o + 10] === 2 && teamShown(1));
-const GK_COLOUR = { 1: "#7dff7a", 2: "#5ab0ff" };
+const GK_COLOUR = MAP_GOALIE;  // pitch.js: our goalie green, theirs violet
 // boxes by team (people.box_roles): 0 ours, 1 opponents, 2 the rest (refs, keepers, spectators), -1 unknown
 const TEAM_STYLE = { 0: ["rgba(255,255,255,0.75)", []], 1: ["rgba(90,176,255,0.7)", []],
                      2: ["rgba(170,170,170,0.45)", [3, 3]] };

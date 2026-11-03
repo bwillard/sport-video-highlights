@@ -148,10 +148,11 @@ function mapFrame(canvas, drawing) {
 }
 
 const MAP_TEAM = { 0: "#ffffff", 1: "#5ab0ff", 2: "#9a9a9a" };
+const MAP_GOALIE = { 1: "#7dff7a", 2: "#c792ff" };  // our goalie green, theirs violet (match.py; the tagger's GK tags too)
 
 function drawPitchMap(canvas, o) {
-  // o: {drawing, footprint (the camera's view on the pitch, pitchFootprint), players: [{x, y, team, ring, num, guessed, alpha}]
-  //     (num: their number where it's known, drawn instead of a dot; guessed: by appearance, drawn fainter),
+  // o: {drawing, footprint (the camera's view on the pitch, pitchFootprint), players: [{x, y, team, ring, num, guessed, alpha, goalie}]
+  //     (num: their number where it's known, drawn instead of a dot; guessed: by appearance, drawn fainter; goalie: 1 ours, 2 theirs),
   //     ball: {x, y, stale} or null (stale: not seen just now, where it was last), targets: bool (show landmarks), hover: target id or null, clicks: [{pitch, bad}], note: text over the map,
   //     attack: +1 / -1 the goal we attack (right / left), 0 or missing: not shown}
   const m = mapFrame(canvas, o.drawing), { ctx, to } = m;
@@ -220,13 +221,14 @@ function drawPitchMap(canvas, o) {
       ctx.lineWidth = 3;
       ctx.strokeStyle = "rgba(0,0,0,0.75)";
       ctx.strokeText(String(p.num), X, Y);
-      ctx.fillStyle = p.ring ? "#ff9f40" : MAP_TEAM[0];
+      ctx.fillStyle = p.ring ? "#ff9f40" : MAP_GOALIE[p.goalie] || MAP_TEAM[0];
       ctx.fillText(String(p.num), X, Y);
       ctx.restore();
     } else {
-      ctx.fillStyle = MAP_TEAM[p.team] || MAP_TEAM[0];
-      ctx.globalAlpha = (p.team === 2 ? 0.6 : 0.95) * a;
-      ctx.beginPath(); ctx.arc(X, Y, p.team === 2 ? 2.5 : 3.6, 0, 2 * Math.PI); ctx.fill();
+      const gk = MAP_GOALIE[p.goalie];
+      ctx.fillStyle = gk || MAP_TEAM[p.team] || MAP_TEAM[0];
+      ctx.globalAlpha = (p.team === 2 && !gk ? 0.6 : 0.95) * a;
+      ctx.beginPath(); ctx.arc(X, Y, gk ? 4.2 : p.team === 2 ? 2.5 : 3.6, 0, 2 * Math.PI); ctx.fill();
     }
     ctx.globalAlpha = a;
     if (p.ring) {
@@ -308,7 +310,7 @@ function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
     // (half hidden behind the referee); never on the opponents
     const gk = stride >= 11 ? rows[o + 10] : 0;  // a goalie (1 ours, 2 theirs) takes their team's colour
     const kit = gk ? gk - 1 : rows[o + 6], n = kit === 1 ? null : opts.num?.(track), team = n ? 0 : kit;
-    out.push({ x: p[0], y: p[1], track, team, ring: opts.ring?.(track), num: n?.[0], guessed: n?.[1] });
+    out.push({ x: p[0], y: p[1], track, team, ring: opts.ring?.(track), num: n?.[0], guessed: n?.[1], goalie: gk || 0 });
   }
   return out;
 }
