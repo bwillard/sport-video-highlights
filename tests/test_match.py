@@ -75,6 +75,22 @@ def test_keepers():
     assert (k[track == 1] == 1).all() and (k[track == 2] == 2).all() and not k[(track == 3) | (track == 4)].any()
 
 
+
+def test_keepers_not_goalie():
+    # we defend +x; at their end (-x) two in other kit stand in the area: a parent behind the goal mouth, deepest
+    # (1 m from the line), and their goalie (4 m out). Marked not a goalie, the parent gives way to the goalie
+    n = 120
+    f = np.repeat(np.arange(n), 2)
+    track = np.tile([1, 2], n)
+    xy = np.where(track[:, None] == 1, [[-29.0, 0.0]], [[-26.0, 1.0]])
+    role = np.full(len(f), 2)
+    on = np.ones(len(f), bool)
+    k = match.keepers(track, f, xy, on, role, SIZES, [(0, n, 1)], fps=FPS)
+    assert (k[track == 1] == 2).all() and not k[track == 2].any()
+    k = match.keepers(track, f, xy, on, role, SIZES, [(0, n, 1)], fps=FPS, not_goalie={1})
+    assert not k[track == 1].any() and (k[track == 2] == 2).all()
+
+
 def test_keeper_seen():
     f = np.arange(100)
     keeper = (f < 50).astype(np.int8)  # our goalie found in the first 50 frames
@@ -131,5 +147,8 @@ def test_goalie_marks(settings):
 
     with pytest.raises(ValueError):
         match.add_goalie(store, game, 30, 0.1, 0.1, "refs")
+    assert match.add_goalie(store, game, 40, 0.15, 0.4, "none")["team"] == "none"  # not a goalie
+    assert len(match.load_goalies(store, game)) == 3
+    match.remove_goalie(store, game, match.load_goalies(store, game)[-1]["id"])
     assert match.remove_goalie(store, game, m["id"]) and not match.remove_goalie(store, game, m["id"])
     assert len(match.load_goalies(store, game)) == 1

@@ -19,7 +19,8 @@ field (positions.py) and the teams (people.roles_for).
   per end per frame: the deepest. You can mark a goalie in the tagger (Shift+G, or 🧤 in the box a click
   opens; tracks/goalies.json, clicks matched to tracklets like player labels): the marked tracklet is that
   team's goalie, and its kit colour (the kit cluster most of its boxes are in) marks the rest: a tracklet
-  mostly in that kit and mostly in the penalty area that team defends is their goalie too.
+  mostly in that kit and mostly in the penalty area that team defends is their goalie too. A "not a goalie"
+  mark (team "none") rules a tracklet out: it's never a goalie, and the deepest of the rest is.
 - **Out of play:** from when the ball crossed a line (looking back up to LOOKBACK_S from a restart on a
   line or a kickoff) or, for a free kick, from when it stopped, to the restart kick.
 
@@ -57,6 +58,7 @@ KEEPER_DEEP_M = 6.0  # a median this close to the goal line, not in the attackin
 KEEPER_KIT_S = 1.0  # in a marked goalie's kit: at least this long on the field...
 KEEPER_KIT_IN = 0.6  # ...and this share of it in the penalty area their team defends
 TEAM_CODES = {"ours": 1, "theirs": 2}  # keeper codes
+NOT_GOALIE = "none"  # a goalie mark's team: this tracklet isn't a goalie
 LOOKBACK_S = 30.0  # a restart on a line: when the ball went out, looked for this far back
 GOAL_LOOKBACK_S = 90.0  # a kickoff: when the goal went in
 KICKOFF_SAME_S = 30.0  # kickoffs this close are one; a kickoff this close to a half's start time is that half's
@@ -180,11 +182,12 @@ def attack_sign(info: dict, half: int) -> int:
 
 def keepers(track: np.ndarray, frame: np.ndarray, xy: np.ndarray, on: np.ndarray, role: np.ndarray, sizes: dict,
             halves: list[tuple[int, int, int]], fps: float, kit: np.ndarray | None = None,
-            marked: dict[int, set[int]] | None = None) -> np.ndarray:
+            marked: dict[int, set[int]] | None = None, not_goalie: set[int] | None = None) -> np.ndarray:
     """Per row: 1 our goalie, 2 theirs, 0 neither. halves: (first frame, end frame, +1 / -1 the end we defend).
     marked: {code: tracklet ids you've marked as that team's goalie}; with kit (the kit cluster per row), the
     kit each marked tracklet is mostly in finds the rest of that goalie (see the module docstring). Each mark
-    adds its own: a goalie's kit can fall in different clusters in different light."""
+    adds its own: a goalie's kit can fall in different clusters in different light. not_goalie: tracklet ids
+    you've marked as not a goalie, never one."""
     out = np.zeros(len(track), np.int8)
     marked = {c: ids for c, ids in (marked or {}).items() if ids}
     mrows = {c: np.isin(track, list(ids)) for c, ids in marked.items()}
@@ -200,6 +203,8 @@ def keepers(track: np.ndarray, frame: np.ndarray, xy: np.ndarray, on: np.ndarray
         lo, hi = np.searchsorted(frame, [a, b])
         r = np.arange(lo, hi)
         r = r[on[r]]
+        if not_goalie:
+            r = r[~np.isin(track[r], list(not_goalie))]
         for e in (-1, 1):
             attacker = 1 if e == ours_end else 0  # at our end they attack
             depth = L - e * xy[r, 0]
@@ -273,11 +278,12 @@ def _save_goalies(store: Store, game: Game, marks: list[dict]) -> None:
 
 
 def add_goalie(store: Store, game: Game, frame: int, x: float, y: float, team: str, track: int | None = None) -> dict:
-    """Mark the player at (x, y) (fractions of the frame) in `frame` as `team`'s goalie ("ours" / "theirs")."""
+    """Mark the player at (x, y) (fractions of the frame) in `frame` as `team`'s goalie ("ours" / "theirs"),
+    or as not a goalie ("none")."""
     import secrets
 
-    if team not in TEAM_CODES:
-        raise ValueError(f"team must be one of {', '.join(TEAM_CODES)}")
+    if team not in (*TEAM_CODES, NOT_GOALIE):
+        raise ValueError(f"team must be one of {', '.join((*TEAM_CODES, NOT_GOALIE))}")
     m = {"id": secrets.token_hex(4), "frame": int(frame), "x": round(float(x), 5), "y": round(float(y), 5),
          "team": team, "track": track}
     _save_goalies(store, game, load_goalies(store, game) + [m])
@@ -405,12 +411,13 @@ def build(store: Store, game: Game, log=None) -> dict:
     keeper = np.zeros(len(t.frame), np.int8)
     marks = goalie_marks(store, game, t)
     marked = {TEAM_CODES[tm]: {m["track"] for m in marks if m["team"] == tm and m["track"] is not None} for tm in TEAM_CODES}
+    not_goalie = {m["track"] for m in marks if m["team"] == NOT_GOALIE and m["track"] is not None}
     info["goalie_marks"] = marks
     if d["attack_1h"]:
         ours_end = -attack_sign(info, 1)  # we defend the end opposite the one we attack
         keeper = keepers(t.track, t.frame, pos["xy"], on, role, sizes,
                          [(hs[0][0], hs[0][1], ours_end), (hs[1][0], hs[1][1], -ours_end)], fps,
-                         kit=t.box_team, marked=marked)
+                         kit=t.box_team, marked=marked, not_goalie=not_goalie)
     starts = [a for a, _ in hs]
     goals = [r for r in kickoffs if not any(abs(r["kick"] - h) < KICKOFF_SAME_S * fps for h in starts)]
     info.update({

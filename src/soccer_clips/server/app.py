@@ -66,7 +66,7 @@ class GoalieIn(RequestBody):
     frame: int = Field(ge=0)
     x: float  # the player pointed at (fractions of the frame)
     y: float
-    team: Literal["ours", "theirs"]
+    team: Literal["ours", "theirs", "none"]  # none: not a goalie
     track: int | None = None  # the tracklet under it, as the page saw it
 
 
@@ -852,8 +852,8 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.post("/api/games/{game_id}/goalies")
     def game_goalie_add(game_id: str, body: GoalieIn) -> dict:
-        """Mark a player as our / their goalie (match.py: that tracklet, and others in their kit around their goal);
-        works the goalies out again and returns the match info."""
+        """Mark a player as our / their goalie (match.py: that tracklet, and others in their kit around their goal),
+        or as not a goalie; works the goalies out again and returns the match info."""
         from soccer_clips.track import match
 
         game = load(game_id)

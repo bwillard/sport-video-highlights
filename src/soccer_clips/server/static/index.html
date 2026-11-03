@@ -206,8 +206,9 @@
         <li><b>Goalies</b>: found ones show <b>GK</b> on their box (green ours, violet theirs; the same colours on the field map). Where one isn't found, point at
           them and press <kbd>Shift</kbd>+<kbd>G</kbd> for our goalie, or click them and pick 🧤 our / their goalie: that tracklet is
           the goalie, and so is anyone in the same kit staying around the goal that team defends. A goalie in their own kit may
-          only have a box with <kbd>Shift</kbd>+<kbd>D</kbd> (other kits) on. How often each is found, and your marks, are in the
-          Game time box</li>
+          only have a box with <kbd>Shift</kbd>+<kbd>D</kbd> (other kits) on. Someone wrongly shown as a goalie: click them and pick
+          ✕ not a goalie (that tracklet is never one, and the deepest of the rest is). How often each is found, and your marks,
+          are in the Game time box (✕ there removes a mark)</li>
         <li>The orange strip under the timeline = where they're labelled</li>
         <li><kbd>W</kbd> only them: plays just the stretches where the player you follow is on screen (labelled or guessed),
           skipping the rest (darkened on the timeline) · <kbd>W</kbd> again plays everything. The <b>Player view</b> page does
@@ -269,7 +270,7 @@
       <div class="row stat"><label title="Which goal we attack in the 1st half, as the camera sees it (the 2nd half is the other way). Auto: found from where our kit stands at the kickoffs; set it here if that's wrong or not sure. The field map says which way we attack.">we attack in the 1st half
         <select id="gtAttack"><option value="">auto</option><option value="left">← left</option><option value="right">right →</option></select></label>
         <span id="gtAttackNote"></span></div>
-      <div class="row stat" id="gtGoalies" title="How often each goalie is found when the ball is within 20 m of their goal. Where it's low, point at the goalie and press Shift+G (ours), or click them and pick 🧤: that tracklet is the goalie, and so is anyone in the same kit staying around that goal. Found goalies show GK on their box."></div>
+      <div class="row stat" id="gtGoalies" title="How often each goalie is found when the ball is within 20 m of their goal. Where it's low, point at the goalie and press Shift+G (ours), or click them and pick 🧤: that tracklet is the goalie, and so is anyone in the same kit staying around that goal. Found goalies show GK on their box; click one that isn't and pick ✕ not a goalie."></div>
     </div>
     <div class="box" id="events">
       <div class="row"><b>Events</b> <span class="stat" id="evCount"></span>
@@ -536,7 +537,7 @@ function renderGoalies() {
   if (!ks?.length) { el.innerHTML = ""; return; }
   const pct = (team, h) => { const k = ks.find((x) => x.team === team && x.half === h); return k?.seen == null ? "–" : `${Math.round(k.seen * 100)}%`; };
   el.innerHTML = `goalies found: ours ${pct("ours", 1)} / ${pct("ours", 2)}, theirs ${pct("theirs", 1)} / ${pct("theirs", 2)} (1H / 2H)` +
-    (marks.length ? `<br>marked: ` + marks.map((m) => `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ${m.team}` +
+    (marks.length ? `<br>marked: ` + marks.map((m) => `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ${m.team === "none" ? "not a goalie" : m.team}` +
       `${m.track == null ? " (no box there now)" : ""} <button class="x" data-delgk="${m.id}" title="Remove this mark">✕</button>`).join(" · ") : "");
 }
 $("gtGoalies").addEventListener("click", async (e) => {
@@ -554,11 +555,12 @@ async function markGoalie(team, t) {
   if (!showPeople || !people) return flash("press V to show the players first", true);
   if (!t || t.x == null) return flash("point at the goalie first (Shift+D shows boxes of other kits)", true);
   closePicker();
-  flash(`marking ${team === "ours" ? "our" : "their"} goalie…`);
+  const what = { ours: "our goalie", theirs: "their goalie", none: "not a goalie" }[team];
+  flash(`marking ${what}…`);
   const got = await api("POST", `${gameUrl()}/goalies`, { frame: t.frame, x: t.x, y: t.y, team, track: t.track });
   setMatch(got);
   const k = (got.keepers || []).filter((x) => x.team === team && x.seen != null);
-  flash(`${team === "ours" ? "our" : "their"} goalie marked` + (k.length ? `: found ${k.map((x) => `${Math.round(x.seen * 100)}%`).join(" / ")} of the time near their goal (1H / 2H)` : ""));
+  flash(`marked ${what}` + (k.length ? `: found ${k.map((x) => `${Math.round(x.seen * 100)}%`).join(" / ")} of the time near their goal (1H / 2H)` : ""));
 }
 function attackSign(t) {
   // +1 if we attack the right-hand goal at video time t, -1 left, 0 unknown
@@ -1586,7 +1588,7 @@ function boxUnder(f, i0, i1, rows, known, auto) {
   const fromSuggestion = suggestion?.track === tr, ranked = looksLike(tr, f);
   return {
     track: tr, frame: f, x: (rows[o + 2] + rows[o + 4]) / 2, y: (rows[o + 3] + rows[o + 5]) / 2,
-    box: [rows[o + 2], rows[o + 3], rows[o + 4], rows[o + 5]], label, ranked,
+    box: [rows[o + 2], rows[o + 3], rows[o + 4], rows[o + 5]], label, ranked, goalie: rows[o + 10],
     // the guess Y / X answer: the one being asked about, else the automatic one, else the closest look
     guess: label != null ? null : fromSuggestion ? suggestion.player : auto.get(tr) ?? ranked?.[0]?.player ?? null,
     pending: label == null && !fromSuggestion && auto.get(tr) == null && ranked == null,
@@ -1759,7 +1761,8 @@ function openPicker(t) {
     ((t.label ?? t.guess) != null ? `<button class="no" data-no>✕ not #${t.label ?? t.guess}</button>` : "") +
     `<button class="no" data-notours title="A spectator, parent, coach or opponent: never labelled or guessed (Shift+X)">🚫 not our team</button>` +
     `<button data-goalie="ours" title="Our goalie (Shift+G): this tracklet, and anyone in the same kit staying around our goal">🧤 our goalie</button>` +
-    `<button data-goalie="theirs" title="Their goalie: this tracklet, and anyone in the same kit staying around their goal">🧤 their goalie</button>`;
+    `<button data-goalie="theirs" title="Their goalie: this tracklet, and anyone in the same kit staying around their goal">🧤 their goalie</button>` +
+    (t.goalie ? `<button class="no" data-goalie="none" title="Not a goalie: this tracklet is never one, and whoever is deepest of the rest is">✕ not a goalie</button>` : "");
   el.hidden = false;
   picker = { t, best, typed: "" };
   showTyped();

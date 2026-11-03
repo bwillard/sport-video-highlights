@@ -38,7 +38,7 @@ Each layer is recomputed cheaply from the one below (like following by place, `t
 - *Restarts: the ball still on the ground 1 s (within 1 m) then kicked (3 m within 1 s), classed by place: kickoff, corner, goal kick, penalty, throw-in, the goalie's ball (still in a penalty area), free kick. 137–271 a game.*
 - *Kickoffs are recognised by place and, where a calibration puts the centre a few metres out (FC-1, SAA), by the teams standing split either side of the ball. Kickoffs away from the half starts are goals.*
 - *Direction: our kit's side of the ball at each clear kickoff votes for its half (the second half reversed), and so does every goal clip you've rated (😊 ours, 🙁 theirs; where the ball ends). Settable in the tagger.*
-- *Goalies: a tracklet that stays in one penalty area in neither team's kit, or deep (median within 6 m of the goal line) and not in the attacking team's kit; the deepest per end per frame. Marked in the tagger (Shift+G, or 🧤 in the click box; `tracks/goalies.json`): the marked tracklet is that team's goalie, and each mark's kit cluster finds more of them (in that kit, 1 s or more, 60% of it in the penalty area that team defends). Found goalies show GK on their boxes, and their map dots take their team's colour; the Game time box shows how often each goalie is found, and the marks.*
+- *Goalies: a tracklet that stays in one penalty area in neither team's kit, or deep (median within 6 m of the goal line) and not in the attacking team's kit; the deepest per end per frame. Marked in the tagger (Shift+G, or 🧤 in the click box; `tracks/goalies.json`): the marked tracklet is that team's goalie, and each mark's kit cluster finds more of them (in that kit, 1 s or more, 60% of it in the penalty area that team defends). Someone wrongly found (a parent behind the goal, a defender) is marked ✕ not a goalie in the click box of a GK box: that tracklet is never a goalie, and the deepest of the rest is. Found goalies show GK on their boxes, and their map dots take their team's colour; the Game time box shows how often each goalie is found, and the marks.*
 - *Out of play: from the ball crossing a line (looking back from a restart on a line or a kickoff, never past the half's start), else from when it stopped, to the restart kick.*
 
 ## 6.1 — Event labels and yardsticks (build early)
@@ -135,7 +135,7 @@ If touches in crowds or airborne passes stay weak, fine-tune an action-spotting 
 - [x] 6.0 Attacking direction per half (from kickoffs and rated goal clips, override in the tagger's Game time box; 2026-11-02)
 - [x] 6.0 Keepers found per team per half (90–100% of the time the ball is near their goal in most game-halves; weak spots in Findings)
 - [x] 6.0 Ball out of play and restart kinds
-- [x] 6.0 Mark a goalie in the tagger (Shift+G ours, or 🧤 our / their goalie in the click box; 2026-11-03): the tracklet, and anyone in its kit around that team's goal; GK on found goalies' boxes
+- [x] 6.0 Mark a goalie in the tagger (Shift+G ours, or 🧤 our / their goalie in the click box; 2026-11-03): the tracklet, and anyone in its kit around that team's goal; GK on found goalies' boxes; ✕ not a goalie on a wrongly found one
 - [ ] 6.0 Goalie gaps: mark FC-1's our goalie and PRSC's theirs (a mark in each half)
 - [x] 6.1 Event labelling mode in the tagger (Shift+E: T touch, P pass, S shot, V save, G goal, W won), `event_labels.json`, full windows in the Events box (2026-11-02)
 - [ ] 6.1 `events eval`: comes with the first events found (6.2 / 6.3)
