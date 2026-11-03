@@ -79,7 +79,7 @@ def test_boxes_api_has_field_columns(settings, monkeypatch):
     store, game = four_tracklets(settings)  # tracked, not calibrated: no positions yet
     client = TestClient(create_app(store))
     get = lambda: np.frombuffer(client.get(f"/api/games/{game.id}/people/boxes",
-                                           params={"start": 0, "end": 450}).content, "<f4").reshape(-1, 10)
+                                           params={"start": 0, "end": 450}).content, "<f4").reshape(-1, 11)
     rows = get()
     assert len(rows) and np.isnan(rows[:, 7:9]).all() and (rows[:, 9] == 0).all()
 

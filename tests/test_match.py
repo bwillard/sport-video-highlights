@@ -95,3 +95,41 @@ def test_out_of_play():
     assert got == [{"from": 100, "to": 160, "kind": "throw-in"}, {"from": 300, "to": 340, "kind": "free kick"}]
     later = match.out_of_play(restarts[:1], f, xy, 60.0, 40.0, FPS, half_starts=[0, 120])
     assert later == [{"from": 120, "to": 160, "kind": "throw-in"}]  # not back past the half's start
+
+
+def test_keepers_marked_and_their_kit():
+    # we defend +x. Our goalie wears a kit (cluster 7) that reads as ours (role 0), so neither rule finds her:
+    # not other kit, and not deep enough (8 m out). Marking tracklet 1 makes it ours, and her kit finds tracklet
+    # 2 (her again, later, by our goal); tracklet 3 (cluster 7 too, but in midfield) isn't her
+    n = 60
+    track = np.repeat([1, 2, 3], n)
+    frame = np.r_[np.arange(n), np.arange(n, 2 * n), np.arange(2 * n, 3 * n)]
+    xy = np.zeros((3 * n, 2))
+    xy[track == 1] = [22.0, 1.0]
+    xy[track == 2] = [21.0, -1.0]
+    xy[track == 3] = [0.0, 5.0]
+    role = np.zeros(3 * n, int)
+    kit = np.full(3 * n, 7)
+    on = np.ones(3 * n, bool)
+    plain = match.keepers(track, frame, xy, on, role, SIZES, [(0, 3 * n, 1)], fps=FPS, kit=kit)
+    assert not plain.any()
+    got = match.keepers(track, frame, xy, on, role, SIZES, [(0, 3 * n, 1)], fps=FPS, kit=kit, marked={1: {1}})
+    assert (got[track == 1] == 1).all() and (got[track == 2] == 1).all() and not got[track == 3].any()
+
+
+def test_goalie_marks(settings):
+    from test_gallery import four_tracklets
+
+    store, game = four_tracklets(settings)  # #38's box: x 0.1-0.2, y 0.2-0.6, frames 0-89
+    m = match.add_goalie(store, game, 30, 0.15, 0.4, "ours")
+    match.add_goalie(store, game, 30, 0.95, 0.95, "theirs")  # nobody there
+    from soccer_clips.track import people
+
+    marks = match.goalie_marks(store, game, people.tracks(store, game))
+    assert [(x["team"], x["track"] is not None) for x in marks] == [("ours", True), ("theirs", False)]
+    import pytest
+
+    with pytest.raises(ValueError):
+        match.add_goalie(store, game, 30, 0.1, 0.1, "refs")
+    assert match.remove_goalie(store, game, m["id"]) and not match.remove_goalie(store, game, m["id"])
+    assert len(match.load_goalies(store, game)) == 1

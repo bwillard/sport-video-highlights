@@ -16,7 +16,10 @@ field (positions.py) and the teams (people.roles_for).
 - **Goalies:** per half and end, tracklets that stay in that penalty area and either aren't in either
   team's kit (the goalie's own colours) or stand deep (median within KEEPER_DEEP_M of the goal line) and
   aren't in the attacking team's kit (a goalie's kit is often clustered in with a team's). At most one
-  per end per frame: the deepest.
+  per end per frame: the deepest. You can mark a goalie in the tagger (Shift+G, or 🧤 in the box a click
+  opens; tracks/goalies.json, clicks matched to tracklets like player labels): the marked tracklet is that
+  team's goalie, and its kit colour (the kit cluster most of its boxes are in) marks the rest: a tracklet
+  mostly in that kit and mostly in the penalty area that team defends is their goalie too.
 - **Out of play:** from when the ball crossed a line (looking back up to LOOKBACK_S from a restart on a
   line or a kickoff) or, for a free kick, from when it stopped, to the restart kick.
 
@@ -51,6 +54,9 @@ KEEPER_S = 2.0  # a goalie's tracklet: at least this long on the field...
 KEEPER_IN = 0.8  # ...this share of it in one penalty area (other kit)...
 KEEPER_DEEP_IN = 0.85  # ...or this share, and
 KEEPER_DEEP_M = 6.0  # a median this close to the goal line, not in the attacking team's kit
+KEEPER_KIT_S = 1.0  # in a marked goalie's kit: at least this long on the field...
+KEEPER_KIT_IN = 0.6  # ...and this share of it in the penalty area their team defends
+TEAM_CODES = {"ours": 1, "theirs": 2}  # keeper codes
 LOOKBACK_S = 30.0  # a restart on a line: when the ball went out, looked for this far back
 GOAL_LOOKBACK_S = 90.0  # a kickoff: when the goal went in
 KICKOFF_SAME_S = 30.0  # kickoffs this close are one; a kickoff this close to a half's start time is that half's
@@ -173,9 +179,22 @@ def attack_sign(info: dict, half: int) -> int:
 # ---- goalies ----
 
 def keepers(track: np.ndarray, frame: np.ndarray, xy: np.ndarray, on: np.ndarray, role: np.ndarray, sizes: dict,
-            halves: list[tuple[int, int, int]], fps: float) -> np.ndarray:
-    """Per row: 1 our goalie, 2 theirs, 0 neither. halves: (first frame, end frame, +1 / -1 the end we defend)."""
+            halves: list[tuple[int, int, int]], fps: float, kit: np.ndarray | None = None,
+            marked: dict[int, set[int]] | None = None) -> np.ndarray:
+    """Per row: 1 our goalie, 2 theirs, 0 neither. halves: (first frame, end frame, +1 / -1 the end we defend).
+    marked: {code: tracklet ids you've marked as that team's goalie}; with kit (the kit cluster per row), the
+    kit each marked tracklet is mostly in finds the rest of that goalie (see the module docstring). Each mark
+    adds its own: a goalie's kit can fall in different clusters in different light."""
     out = np.zeros(len(track), np.int8)
+    marked = {c: ids for c, ids in (marked or {}).items() if ids}
+    mrows = {c: np.isin(track, list(ids)) for c, ids in marked.items()}
+    kits: dict[int, list[int]] = {}
+    if kit is not None:
+        for c, ids in marked.items():
+            for tid in ids:
+                k = kit[(track == tid) & (kit >= 0)]
+                if len(k):
+                    kits.setdefault(c, []).append(int(np.bincount(k).argmax()))
     L, pd, pw = sizes["length"] / 2, sizes["pa_depth"], sizes["pa_width"] / 2
     for a, b, ours_end in halves:
         lo, hi = np.searchsorted(frame, [a, b])
@@ -197,13 +216,20 @@ def keepers(track: np.ndarray, frame: np.ndarray, xy: np.ndarray, on: np.ndarray
             long_ = n >= KEEPER_S * fps
             own_kit = long_ & (nin >= KEEPER_IN * n) & (nother >= 0.5 * n)
             deep = long_ & (nin >= KEEPER_DEEP_IN * n) & (med <= KEEPER_DEEP_M) & (natt < 0.5 * n)
+            code = 1 if e == ours_end else 2
+            if code in kits:  # in the marked goalie's kit, around their goal
+                nkit = np.bincount(inv, np.isin(kit[r], kits[code]), minlength=len(ids))
+                own_kit |= (n >= KEEPER_KIT_S * fps) & (nkit >= 0.5 * n) & (nin >= KEEPER_KIT_IN * n)
             c = r[(own_kit | deep)[inv] & inpa]
             if not len(c):
                 continue
             cd = L - e * xy[c, 0]
             c = c[np.lexsort((cd, frame[c]))]  # by frame, deepest first
             first = np.r_[True, frame[c][1:] != frame[c][:-1]]
-            out[c[first]] = 1 if e == ours_end else 2
+            out[c[first]] = code
+    for code, m in mrows.items():  # marked: that team's goalie wherever they are, and nobody else in those frames
+        out[np.isin(frame, frame[m]) & (out == code)] = 0
+        out[m] = code
     return out
 
 
@@ -224,6 +250,53 @@ def keeper_seen(keeper: np.ndarray, frame: np.ndarray, bframe: np.ndarray, bxy: 
             out.append({"half": h, "team": team, "seen": None if seen is None else round(float(seen), 3),
                         "near_min": round(len(near) / fps / 60, 1)})
     return out
+
+
+# ---- goalies you've marked ----
+
+def goalies_path(store: Store, game: Game) -> Path:
+    from soccer_clips.track.ball_game import tracks_dir
+
+    return tracks_dir(store, game) / "goalies.json"
+
+
+def load_goalies(store: Store, game: Game) -> list[dict]:
+    p = goalies_path(store, game)
+    return json.loads(p.read_text())["marks"] if p.exists() else []
+
+
+def _save_goalies(store: Store, game: Game, marks: list[dict]) -> None:
+    from soccer_clips.store import atomic_write_text
+
+    atomic_write_text(goalies_path(store, game), json.dumps({"version": 1, "marks": sorted(marks, key=lambda m: m["frame"])},
+                                                            indent=1) + "\n")
+
+
+def add_goalie(store: Store, game: Game, frame: int, x: float, y: float, team: str, track: int | None = None) -> dict:
+    """Mark the player at (x, y) (fractions of the frame) in `frame` as `team`'s goalie ("ours" / "theirs")."""
+    import secrets
+
+    if team not in TEAM_CODES:
+        raise ValueError(f"team must be one of {', '.join(TEAM_CODES)}")
+    m = {"id": secrets.token_hex(4), "frame": int(frame), "x": round(float(x), 5), "y": round(float(y), 5),
+         "team": team, "track": track}
+    _save_goalies(store, game, load_goalies(store, game) + [m])
+    return m
+
+
+def remove_goalie(store: Store, game: Game, mark_id: str) -> bool:
+    marks = load_goalies(store, game)
+    keep = [m for m in marks if m["id"] != mark_id]
+    if len(keep) == len(marks):
+        return False
+    _save_goalies(store, game, keep)
+    return True
+
+
+def goalie_marks(store: Store, game: Game, t) -> list[dict]:
+    """The marks with the tracklet each is on now ({id, frame, team, track}; track None if no box is there)."""
+    return [{"id": m["id"], "frame": m["frame"], "team": m["team"],
+             "track": t.at(m["frame"], m["x"], m["y"], prefer=m.get("track"))} for m in load_goalies(store, game)]
 
 
 # ---- out of play ----
@@ -276,9 +349,10 @@ def key(store: Store, game: Game) -> str | None:
     k = positions.key(store, game)
     if k is None:
         return None
-    pp = people._picks_path(store, game)
+    pp, gp = people._picks_path(store, game), goalies_path(store, game)
     goals = sorted((c.start_s, c.end_s, c.rating) for c in game.clips if "goal" in c.tags and c.rating)
-    return (f"m{VERSION} {k} {pp.stat().st_mtime_ns if pp.exists() else '-'} {game.attack_1h} "
+    return (f"m{VERSION} {k} {pp.stat().st_mtime_ns if pp.exists() else '-'} "
+            f"{gp.stat().st_mtime_ns if gp.exists() else '-'} {game.attack_1h} "
             f"{game.kickoff_1h_s} {game.end_1h_s} {game.kickoff_2h_s} {game.end_2h_s} {goals}")
 
 
@@ -329,10 +403,14 @@ def build(store: Store, game: Game, log=None) -> dict:
     info = {"restarts": restarts, "direction": d}
 
     keeper = np.zeros(len(t.frame), np.int8)
+    marks = goalie_marks(store, game, t)
+    marked = {TEAM_CODES[tm]: {m["track"] for m in marks if m["team"] == tm and m["track"] is not None} for tm in TEAM_CODES}
+    info["goalie_marks"] = marks
     if d["attack_1h"]:
         ours_end = -attack_sign(info, 1)  # we defend the end opposite the one we attack
         keeper = keepers(t.track, t.frame, pos["xy"], on, role, sizes,
-                         [(hs[0][0], hs[0][1], ours_end), (hs[1][0], hs[1][1], -ours_end)], fps)
+                         [(hs[0][0], hs[0][1], ours_end), (hs[1][0], hs[1][1], -ours_end)], fps,
+                         kit=t.box_team, marked=marked)
     starts = [a for a, _ in hs]
     goals = [r for r in kickoffs if not any(abs(r["kick"] - h) < KICKOFF_SAME_S * fps for h in starts)]
     info.update({

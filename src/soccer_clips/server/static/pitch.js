@@ -306,16 +306,17 @@ function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
     const track = rows[o + 1];
     // numbers for our team, and for anyone labelled or guessed as one of ours whose kit didn't read as ours
     // (half hidden behind the referee); never on the opponents
-    const kit = rows[o + 6], n = kit === 1 ? null : opts.num?.(track), team = n ? 0 : kit;
+    const gk = stride >= 11 ? rows[o + 10] : 0;  // a goalie (1 ours, 2 theirs) takes their team's colour
+    const kit = gk ? gk - 1 : rows[o + 6], n = kit === 1 ? null : opts.num?.(track), team = n ? 0 : kit;
     out.push({ x: p[0], y: p[1], track, team, ring: opts.ring?.(track), num: n?.[0], guessed: n?.[1] });
   }
   return out;
 }
 
 function boxFrames(gameId) {
-  // every tracked box (people/boxes: rows of frame, track, x1, y1, x2, y2, team, pitch x, y, off), fetched in
-  // chunks around the playhead; at(f) = [i0, i1, rows] or null while loading
-  const STRIDE = 10, chunks = new Map();
+  // every tracked box (people/boxes: rows of frame, track, x1, y1, x2, y2, team, pitch x, y, off, goalie), fetched
+  // in chunks around the playhead; at(f) = [i0, i1, rows] or null while loading
+  const STRIDE = 11, chunks = new Map();
   function rows(ci) {
     const c = chunks.get(ci);
     if (c instanceof Float32Array) return c;

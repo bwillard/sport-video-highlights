@@ -62,6 +62,14 @@ class EventIn(RequestBody):
     track: int | None = None  # the tracklet under it, as the page saw it
 
 
+class GoalieIn(RequestBody):
+    frame: int = Field(ge=0)
+    x: float  # the player pointed at (fractions of the frame)
+    y: float
+    team: Literal["ours", "theirs"]
+    track: int | None = None  # the tracklet under it, as the page saw it
+
+
 class WindowIn(RequestBody):
     start: int = Field(ge=0)  # frames
     end: int = Field(ge=0)
@@ -715,9 +723,10 @@ def create_app(store: Store | None = None) -> FastAPI:
         track, x1, y1, x2, y2 (fractions of the frame), team (0 ours, 1 opponents, 2 other, -1
         unknown; people.box_roles), then feet on the field x, y (metres) and off the field (1 / 0;
         positions.py; NaN, NaN, 0 while the game's positions aren't made: they're started in the
-        background), sorted by frame. Binary because a minute is ~50k boxes.
+        background), then goalie (1 ours, 2 theirs, 0; match.py, 0 while it's out of date), sorted by
+        frame. Binary because a minute is ~50k boxes.
         """
-        from soccer_clips.track import people, positions
+        from soccer_clips.track import match, people, positions
 
         if not 0 <= start <= end or end - start > PEOPLE_MAX_FRAMES:
             raise HTTPException(422, f"ask for up to {PEOPLE_MAX_FRAMES} frames")
@@ -733,7 +742,9 @@ def create_app(store: Store | None = None) -> FastAPI:
         else:
             positions.build_soon(store, game)
             xy, off = np.full((b - a, 2), np.nan), np.zeros(b - a)
-        rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b], team, xy, off]).astype("<f4")
+        mi = match.load(store, game) if pos is not None else None
+        keeper = mi["keeper"][a:b] if mi is not None and len(mi["keeper"]) == len(t.frame) else np.zeros(b - a)
+        rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b], team, xy, off, keeper]).astype("<f4")
         return Response(rows.tobytes(), media_type="application/octet-stream")
 
     @app.post("/api/games/{game_id}/people/picks")
@@ -838,6 +849,24 @@ def create_app(store: Store | None = None) -> FastAPI:
         if not events.remove_window(store, game, window_id):
             raise HTTPException(404, "no such window")
         return events.resolved(store, game)
+
+    @app.post("/api/games/{game_id}/goalies")
+    def game_goalie_add(game_id: str, body: GoalieIn) -> dict:
+        """Mark a player as our / their goalie (match.py: that tracklet, and others in their kit around their goal);
+        works the goalies out again and returns the match info."""
+        from soccer_clips.track import match
+
+        game = load(game_id)
+        mark = match.add_goalie(store, game, body.frame, body.x, body.y, body.team, body.track)
+        return {"mark": mark, **game_match(game_id)}
+
+    @app.delete("/api/games/{game_id}/goalies/{mark_id}")
+    def game_goalie_remove(game_id: str, mark_id: str) -> dict:
+        from soccer_clips.track import match
+
+        if not match.remove_goalie(store, load(game_id), mark_id):
+            raise HTTPException(404, "no such goalie mark")
+        return game_match(game_id)
 
     @app.get("/api/games/{game_id}/match")
     def game_match(game_id: str) -> dict:
