@@ -304,6 +304,19 @@ def cmd_pitch(store: Store, args: argparse.Namespace) -> None:
     from soccer_clips.track import positions
 
     ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
+    if args.pitch_command == "match":
+        from soccer_clips.track import match
+
+        for gid in ids:
+            game = store.load_game(gid)
+            if positions.get(store, game, log=lambda m: print(m, flush=True)) is None:
+                print(f"{gid}: skipped (not placed on the field yet)")
+                continue
+            try:
+                match.build(store, game, log=lambda m: print(m, flush=True))
+            except ValueError as e:
+                print(f"{gid}: skipped ({e})")
+        return
     for gid in ids:
         game = store.load_game(gid)
         if not args.force and positions.load(store, game) is not None:
@@ -613,6 +626,9 @@ def main() -> None:
                            "(tracks/pitch.npz; CPU, ~30 s a game)")
     pl.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     pl.add_argument("--force", action="store_true", help="redo games whose positions are up to date")
+    mt = pt_sub.add_parser("match", help="restarts, which goal we attack each half, goalies, out of play "
+                           "(tracks/match.npz; seconds a game)")
+    mt.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     gt = sub.add_parser("gametime", help="when each half is played; cut videos down to game time")
     gt_sub = gt.add_subparsers(dest="gametime_command", required=True)
     sg = gt_sub.add_parser("suggest", help="suggest half start/end times from the player tracks")

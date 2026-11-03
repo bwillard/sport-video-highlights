@@ -1,6 +1,6 @@
 # Phase 6 — Game Events (what happened, not just where everyone was)
 
-**Status (2026-11-02):** Planned. 5.4 (stored, smoothed positions) is built; the other 6.0 prerequisites are next.
+**Status (2026-11-02):** 6.0 built (`track/match.py`, `soccer-clips pitch match`): restarts, which goal we attack each half (sure in all seven games, and every rated goal clip agrees), goalies, out-of-play stretches; the tagger's Game time box sets the direction by hand if needed and the map says which way we attack. Next: 6.1, event labelling.
 **Goal:** For each game, a log of what happened with the ball: who had it and for how long, every pass (who to whom, completed or not), chains of passes, shots and who took them, saves, goals, and who won or lost the ball. Built on that: possession time per team and per third of the field, per-player numbers, and a first rating of good and bad plays.
 **Depends on:** Phase 4.1 ball path, 4.2 teams, 4.3 names, 5.2 calibration (all built) and 5.4 positions (built 2026-11-02).
 
@@ -33,6 +33,13 @@ Each layer is recomputed cheaply from the one below (like following by place, `t
 - **Attacking direction per half:** which goal we attack in each half, for "forward", thirds, and which goal a shot is on. Worked out from where our team stands at each kickoff (each team kicks off from its own half), stored per game with an override in the tagger.
 - **Keepers:** each team's keeper wears a different kit, so the kit clustering (4.2) most likely puts them in 'other' with the referee. A keeper is the 'other' player who spends most of a half inside one penalty area. Needed for saves and to count keepers as part of their team. Our keeper isn't assumed to be the same player every game (or every half): found per half, named if their tracklets are labelled, and otherwise "our goalie" in the log. The other team's is always "their goalie".
 - **Ball out of play:** the ball crossing a touchline or goal line (from 5.6's list), and restarts: the ball filter already finds a parked ball that gets kicked (`ball_track.kicked`); where it was parked says what the restart was (corner, goal kick, throw-in from the touchline, free kick, kickoff from the centre spot).
+
+*As built (2026-11-02), `track/match.py` → `tracks/match.npz`, rebuilt when the positions, labels, half times, the direction setting or rated goal clips change:*
+- *Restarts: the ball still on the ground 1 s (within 1 m) then kicked (3 m within 1 s), classed by place: kickoff, corner, goal kick, penalty, throw-in, the goalie's ball (still in a penalty area), free kick. 137–271 a game.*
+- *Kickoffs are recognised by place and, where a calibration puts the centre a few metres out (FC-1, SAA), by the teams standing split either side of the ball. Kickoffs away from the half starts are goals.*
+- *Direction: our kit's side of the ball at each clear kickoff votes for its half (the second half reversed), and so does every goal clip you've rated (😊 ours, 🙁 theirs; where the ball ends). Settable in the tagger.*
+- *Goalies: a tracklet that stays in one penalty area in neither team's kit, or deep (median within 6 m of the goal line) and not in the attacking team's kit; the deepest per end per frame.*
+- *Out of play: from the ball crossing a line (looking back from a restart on a line or a kickoff, never past the half's start), else from when it stopped, to the restart kick.*
 
 ## 6.1 — Event labels and yardsticks (build early)
 Everything after this needs something to be measured against, so labelling comes first.
@@ -124,9 +131,10 @@ If touches in crowds or airborne passes stay weak, fine-tune an action-spotting 
 
 ## Tasks
 - [x] 6.0 5.4 positions stored per box and for the ball, with the off-pitch filter (Phase 5; 2026-11-02, `track/positions.py`)
-- [ ] 6.0 Attacking direction per half (from kickoffs, override in the tagger)
-- [ ] 6.0 Keepers found per team per half
-- [ ] 6.0 Ball out of play and restart kinds
+- [x] 6.0 Attacking direction per half (from kickoffs and rated goal clips, override in the tagger's Game time box; 2026-11-02)
+- [x] 6.0 Keepers found per team per half (90–100% of the time the ball is near their goal in most game-halves; weak spots in Findings)
+- [x] 6.0 Ball out of play and restart kinds
+- [ ] 6.0 Goalie gaps: FC-1's our end (calibration near its goals), PRSC's theirs; a tagger click "this is their goalie" if more clicks near the goals don't do it
 - [ ] 6.1 Event labelling mode in the tagger, `event_labels.json`, `events eval`
 - [ ] 6.1 Label dense windows (six windows, three games)
 - [ ] 6.2 Ball state and control by team; possession time per team, half and third
@@ -149,3 +157,4 @@ If touches in crowds or airborne passes stay weak, fine-tune an action-spotting 
 - None yet.
 
 ## Findings
+- **2026-11-02** — 6.0 on all seven games (3–6 s a game). **Direction:** the kickoffs alone were sure in six games; SAA's opponent kit is mostly the crowd, so too few kickoffs were clear, and it came out wrong. Your rated goal clips settle it: 😊 goal clips are ours and 🙁 theirs (by their notes), and where the ball ends says which goal each was at. Where the kickoffs were sure, 25 of 25 rated goal clips agree with them; added as votes, all seven games are sure, SAA attacking right in the 1st half. **Kickoffs:** 22 of 35 goal clips have a kickoff found within about a minute after; SAA's calibration puts the centre spot 3–4 m off and FC-1's views put kickoffs up to 9 m off, hence the box around the centre and the split-formation test. Kickoffs found per game (5–7 goals) don't match the goal clips one for one (they include the other team's goals, which aren't all clipped); the scores, once entered, will measure them. **Goalies:** found 90–100% of the time the ball is within 20 m of their goal in 19 of 28 game-halves; weak: FC-1 ours (18–23%: its calibration near the goals reads the goal at x ≈ 23 m of a 30 m half-length, so the goalie reads 7 m out), PRSC theirs (11–26%), FC Stars 2H theirs (35%), Elite Strikers 1H theirs (56%). Goalies' kits are often clustered in with a team's, which is why depth counts as well as kit. **EBU's** stored 2nd-half start (17.5 min) is wrong, as noted when the times were suggested; set it in the tagger.

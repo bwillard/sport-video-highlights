@@ -152,7 +152,8 @@ const MAP_TEAM = { 0: "#ffffff", 1: "#5ab0ff", 2: "#9a9a9a" };
 function drawPitchMap(canvas, o) {
   // o: {drawing, footprint (the camera's view on the pitch, pitchFootprint), players: [{x, y, team, ring, num, guessed, alpha}]
   //     (num: their number where it's known, drawn instead of a dot; guessed: by appearance, drawn fainter),
-  //     ball: {x, y, stale} or null (stale: not seen just now, where it was last), targets: bool (show landmarks), hover: target id or null, clicks: [{pitch, bad}], note: text over the map}
+  //     ball: {x, y, stale} or null (stale: not seen just now, where it was last), targets: bool (show landmarks), hover: target id or null, clicks: [{pitch, bad}], note: text over the map,
+  //     attack: +1 / -1 the goal we attack (right / left), 0 or missing: not shown}
   const m = mapFrame(canvas, o.drawing), { ctx, to } = m;
   ctx.clearRect(0, 0, m.W, m.H);
   ctx.fillStyle = "#1f3b26";
@@ -245,6 +246,15 @@ function drawPitchMap(canvas, o) {
     ctx.beginPath(); ctx.arc(X, Y, 5, 0, 2 * Math.PI);
     if (o.ball.stale) { ctx.stroke(); ctx.strokeStyle = "#ffe14d"; ctx.beginPath(); ctx.arc(X, Y, 3.5, 0, 2 * Math.PI); ctx.stroke(); }
     else { ctx.fill(); ctx.stroke(); }
+    ctx.restore();
+  }
+  if (o.attack) {  // which way we attack, along the bottom (the camera's side)
+    ctx.save();
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    ctx.textBaseline = "bottom";
+    ctx.textAlign = o.attack > 0 ? "right" : "left";
+    ctx.fillText(o.attack > 0 ? "we attack →" : "← we attack", o.attack > 0 ? m.W - 6 : 6, m.H - 4);
     ctx.restore();
   }
   if (o.note) {

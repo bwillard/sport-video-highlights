@@ -238,6 +238,9 @@
         <button id="gtRestore" hidden title="Undo the cut: put back everything as it was before (from the backup); the original video is used again.">undo cut</button>
       </div>
       <div class="row stat" id="gtStatus"></div>
+      <div class="row stat"><label title="Which goal we attack in the 1st half, as the camera sees it (the 2nd half is the other way). Auto: found from where our kit stands at the kickoffs; set it here if that's wrong or not sure. The field map says which way we attack.">we attack in the 1st half
+        <select id="gtAttack"><option value="">auto</option><option value="left">← left</option><option value="right">right →</option></select></label>
+        <span id="gtAttackNote"></span></div>
     </div>
     <div class="box" id="detail"></div>
   </aside>
@@ -468,6 +471,45 @@ function renderGameTime() {
     $("gtStatus").textContent = GT_KEYS.every(([k]) => game[k] != null) ? "" : "set all four times to cut the video";
   }
 }
+// which goal we attack (match.py): found from the kickoffs, or set here (game.attack_1h)
+let matchInfo = null;
+async function loadMatch() {
+  const id = game?.id;
+  matchInfo = null;
+  renderAttack();
+  if (!id) return;
+  const got = await getJson(`${gameUrl()}/match`).catch(() => null);
+  if (game?.id !== id) return;
+  if (got?.pending) { setTimeout(() => game?.id === id && loadMatch(), 15000); return; }
+  matchInfo = got;
+  renderAttack();
+}
+const ARROW = { left: "← left", right: "right →" };
+function renderAttack() {
+  if (!game) return;
+  $("gtAttack").value = game.attack_1h || "";
+  const d = matchInfo?.direction;
+  $("gtAttackNote").textContent = matchInfo?.error ? `(${matchInfo.error})`
+    : !d ? "(working it out…)"
+    : !d.found ? "(no clear kickoffs found: set it)"
+    : `(found ${ARROW[d.found]}${d.sure ? "" : ", not sure: check"}${game.attack_1h && game.attack_1h !== d.found ? "; set the other way" : ""})`;
+}
+function attackSign(t) {
+  // +1 if we attack the right-hand goal at video time t, -1 left, 0 unknown
+  const a = game?.attack_1h || matchInfo?.direction?.attack_1h;
+  if (!a) return 0;
+  const second = game.kickoff_2h_s != null && t >= game.kickoff_2h_s;
+  return (a === "right" ? 1 : -1) * (second ? -1 : 1);
+}
+$("gtAttack").addEventListener("change", async (e) => {
+  e.target.blur();
+  const val = e.target.value || null;
+  const updated = await api("PATCH", gameUrl(), { attack_1h: val });
+  if ((updated.attack_1h ?? null) !== val) { flash("NOT saved — restart soccer-clips serve, then try again", true); return; }
+  game.attack_1h = val;
+  flash(val ? `we attack ${ARROW[val]} in the 1st half` : "which way we attack: worked out from the kickoffs");
+  loadMatch();
+});
 $("gtTimes").addEventListener("click", (e) => {
   const t = e.target.dataset?.t;
   if (t != null) { e.preventDefault(); seekTo(+t); }
@@ -2170,7 +2212,7 @@ function drawMap() {
   const note = !pitch.calibrated ? "not calibrated: press Q" : !G ? "this view isn't placed" : "";
   mapLast = drawPitchMap(pitchMap, {
     drawing: pitch.drawing, footprint, players, ball: ballAtPitch,
-    targets: !!pitchMode, hover: mapHover, note,
+    targets: !!pitchMode, hover: mapHover, note, attack: attackSign(f / fps),
     clicks: pitchMode ? [...pitch.points, ...pitchQueue.map((q) => ({ pitch: q.at }))] : [],
   });
 }
@@ -2400,6 +2442,7 @@ async function loadGame(id, startT = 0, clipId = null) {
   mapMem = mapMemory();
   if (pitchMode) stopPitchMode();
   loadPitch();
+  loadMatch();
 }
 
 function applyHash() {

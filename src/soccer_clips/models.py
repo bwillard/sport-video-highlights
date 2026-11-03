@@ -121,6 +121,8 @@ class Game(BaseModel):
     kickoff_2h_s: float | None = None
     end_1h_s: float | None = None  # final whistle of the 1st half (game time: kickoff_1h_s..end_1h_s)
     end_2h_s: float | None = None  # final whistle of the game
+    attack_1h: Literal["left", "right"] | None = None  # the goal we attack in the 1st half, as the camera sees
+    # it (set in the tagger; None: worked out from the kickoffs, track/match.py)
     cut: GameCut | None = None  # set once the video has been cut to game time
     created_at: datetime
     clips: list[Clip] = []

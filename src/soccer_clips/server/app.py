@@ -51,6 +51,7 @@ class GamePatch(RequestBody):
     kickoff_2h_s: float | None = None
     end_1h_s: float | None = None
     end_2h_s: float | None = None
+    attack_1h: Literal["left", "right"] | None = None
 
 
 class ClipCreate(RequestBody):
@@ -774,6 +775,25 @@ def create_app(store: Store | None = None) -> FastAPI:
             return pitch.remove_point(store, load(game_id), index)
         except ValueError as e:
             raise HTTPException(404, str(e))
+
+    @app.get("/api/games/{game_id}/match")
+    def game_match(game_id: str) -> dict:
+        """The shape of the game (match.py): restarts, which goal we attack in each half (found from the kickoffs,
+        or as set), goalie coverage, out-of-play stretches. Worked out if out of date (seconds); {"pending": true}
+        while the positions it needs are being made, {"error"} when it can't be yet."""
+        from soccer_clips.track import match, positions
+
+        game = load(game_id)
+        if positions.load(store, game) is None:
+            if positions.key(store, game) is None:
+                return {"error": "needs the players tracked and the field calibrated"}
+            positions.build_soon(store, game)
+            return {"pending": True}
+        try:
+            got = match.load(store, game) or (match.build(store, game) and match.load(store, game))
+        except ValueError as e:
+            return {"error": str(e)}
+        return {k: v for k, v in got.items() if k != "keeper"}
 
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:
