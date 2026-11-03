@@ -300,6 +300,29 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
             Path(args.json).write_text(json.dumps(out, indent=2))
 
 
+def cmd_events(store: Store, args: argparse.Namespace) -> None:
+    from soccer_clips.track import ball_state
+
+    ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
+    log = lambda m: print(m, flush=True)  # noqa: E731
+    for gid in ids:
+        game = store.load_game(gid)
+        if args.events_command == "state":
+            try:
+                ball_state.build(store, game, log=log)
+            except ValueError as e:
+                print(f"{gid}: skipped ({e})")
+            continue
+        got = ball_state.evaluate(store, game)
+        if got is None:
+            print(f"{gid}: skipped (no full windows labelled, or the ball state can't be worked out yet)")
+            continue
+        print(f"{gid}: {got['windows']} window(s), {got['window_min']} min. Possession: we have a team for "
+              f"{got['covered']:.0%} of labelled play, right {got['right']:.0%} of that. At labelled touches "
+              f"({got['touches']}): that team within reach {got['touch_team']:.0%}, anyone {got['touch_anyone']:.0%}, "
+              f"ball seen {got['touch_ball']:.0%}")
+
+
 def cmd_pitch(store: Store, args: argparse.Namespace) -> None:
     from soccer_clips.track import positions
 
@@ -629,6 +652,13 @@ def main() -> None:
     mt = pt_sub.add_parser("match", help="restarts, which goal we attack each half, goalies, out of play "
                            "(tracks/match.npz; seconds a game)")
     mt.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
+    ev = sub.add_parser("events", help="game events: who has the ball, and how that compares with your labels (Phase 6)")
+    ev_sub = ev.add_subparsers(dest="events_command", required=True)
+    es = ev_sub.add_parser("state", help="who has the ball frame by frame; possession time per team, half and third "
+                           "(tracks/ball_state.npz; seconds a game)")
+    es.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
+    ee = ev_sub.add_parser("eval", help="possession against the full windows you've labelled (tagger Shift+E)")
+    ee.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     gt = sub.add_parser("gametime", help="when each half is played; cut videos down to game time")
     gt_sub = gt.add_subparsers(dest="gametime_command", required=True)
     sg = gt_sub.add_parser("suggest", help="suggest half start/end times from the player tracks")
@@ -703,7 +733,7 @@ def main() -> None:
     args = parser.parse_args()
 
     store = Store(get_settings())
-    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people, "pitch": cmd_pitch, "gametime": cmd_gametime,
+    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people, "pitch": cmd_pitch, "events": cmd_events, "gametime": cmd_gametime,
      "reid": cmd_reid, "gpu": cmd_gpu}[args.command](store, args)
 
 

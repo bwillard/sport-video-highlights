@@ -887,6 +887,22 @@ def create_app(store: Store | None = None) -> FastAPI:
             return {"error": str(e)}
         return {k: v for k, v in got.items() if k != "keeper"}
 
+    @app.get("/api/games/{game_id}/possession")
+    def game_possession(game_id: str) -> dict:
+        """Who had the ball (ball_state.py): {runs: [{team (1 ours, 2 theirs), from, to (frames)}], stats: possession
+        time per team, half and third}. Worked out if out of date (seconds); {"pending"} / {"error"} as for match."""
+        from soccer_clips.track import ball_state
+
+        got = game_match(game_id)
+        if "pending" in got or "error" in got:
+            return got
+        game = load(game_id)
+        try:
+            st = ball_state.load(store, game) or (ball_state.build(store, game) and ball_state.load(store, game))
+        except ValueError as e:
+            return {"error": str(e)}
+        return {"runs": st["runs"], "stats": st["stats"]}
+
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:
         """

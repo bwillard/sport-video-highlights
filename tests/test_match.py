@@ -105,10 +105,12 @@ def test_out_of_play():
     xy = np.column_stack([np.zeros(600), np.zeros(600)])
     xy[100:150, 1] = 22  # over the touchline (width 40) at 100, picked up, thrown in at 160
     xy[150:160, 1] = 20.5
-    restarts = [{"still": 150, "kick": 160, "kind": "throw-in"}, {"still": 300, "kick": 340, "kind": "free kick"},
-                {"still": 400, "kick": 420, "kind": "goalie"}]
+    restarts = [{"still": 150, "kick": 160, "kind": "throw-in"}, {"still": 300, "kick": 400, "kind": "free kick"},
+                {"still": 450, "kick": 470, "kind": "goalie"}, {"still": 500, "kick": 540, "kind": "free kick"},
+                {"still": 560, "kick": 580, "kind": "throw-in"}]
     got = match.out_of_play(restarts, f, xy, 60.0, 40.0, FPS, half_starts=[0])
-    assert got == [{"from": 100, "to": 160, "kind": "throw-in"}, {"from": 300, "to": 340, "kind": "free kick"}]
+    # the 1.3 s "free kick" and the throw-in with no crossing near it were a ball slowing in open play
+    assert got == [{"from": 100, "to": 160, "kind": "throw-in"}, {"from": 300, "to": 400, "kind": "free kick"}]
     later = match.out_of_play(restarts[:1], f, xy, 60.0, 40.0, FPS, half_starts=[0, 120])
     assert later == [{"from": 120, "to": 160, "kind": "throw-in"}]  # not back past the half's start
 

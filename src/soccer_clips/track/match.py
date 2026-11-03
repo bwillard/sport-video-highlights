@@ -22,7 +22,10 @@ field (positions.py) and the teams (people.roles_for).
   mostly in that kit and mostly in the penalty area that team defends is their goalie too. A "not a goalie"
   mark (team "none") rules a tracklet out: it's never a goalie, and the deepest of the rest is.
 - **Out of play:** from when the ball crossed a line (looking back up to LOOKBACK_S from a restart on a
-  line or a kickoff) or, for a free kick, from when it stopped, to the restart kick.
+  line or a kickoff) or, for a free kick, from when it stopped, to the restart kick. A restart on a line
+  needs the ball out within OUT_NEAR_S of it stopping (an earlier crossing is another moment, or a stray
+  ball path off the field); one without, and a free kick, needs the ball still at least STOP_S: shorter is
+  a ball slowing at someone's feet in open play (in the labelled windows, every one was).
 
 <game>/tracks/match.npz: `keeper` per tracklet row (0 none, 1 ours, 2 theirs; people.Tracks order), and
 `info` (JSON: restarts, kickoffs, direction, out-of-play stretches, how many goalie frames), with `key`.
@@ -37,7 +40,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 1
+VERSION = 2
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
@@ -61,6 +64,8 @@ TEAM_CODES = {"ours": 1, "theirs": 2}  # keeper codes
 NOT_GOALIE = "none"  # a goalie mark's team: this tracklet isn't a goalie
 LOOKBACK_S = 30.0  # a restart on a line: when the ball went out, looked for this far back
 GOAL_LOOKBACK_S = 90.0  # a kickoff: when the goal went in
+OUT_NEAR_S = {"throw-in": 8.0, "corner": 8.0, "goal kick": 20.0}  # the ball out this soon before it stopped
+STOP_S = 3.0  # a stoppage with no crossing (free kick, penalty, a line restart unseen going out): still this long
 KICKOFF_SAME_S = 30.0  # kickoffs this close are one; a kickoff this close to a half's start time is that half's
 LINE_PAD_M = 0.5  # the ball beyond a line by this much is out
 
@@ -311,7 +316,9 @@ def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, lengt
                 fps: float, half_starts: list[int]) -> list[dict]:
     """[{from, to, kind}]: the ball out of play before each restart (not the goalie's ball, which is in play):
     from when it last went over a line (for a restart on a line, or a kickoff after a goal; looking back no
-    further than the half's start), else from when it stopped, to the kick."""
+    further than the half's start), else from when it stopped, to the kick. A stoppage with no crossing
+    (none for a free kick; none within OUT_NEAR_S of the ball stopping, on a line) shorter than STOP_S isn't
+    one: the ball was in play."""
     outside = (np.abs(bxy[:, 0]) > length / 2 + LINE_PAD_M) | (np.abs(bxy[:, 1]) > width / 2 + LINE_PAD_M)
     placed = np.isfinite(bxy[:, 0])
     out = []
@@ -324,10 +331,15 @@ def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, lengt
             since = max([h for h in half_starts if h <= r["still"]], default=r["still"] - back * fps)
             lo, hi = np.searchsorted(bframe, [max(r["still"] - back * fps, since), r["still"]])
             o = np.flatnonzero(outside[lo:hi] & placed[lo:hi])
-            if len(o):
-                last_out = lo + o[-1]
+            last_out = lo + o[-1] if len(o) else None
+            near = OUT_NEAR_S.get(r["kind"])
+            if last_out is not None and near and r["still"] - bframe[last_out] > near * fps:
+                last_out = None  # the ball came back in long before: not this restart's crossing
+            if last_out is not None:
                 inside = np.flatnonzero(~outside[lo:last_out] & placed[lo:last_out])
                 start = int(bframe[lo + inside[-1] + 1]) if len(inside) else int(bframe[lo + o[0]])
+        if start == r["still"] and r["kick"] - r["still"] < STOP_S * fps:
+            continue  # no crossing, and too short a stop for a free kick: in play
         out.append({"from": int(start), "to": r["kick"], "kind": r["kind"]})
     return out
 

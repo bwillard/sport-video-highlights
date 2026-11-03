@@ -271,6 +271,7 @@
         <select id="gtAttack"><option value="">auto</option><option value="left">← left</option><option value="right">right →</option></select></label>
         <span id="gtAttackNote"></span></div>
       <div class="row stat" id="gtGoalies" title="How often each goalie is found when the ball is within 20 m of their goal. Where it's low, point at the goalie and press Shift+G (ours), or click them and pick 🧤: that tracklet is the goalie, and so is anyone in the same kit staying around that goal. Found goalies show GK on their box; click one that isn't and pick ✕ not a goalie."></div>
+      <div class="row stat" id="gtPossession" title="Who had the ball, worked out from the nearest player of each team to it (within about 1.5 m, 3 m at the far touchline): a team has it from when one of theirs has it alone until one of the others does, or it goes out of play. Unknown: no ball seen for a while. Thirds are from our attacking direction. Shown on the timeline (thin strip: white ours, blue theirs) and on the field map. Rough: players read as neither team's kit can't have it, so check it against the video."></div>
     </div>
     <div class="box" id="events">
       <div class="row"><b>Events</b> <span class="stat" id="evCount"></span>
@@ -520,6 +521,42 @@ async function loadMatch() {
   if (got?.pending) { setTimeout(() => game?.id === id && loadMatch(), 15000); return; }
   matchInfo = got;
   renderAttack();
+  loadPossession();
+}
+// who had the ball (ball_state.py): runs of one team's possession, and the time per team, half and third
+let possInfo = null;  // {gameId, runs: [{team, from, to}], stats} or {gameId, error}
+async function loadPossession() {
+  const id = game?.id;
+  possInfo = null;
+  renderPossession();
+  if (!id || matchInfo?.error) return;
+  const got = await getJson(`${gameUrl()}/possession`).catch(() => null);
+  if (game?.id !== id || !got || got.pending) return;
+  possInfo = { gameId: id, ...got };
+  renderPossession();
+  drawTimeline();
+}
+function possessionAt(f) {
+  // 1 ours, 2 theirs, 0 not known, at frame f
+  const runs = possInfo?.gameId === game?.id ? possInfo.runs : null;
+  if (!runs?.length) return 0;
+  let lo = 0, hi = runs.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (runs[mid].to <= f) lo = mid + 1; else hi = mid; }
+  return lo < runs.length && runs[lo].from <= f ? runs[lo].team : 0;
+}
+function renderPossession() {
+  const el = $("gtPossession");
+  const st = possInfo?.stats;
+  if (possInfo?.error) { el.textContent = `possession: (${possInfo.error})`; return; }
+  if (!st) { el.textContent = ""; return; }
+  const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+  const g = st.game, known = g.in_play_s ? (g.ours_s + g.theirs_s) / g.in_play_s : null;
+  const th = [["defending", "our defending"], ["middle", "middle"], ["attacking", "our attacking"]].map(([n, name]) => {
+    const t = g.thirds[n], all = t.ours_s + t.theirs_s;
+    return `${name} ${all ? pct(t.ours_s / all) : "–"} (${(all / 60).toFixed(0)} min)`;
+  });
+  el.innerHTML = `possession: ours ${pct(g.ours_share)} (1H ${pct(st.halves[0]?.ours_share)}, 2H ${pct(st.halves[1]?.ours_share)}),` +
+    ` known ${pct(known)} of time in play<br>ours, by the third the ball is in: ${th.join(", ")}`;
 }
 const ARROW = { left: "← left", right: "right →" };
 function renderAttack() {
@@ -550,6 +587,7 @@ function setMatch(got) {
   matchInfo = got;
   boxChunks.clear();
   renderAttack();
+  loadPossession();
 }
 async function markGoalie(team, t) {
   if (!showPeople || !people) return flash("press V to show the players first", true);
@@ -774,6 +812,12 @@ function drawTimeline() {
     ctx.fillStyle = "rgba(255,159,64,0.45)";  // automatic (appearance): a thinner, fainter strip above
     for (const sg of (autoLabels?.gameId === game.id && autoLabels.byPlayer[followWho]) || []) {
       ctx.fillRect(x(sg.start * spf), h - 7, Math.max(1, x((sg.end - sg.start) * spf)), 2);
+    }
+  }
+  if (possInfo?.gameId === game.id && possInfo.runs) {  // who had the ball: a thin strip under the top band
+    for (const r of possInfo.runs) {
+      ctx.fillStyle = r.team === 1 ? "rgba(255,255,255,0.75)" : "rgba(90,176,255,0.9)";
+      ctx.fillRect(x(r.from / fps), 20, Math.max(0.5, x((r.to - r.from) / fps)), 2);
     }
   }
   if (evLabels?.gameId === game.id) {  // event labels: full windows as a band, each label a tick, along the top
@@ -2449,7 +2493,7 @@ function drawMap() {
   const note = !pitch.calibrated ? "not calibrated: press Q" : !G ? "this view isn't placed" : "";
   mapLast = drawPitchMap(pitchMap, {
     drawing: pitch.drawing, footprint, players, ball: ballAtPitch,
-    targets: !!pitchMode, hover: mapHover, note, attack: attackSign(f / fps),
+    targets: !!pitchMode, hover: mapHover, note, attack: attackSign(f / fps), possession: possessionAt(f),
     clicks: pitchMode ? [...pitch.points, ...pitchQueue.map((q) => ({ pitch: q.at }))] : [],
   });
 }
