@@ -209,6 +209,10 @@
           only have a box with <kbd>Shift</kbd>+<kbd>D</kbd> (other kits) on. Someone wrongly shown as a goalie: click them and pick
           ✕ not a goalie (that tracklet is never one, and the deepest of the rest is). How often each is found, and your marks,
           are in the Game time box (✕ there removes a mark)</li>
+        <li><b>Kits</b>: a player in a grey box (neither team) who's on a team: click them and pick 👕 ours or 👕 theirs. Their kit
+          colour (as it looks in that light) is that team's for the whole game, so everyone else in it changes too; 👕 neither puts
+          a kit back with the refs and spectators. Who has the ball, and the goalies, go by these teams. Your kit marks are in
+          the Game time box (✕ takes one back)</li>
         <li>The orange strip under the timeline = where they're labelled</li>
         <li><kbd>W</kbd> only them: plays just the stretches where the player you follow is on screen (labelled or guessed),
           skipping the rest (darkened on the timeline) · <kbd>W</kbd> again plays everything. The <b>Player view</b> page does
@@ -271,6 +275,7 @@
         <select id="gtAttack"><option value="">auto</option><option value="left">← left</option><option value="right">right →</option></select></label>
         <span id="gtAttackNote"></span></div>
       <div class="row stat" id="gtGoalies" title="How often each goalie is found when the ball is within 20 m of their goal. Where it's low, point at the goalie and press Shift+G (ours), or click them and pick 🧤: that tracklet is the goalie, and so is anyone in the same kit staying around that goal. Found goalies show GK on their box; click one that isn't and pick ✕ not a goalie."></div>
+      <div class="row stat" id="gtKits" title="Kits you've named (click a player, then 👕 ours / theirs / neither): that player's kit colour is that team's for the whole game. ✕ takes one back."></div>
       <div class="row stat" id="gtPossession" title="Who had the ball, worked out from the nearest player of each team to it (within about 1.5 m, 3 m at the far touchline): a team has it from when one of theirs has it alone until one of the others does, or it goes out of play. Unknown: no ball seen for a while. Thirds are from our attacking direction. Shown on the timeline (thin strip: white ours, blue theirs) and on the field map. Rough: players read as neither team's kit can't have it, so check it against the video."></div>
     </div>
     <div class="box" id="events">
@@ -600,6 +605,35 @@ async function markGoalie(team, t) {
   const k = (got.keepers || []).filter((x) => x.team === team && x.seen != null);
   flash(`marked ${what}` + (k.length ? `: found ${k.map((x) => `${Math.round(x.seen * 100)}%`).join(" / ")} of the time near their goal (1H / 2H)` : ""));
 }
+// kit marks (people.py): "this kit colour is ours / theirs / neither", for the whole game
+const KIT_NAMES = { ours: "ours", opponents: "theirs", other: "neither team's" };
+async function markKit(team, t) {
+  if (!showPeople || !people) return flash("press V to show the players first", true);
+  if (!t || t.x == null) return flash("point at a player first", true);
+  closePicker();
+  const got = await api("POST", `${gameUrl()}/people/kit`, { frame: t.frame, x: t.x, y: t.y, team, track: t.track });
+  setLabels(got);
+  loadMatch();  // goalies and possession go by the teams
+  render();
+  flash(`this kit colour is ${KIT_NAMES[team]} all game` +
+    (got.share != null ? ` (${Math.round(got.share * 100)}% of the boxes on the field)` : "") + ": ✕ in the Game time box takes it back");
+}
+function renderKits() {
+  const el = $("gtKits"), marks = people?.gameId === game?.id ? people.kit_marks || [] : [];
+  el.innerHTML = marks.length ? "kits named: " + marks.map((m) => `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ` +
+    `${m.team === "opponents" ? "theirs" : m.team === "other" ? "neither" : "ours"}${m.cluster < 0 ? " (no box there now)" : ""} ` +
+    `<button class="x" data-delkit="${m.id}" title="Take this back">✕</button>`).join(" · ") : "";
+}
+$("gtKits").addEventListener("click", async (e) => {
+  const del = e.target.dataset?.delkit, t = e.target.dataset?.t;
+  if (del) {
+    e.target.blur();
+    setLabels(await api("DELETE", `${gameUrl()}/people/kit/${del}`));
+    loadMatch();
+    render();
+    flash("kit mark taken back");
+  } else if (t != null) { e.preventDefault(); v.pause(); seekTo(+t); }
+});
 function attackSign(t) {
   // +1 if we attack the right-hand goal at video time t, -1 left, 0 unknown
   const a = game?.attack_1h || matchInfo?.direction?.attack_1h;
@@ -1380,13 +1414,15 @@ function loadPeople() {
   const id = game.id;
   peopleLoading = getJson(`/api/games/${encodeURIComponent(id)}/people`).then((p) => {
     if (game?.id === id) people = { gameId: id, ...p };
+    renderKits();
     fetchSuggestions()?.catch(() => {});  // ready before the first G
     loadAuto();
   }).finally(() => { peopleLoading = null; });
   return peopleLoading;
 }
 function setLabels(r) {
-  if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments });
+  if (people?.gameId === game.id) Object.assign(people, { picks: r.picks, segments: r.segments, kit_marks: r.kit_marks });
+  renderKits();
   if (wanted?.gameId === game.id && r.segments.some((sg) => sg.track === wanted.track)) wantedDone();  // named
   loadAuto();  // labels move the automatic ones
   looks.clear();  // and the players' looks, and who's busy where
@@ -1806,7 +1842,11 @@ function openPicker(t) {
     `<button class="no" data-notours title="A spectator, parent, coach or opponent: never labelled or guessed (Shift+X)">🚫 not our team</button>` +
     `<button data-goalie="ours" title="Our goalie (Shift+G): this tracklet, and anyone in the same kit staying around our goal">🧤 our goalie</button>` +
     `<button data-goalie="theirs" title="Their goalie: this tracklet, and anyone in the same kit staying around their goal">🧤 their goalie</button>` +
-    (t.goalie ? `<button class="no" data-goalie="none" title="Not a goalie: this tracklet is never one, and whoever is deepest of the rest is">✕ not a goalie</button>` : "");
+    (t.goalie ? `<button class="no" data-goalie="none" title="Not a goalie: this tracklet is never one, and whoever is deepest of the rest is">✕ not a goalie</button>` : "") +
+    `<div class="ptitle">this kit colour, all game:</div>` +
+    `<button data-kit="ours" title="Everyone in this kit colour is on our team (white boxes)">👕 ours</button>` +
+    `<button data-kit="opponents" title="Everyone in this kit colour is on their team (blue boxes)">👕 theirs</button>` +
+    `<button data-kit="other" title="This kit colour is neither team's: refs, coaches, spectators (grey boxes)">👕 neither</button>`;
   el.hidden = false;
   picker = { t, best, typed: "" };
   showTyped();
@@ -1847,6 +1887,7 @@ $("picker").addEventListener("click", (e) => {
   else if ("no" in b.dataset) pickerReject();
   else if ("notours" in b.dataset) notOurs(picker.t);
   else if (b.dataset.goalie) markGoalie(b.dataset.goalie, picker.t);
+  else if (b.dataset.kit) markKit(b.dataset.kit, picker.t);
 });
 function pickerKey(e) {
   // keys while the "who is this?" box is open; true if used
@@ -2725,6 +2766,7 @@ async function loadGame(id, startT = 0, clipId = null) {
   if (pitchMode) stopPitchMode();
   loadPitch();
   loadMatch();
+  renderKits();
   evLabels = null;
   evDone = [];
   evWindowStart = null;

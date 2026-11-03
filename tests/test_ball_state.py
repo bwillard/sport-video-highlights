@@ -72,9 +72,11 @@ def test_truth_and_compare():
            {"frame": 30, "kind": "touch", "team": 2, "keeper": 0},  # a kit read as neither: not known
            {"frame": 40, "kind": "touch", "team": 2, "keeper": 0, "player": 7},  # named: ours
            {"frame": 50, "kind": "goal", "team": 0, "keeper": 0}]
-    tru = bs.truth(evs, [{"start": 5, "end": 60}], 70)
+    tru = bs.truth(evs, [{"start": 5, "end": 60}], 70, FPS)
     assert tru[:10].tolist() == [0] * 10 and (tru[10:20] == 1).all() and (tru[20:30] == 2).all()
     assert (tru[30:40] == 0).all() and (tru[40:50] == 1).all() and (tru[50:] == 0).all()
+    long = bs.truth(evs[:1], [{"start": 5, "end": 100}], 100, FPS)  # one touch, then nothing: a stoppage
+    assert (long[10:10 + int(bs.TRUTH_GAP_S * FPS)] == 1).all() and not long[10 + int(bs.TRUTH_GAP_S * FPS):].any()
     poss = tru.copy()
     poss[25:30] = 1  # wrong for half a second
     ctl = np.where(poss == 1, bs.OURS, bs.THEIRS).astype(np.int8)

@@ -161,7 +161,7 @@ def test_people_api(store):
 
     with TestClient(create_app(store)) as client:
         url = f"/api/games/{GAME}/people"
-        assert client.get(url).json() == {"ranges": [], "teams": {}, "picks": [], "segments": []}
+        assert client.get(url).json() == {"ranges": [], "teams": {}, "picks": [], "segments": [], "kit_marks": []}
         assert client.post(f"{url}/picks", json={"frame": 5, "player": 38, "kind": "is", "x": 0.15, "y": 0.5}
                            ).status_code == 422  # not tracked yet
         two_players(store)
@@ -290,6 +290,50 @@ def test_team_roles_from_labelled_boxes(store, monkeypatch):
     # a teammate labelled on the right: her clusters are ours too, though #38 is never in them
     mate = picks + [{"frame": 10, "x": 0.65, "y": 0.5, "player": 5, "kind": "is"}]
     assert people.team_roles(t, mate, game, 38) == {0: "ours", 1: "ours", 2: "ours", 3: "ours"}
+
+
+
+def _split_kits(store, monkeypatch):
+    """two_players with kits: left (labelled #38) in clusters 0 then 1, right in 2 then 3; nothing shared."""
+    monkeypatch.setattr(people, "OURS_MIN_BOXES", 50)
+    game = two_players(store)
+    t = people.tracks(store, game)
+    left = t.at(50, 0.15, 0.5)
+    first = t.frame < 50
+    t.box_team = np.where(t.track == left, np.where(first, 0, 1), np.where(first, 2, 3)).astype(np.int8)
+    t.team = {left: 0, t.at(50, 0.65, 0.5): 2}
+    t.affinity = np.zeros((4, 4))
+    return game, t, [{"frame": 10, "x": 0.15, "y": 0.5, "player": 38, "kind": "is"}]
+
+
+def test_other_kit_on_the_field_joins_its_team(store, monkeypatch):
+    game, t, picks = _split_kits(store, monkeypatch)
+    on = np.ones(len(t.track), bool)
+    t.affinity[2, 3] = t.affinity[3, 2] = 0.18  # cluster 3 shares some tracklets with 2: under SAME_KIT
+    assert people.team_roles(t, picks, game, 38)[3] == "other"
+    assert people.team_roles(t, picks, game, 38, on)[3] == "opponents"  # mostly on the field: their kit in shade
+    assert people.team_roles(t, picks, game, 38, ~on)[3] == "other"  # spectators
+    t.affinity[3, 1] = t.affinity[1, 3] = 0.15  # shares nearly as much with ours: a mix, left alone
+    assert people.team_roles(t, picks, game, 38, on)[3] == "other"
+
+
+def test_kit_marks(store, monkeypatch):
+    game, t, picks = _split_kits(store, monkeypatch)
+    monkeypatch.setattr(people, "tracks", lambda *a, **k: t)
+    monkeypatch.setattr(people, "KIT_WINDOW_S", 0.5)  # the fixture is only 100 frames
+    assert people.kit_of(t, t.at(80, 0.65, 0.5), 80, game.fps) == 3
+    with pytest.raises(ValueError, match="no tracked player"):
+        people.add_kit_mark(store, game, 80, 0.4, 0.5, "opponents")
+    with pytest.raises(ValueError):
+        people.add_kit_mark(store, game, 80, 0.65, 0.5, "refs")
+    m = people.add_kit_mark(store, game, 80, 0.65, 0.5, "opponents")
+    assert people.load_picks(store, game) == [] and people._picks_path(store, game).exists()  # re-saved
+    kits = people.kit_marks(t, people.load_kit_marks(store, game), game.fps)
+    assert kits == [{"id": m["id"], "frame": 80, "team": "opponents", "cluster": 3}]
+    roles, role = people.roles_of(t, picks, game, 38, None, kits)
+    assert roles[3] == "opponents" and (role[(t.track == t.at(80, 0.65, 0.5)) & (t.frame >= 60)] == 1).all()
+    assert people.remove_kit_mark(store, game, m["id"]) and not people.remove_kit_mark(store, game, m["id"])
+    assert people.load_kit_marks(store, game) == []
 
 
 def test_box_teams_follow_a_swap_inside_a_tracklet():

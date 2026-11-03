@@ -45,6 +45,8 @@ LOOSE, OURS, THEIRS, CONTESTED, UNKNOWN = 0, 1, 2, 3, -1  # control codes
 TEAMS = {1: "ours", 2: "theirs"}
 THIRDS = ("defending", "middle", "attacking")  # from our attacking direction
 TOL_S = 0.5  # measuring against labels: the ball changing teams this close to a labelled touch counts
+TRUTH_GAP_S = 5.0  # ...and this long after a labelled touch with none since, who has it isn't known: in open
+# play touches are 1.5-2.5 s apart, so a longer gap is a stoppage (spare balls by the bench, players standing about)
 
 
 def path(store: Store, game: Game) -> Path:
@@ -335,19 +337,20 @@ def label_team(e: dict) -> int:
     return {0: 1, 1: 2}.get(e.get("team"), 0)
 
 
-def truth(evs: list[dict], windows: list[dict], n: int) -> np.ndarray:
-    """Per frame inside full windows: the team of the last labelled touch (1 / 2); 0 after a touch whose team
-    isn't known or a goal (until the next touch), before the window's first touch, and outside windows.
-    evs: resolved labels (every kind but a goal is a touch)."""
+def truth(evs: list[dict], windows: list[dict], n: int, fps: float) -> np.ndarray:
+    """Per frame inside full windows: the team of the last labelled touch (1 / 2), for up to TRUTH_GAP_S; 0
+    after a touch whose team isn't known or a goal (until the next touch), before the window's first touch,
+    and outside windows. evs: resolved labels (every kind but a goal is a touch)."""
     out = np.zeros(n, np.int8)
+    gap = round(TRUTH_GAP_S * fps)
     for w in windows:
         a, b = max(0, w["start"]), min(n, w["end"])
         cur, f0 = 0, a
         for e in sorted((e for e in evs if a <= e["frame"] < b), key=lambda e: e["frame"]):
-            out[f0:e["frame"]] = cur
+            out[f0:min(e["frame"], f0 + gap)] = cur
             cur = 0 if e["kind"] == "goal" else label_team(e)
             f0 = e["frame"]
-        out[f0:b] = cur
+        out[f0:min(b, f0 + gap)] = cur
     return out
 
 
@@ -396,7 +399,7 @@ def evaluate(store: Store, game: Game) -> dict | None:
         return None
     n = len(st["possession"])
     inside = [e for e in lab["events"] if any(w["start"] <= e["frame"] < w["end"] for w in lab["windows"])]
-    got = compare(st["possession"], st["control"], st["in_play"], truth(inside, lab["windows"], n), inside, game.fps)
+    got = compare(st["possession"], st["control"], st["in_play"], truth(inside, lab["windows"], n, game.fps), inside, game.fps)
     got["windows"] = len(lab["windows"])
     got["window_min"] = round(sum(w["end"] - w["start"] for w in lab["windows"]) / game.fps / 60, 1)
     return got

@@ -160,6 +160,14 @@ class PickIn(RequestBody):
     track: int | None = None  # the tracklet meant, when boxes overlap (suggestions know it)
 
 
+class KitIn(RequestBody):
+    frame: int = Field(ge=0)
+    x: float = Field(ge=0, le=1)  # the player pointed at (fractions of the frame)
+    y: float = Field(ge=0, le=1)
+    team: Literal["ours", "opponents", "other"]  # whose kit theirs is, for the whole game
+    track: int | None = None  # the tracklet under it, as the page saw it
+
+
 class PitchPointIn(RequestBody):
     frame: int = Field(ge=0)
     x: float = Field(ge=0, le=1)  # fractions of the frame
@@ -703,7 +711,8 @@ def create_app(store: Store | None = None) -> FastAPI:
 
         t = people.tracks(store, game)
         picks = people.load_picks(store, game)
-        return {"picks": picks, "segments": people.segments(t, picks) if t else []}
+        return {"picks": picks, "segments": people.segments(t, picks) if t else [],
+                "kit_marks": people.kit_marks(t, people.load_kit_marks(store, game), game.fps) if t else []}
 
     @app.get("/api/games/{game_id}/people")
     def game_people(game_id: str) -> dict:
@@ -928,6 +937,35 @@ def create_app(store: Store | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(422, str(e))
         return {"saved": n, **people_labels(game)}
+
+    @app.post("/api/games/{game_id}/people/kit")
+    def game_people_kit(game_id: str, body: KitIn) -> dict:
+        """This player's kit (its cluster) is ours / the opponents' / neither (refs, spectators) for the whole
+        game (people.add_kit_mark); returns the labels, and how much of the field that kit is."""
+        from soccer_clips.track import people, positions
+
+        game = load(game_id)
+        try:
+            mark = people.add_kit_mark(store, game, body.frame, body.x, body.y, body.team, body.track)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        labels = people_labels(game)
+        cluster = next(m["cluster"] for m in labels["kit_marks"] if m["id"] == mark["id"])
+        t, pos = people.tracks(store, game), positions.load(store, game)
+        share = None
+        if pos is not None and len(pos["off"]) == len(t.track):
+            on = ~pos["off"] & np.isfinite(pos["xy"][:, 0])
+            share = round(float((t.teams_of(0, len(t.track))[on] == cluster).mean()), 3) if on.any() else None
+        return {"mark": mark, "share": share, **labels}
+
+    @app.delete("/api/games/{game_id}/people/kit/{mark_id}")
+    def game_people_kit_remove(game_id: str, mark_id: str) -> dict:
+        from soccer_clips.track import people
+
+        game = load(game_id)
+        if not people.remove_kit_mark(store, game, mark_id):
+            raise HTTPException(404, "no such kit mark")
+        return people_labels(game)
 
     @app.post("/api/games/{game_id}/people/not-ours")
     def game_people_not_ours(game_id: str, body: NotOursIn) -> dict:

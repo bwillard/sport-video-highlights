@@ -926,9 +926,16 @@ OURS_RATE = 0.12  # a cluster is ours if its share of the player's boxes is at l
 OURS_MIN_BOXES = 200  # labelled boxes needed to go by them (else by the labelled points)
 OURS_TEAM_RATE = 0.25  # likewise for everyone labelled together (a kit in light the labelled player is rarely in)
 SAME_KIT = 0.2  # kit.affinity above which two clusters are taken as the same kit
+JOIN_AFF = 0.15  # an "other" cluster mostly on the field joins a team it shares at least this much with...
+JOIN_ON = 0.4  # ...when at least this share of its boxes is on the field (positions.py)...
+JOIN_OVER = 1.4  # ...and this many times more than with the other team or any other "other" cluster
+# (2026-11-03: Elite Strikers' navy and EBU's light blue in some light were "other", 16% of the field each,
+# sharing 1.8-1.9x as much with their team as with anything else; clusters mixing a team with spectators or
+# refs, which shouldn't join, 1.2x)
 
 
-def team_roles(t: Tracks, picks: list[dict], game: Game, player: int | None) -> dict[int, str]:
+def team_roles(t: Tracks, picks: list[dict], game: Game, player: int | None,
+               on_field: np.ndarray | None = None) -> dict[int, str]:
     """
     Name the kit clusters (each team's kit is usually several, by light; see kit.py):
     - "ours": clusters where the labelled player's boxes (the stretches their picks label) make up
@@ -939,7 +946,10 @@ def team_roles(t: Tracks, picks: list[dict], game: Game, player: int | None) -> 
       share in their top cluster: a teammate-heavy patch of light (the far side in shade) can hold
       too little of one player to pass on her alone.
     - "opponents": the biggest (by boxes) group of other clusters linked by shared tracklets (SAME_KIT).
-    - "other": the rest (refs, keepers, spectators).
+    - "other": the rest (refs, keepers, spectators). With on_field (per row, positions.py), an "other"
+      cluster mostly on the field (JOIN_ON) that shares tracklets with one team's clusters (JOIN_AFF, and
+      JOIN_OVER times more than with the other team's or another "other" cluster) is that team's: the
+      same kit in other light, not a mix of players and spectators.
     Without labels: the two biggest such groups are "team".
     """
     if not t.team:
@@ -1000,6 +1010,17 @@ def team_roles(t: Tracks, picks: list[dict], game: Game, player: int | None) -> 
     for g in groups[:1] if ours else groups[:2]:
         for c in g:
             roles[c] = "opponents" if ours else "team"
+    if ours and on_field is not None and t.affinity is not None and len(on_field) == len(teams):
+        on = np.bincount(teams[on_field & (teams >= 0)], minlength=k) / np.maximum(counts, 1)
+        named = {r: [d for d in range(k) if roles.get(d) == r] for r in ("ours", "opponents", "other")}
+        joins = {}
+        for c in [c for c in named["other"] if on[c] >= JOIN_ON]:
+            aff = {r: max((t.affinity[c, d] for d in ds if d != c), default=0.0) for r, ds in named.items()}
+            best = "ours" if aff["ours"] >= aff["opponents"] else "opponents"
+            rest = max(v for r, v in aff.items() if r != best)
+            if aff[best] >= JOIN_AFF and aff[best] >= JOIN_OVER * rest:
+                joins[c] = best
+        roles.update(joins)
     return roles
 
 
@@ -1050,9 +1071,91 @@ def labelled_ours(t: Tracks, picks: list[dict], role: np.ndarray) -> np.ndarray:
     return role
 
 
-def roles_of(t: Tracks, picks: list[dict], game: Game, player: int | None) -> tuple[dict[int, str], np.ndarray]:
-    """team_roles, and every box's team (box_roles, labelled stretches ours, stretches marked not ours other)."""
-    roles = team_roles(t, picks, game, player)
+# ---- kit marks: "this kit is theirs / ours / neither" (the tagger's click box) ----
+# Kept apart from the picks (a pick on a tracklet ends the labelled stretch before it), but saving one
+# re-saves the picks too: the team split goes by both, and everything that caches it goes by the picks file.
+KIT_TEAMS = ("ours", "opponents", "other")
+KIT_WINDOW_S = 5.0  # a marked box's kit: its tracklet's most common kit cluster this far either side
+
+
+def kit_marks_path(store: Store, game: Game) -> Path:
+    return tracks_dir(store, game) / "kit_marks.json"
+
+
+def load_kit_marks(store: Store, game: Game) -> list[dict]:
+    import json
+
+    p = kit_marks_path(store, game)
+    return json.loads(p.read_text())["marks"] if p.exists() else []
+
+
+def _save_kit_marks(store: Store, game: Game, marks: list[dict]) -> None:
+    import json
+
+    from soccer_clips.store import atomic_write_text
+
+    atomic_write_text(kit_marks_path(store, game), json.dumps({"version": 1, "marks": marks}, indent=1) + "\n")
+    _save_picks(store, game, load_picks(store, game))  # see above: what caches the team split sees the change
+
+
+def kit_of(t: Tracks, tid: int, frame: int, fps: float) -> int:
+    """The kit cluster of tracklet `tid` around `frame` (its most common within KIT_WINDOW_S), -1 unknown."""
+    w = round(KIT_WINDOW_S * fps)
+    a, b = t.window(frame - w, frame + w + 1)
+    k = t.teams_of(a, b)[(t.track[a:b] == tid)]
+    k = k[k >= 0]
+    return int(np.bincount(k).argmax()) if len(k) else -1
+
+
+def add_kit_mark(store: Store, game: Game, frame: int, x: float, y: float, team: str,
+                 track: int | None = None) -> dict:
+    """The kit of the player at (x, y) (fractions of the frame) in `frame` is `team`'s (KIT_TEAMS) for the
+    whole game. ValueError if there's no tracked box there or its kit isn't known."""
+    import secrets
+
+    if team not in KIT_TEAMS:
+        raise ValueError(f"team must be one of {', '.join(KIT_TEAMS)}")
+    t = tracks(store, game)
+    if t is None:
+        raise ValueError("this game hasn't been through player tracking")
+    tid = t.at(frame, x, y, prefer=track)
+    if tid is None:
+        raise ValueError("no tracked player there")
+    if kit_of(t, tid, frame, game.fps) < 0:
+        raise ValueError("this player's kit isn't known")
+    m = {"id": secrets.token_hex(4), "frame": int(frame), "x": round(float(x), 5), "y": round(float(y), 5),
+         "track": tid, "team": team}
+    _save_kit_marks(store, game, load_kit_marks(store, game) + [m])
+    return m
+
+
+def remove_kit_mark(store: Store, game: Game, mark_id: str) -> bool:
+    marks = load_kit_marks(store, game)
+    keep = [m for m in marks if m["id"] != mark_id]
+    if len(keep) == len(marks):
+        return False
+    _save_kit_marks(store, game, keep)
+    return True
+
+
+def kit_marks(t: Tracks, marks: list[dict], fps: float) -> list[dict]:
+    """The marks with the kit cluster each is on now ({id, frame, team, cluster}; cluster -1: no box there)."""
+    out = []
+    for m in marks:
+        tid = t.at(m["frame"], m["x"], m["y"], prefer=m.get("track"))
+        out.append({"id": m["id"], "frame": m["frame"], "team": m["team"],
+                    "cluster": kit_of(t, tid, m["frame"], fps) if tid is not None else -1})
+    return out
+
+
+def roles_of(t: Tracks, picks: list[dict], game: Game, player: int | None,
+             on_field: np.ndarray | None = None, kits: list[dict] | None = None) -> tuple[dict[int, str], np.ndarray]:
+    """team_roles, and every box's team (box_roles, labelled stretches ours, stretches marked not ours other).
+    kits: kit marks (kit_marks), which name their clusters whatever team_roles made of them (later ones win)."""
+    roles = team_roles(t, picks, game, player, on_field)
+    for m in kits or []:
+        if m["cluster"] >= 0:
+            roles[m["cluster"]] = m["team"]
     role = labelled_ours(t, picks, box_roles(t, roles))
     for sg in not_ours(t, picks):
         a, b = t.window(sg["start"], sg["end"])
@@ -1065,16 +1168,23 @@ _roles_cache: dict = {}
 
 def roles_for(store: Store, game: Game, model: str = DEFAULT_MODEL) -> tuple[dict[int, str], np.ndarray] | None:
     """team_roles and box_roles for the game's saved tracklets, for the default player; cached until
-    the tracklets or the picks change. None if not tracked."""
+    the tracklets, the picks (and kit marks, which re-save them) or the positions on the field (which say
+    which kits are on it) change. None if not tracked."""
+    from soccer_clips.track import positions
+
     t = tracks(store, game, model)
     if t is None:
         return None
     pp = _picks_path(store, game)
+    pos = positions.load(store, game) if model == DEFAULT_MODEL else None
+    on = ~pos["off"] & np.isfinite(pos["xy"][:, 0]) if pos is not None and len(pos["off"]) == len(t.track) else None
     key = (str(path(store, game, model)), path(store, game, model).stat().st_mtime,
-           pp.stat().st_mtime if pp.exists() else 0, store.settings.default_player)
+           pp.stat().st_mtime if pp.exists() else 0, store.settings.default_player,
+           positions.key(store, game) if on is not None else None)
     if key not in _roles_cache:
         _roles_cache.clear()
-        _roles_cache[key] = roles_of(t, load_picks(store, game), game, store.settings.default_player)
+        kits = kit_marks(t, load_kit_marks(store, game), game.fps) if model == DEFAULT_MODEL else None
+        _roles_cache[key] = roles_of(t, load_picks(store, game), game, store.settings.default_player, on, kits)
     return _roles_cache[key]
 
 
