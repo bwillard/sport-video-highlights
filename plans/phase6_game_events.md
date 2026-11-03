@@ -7,7 +7,7 @@
 ## What we want out of it
 - **Game log:** `12:34  #38 → #15  pass, 14 m forward, mid → final third`, `12:37  #15  shot (saved)`, `13:02  #7  won the ball (interception)`, and so on, each a link to that moment of the video.
 - **Per game:** possession share per team, per half, and with the ball in each third (thirds counted from our attacking direction); passes attempted / completed per team; longest chains; shots, saves and goals.
-- **Per player:** touches, time on the ball, passes attempted / completed and to whom, shots, balls won and lost.
+- **Per player (our team only):** touches, time on the ball, passes attempted / completed / into danger and to whom, shots, balls won and lost. The other team is counted as a team, never per player, so their players needn't be told apart.
 - **Plays:** moments rated good or bad (6.8), which become suggested clips (4.4's accept / reject idea).
 
 ## The approach: rules on the tracks we have, measured against labelled events
@@ -31,7 +31,7 @@ Each layer is recomputed cheaply from the one below (like following by place, `t
 ## 6.0 — Prerequisites
 - **5.4 positions** (`pitch place`): every box's feet and the ball in metres, smoothed along tracklets, with the off-pitch filter (bench, parents). Events need positions stored per box, not placed in the browser as the map does now.
 - **Attacking direction per half:** which goal we attack in each half, for "forward", thirds, and which goal a shot is on. Worked out from where our team stands at each kickoff (each team kicks off from its own half), stored per game with an override in the tagger.
-- **Keepers:** each team's keeper wears a different kit, so the kit clustering (4.2) most likely puts them in 'other' with the referee. A keeper is the 'other' player who spends most of a half inside one penalty area. Needed for saves and to count keepers as part of their team.
+- **Keepers:** each team's keeper wears a different kit, so the kit clustering (4.2) most likely puts them in 'other' with the referee. A keeper is the 'other' player who spends most of a half inside one penalty area. Needed for saves and to count keepers as part of their team. Our keeper isn't assumed to be the same player every game (or every half): found per half, named if their tracklets are labelled, and otherwise "our goalie" in the log. The other team's is always "their goalie".
 - **Ball out of play:** the ball crossing a touchline or goal line (from 5.6's list), and restarts: the ball filter already finds a parked ball that gets kicked (`ball_track.kicked`); where it was parked says what the restart was (corner, goal kick, throw-in from the touchline, free kick, kickoff from the centre spot).
 
 ## 6.1 — Event labels and yardsticks (build early)
@@ -55,7 +55,7 @@ The robust base layer, useful on its own for possession time even before touches
 ## 6.3 — Touches
 A touch is a moment the ball's motion changes because a player played it: a kick (it speeds up), a trap (it slows or stops), a turn or deflection (its direction changes).
 - **Candidates** from the ball in metres: sharp changes in speed or direction, plus kicks of a parked ball (restarts).
-- **Who:** the player whose feet are nearest the ball at that moment, within reach. Their name if they're labelled or guessed; otherwise "our #?" or "opponent". Ties within a few tenths of a metre stay ambiguous rather than guessed.
+- **Who:** the player whose feet are nearest the ball at that moment, within reach. For our team, their name if they're labelled or guessed, otherwise "our #?"; for theirs, just "opponent" (or "their goalie"). Ties within a few tenths of a metre stay ambiguous rather than guessed.
 - **Dribbling:** a player keeping the ball close over several touches is one possession with many touches, not many events.
 - The weak spot: crowds around the ball, where several feet are within reach and the ball is hidden. Those touches get a lower confidence and are the first candidates for a learned spotter (6.9).
 - Output: `tracks/events.json` with each touch's frame, place, tracklet, team, player, kind and confidence.
@@ -66,6 +66,7 @@ From the touches:
 - **A pass** is a possession ending in a kick, with the next touch by someone else. The pass is from the kicker to that player.
   - **Completed:** the receiver is on the same team.
   - **Bad pass (lost):** the next touch is an opponent's (interception), or the ball goes out of play off our kick (lost out). A long ball into space that an opponent collects is a bad pass too; one that a teammate runs onto is completed.
+  - **Pass into danger:** completed, but the receiver loses the ball before holding it long enough. "Long enough" is a setting to tune against labelled passes, starting at about 2 s of the receiver's possession (or a second touch, whichever is the better rule once measured). Counted as completed in the completion numbers and listed separately, so a player's numbers show both.
   - **Possibly a shot, a cross or a clearance**, not a pass: decided by direction and place (a kick at goal is a shot, 6.5; a long kick out of our own third under pressure with no teammate near its end is a clearance).
 - **Properties of a pass:** length, direction relative to our attacking direction (forward, sideways, back), start and end third, and whether it's in the air.
 - **Chains:** consecutive completed passes within one team possession. Stats: number of chains of 2, 3, 4+ passes, the longest, and what each ended in (shot, lost, out).
@@ -79,7 +80,7 @@ Few per game and high value, so these should be near-perfect, and the game log o
   - **Save:** the next touch is the defending keeper's (6.0), in or near their area. Caught, parried and pushed out for a corner all count; a corner restart right after also means saved or deflected.
   - **Blocked:** the next touch is a defending field player near the shooter.
   - **Wide / over:** the ball crosses the goal line outside the posts, or over the bar with no kickoff after, and play restarts with a goal kick.
-- **Yardstick:** the 35 goal and 10 shot clips, plus the game's score if you record it in `game.json` (goals for and against per game would be a cheap, exact check).
+- **Yardstick:** the 35 goal and 10 shot clips, plus each game's final score, entered in the tagger and stored in `game.json` (goals for and against: a cheap, exact check).
 
 ## 6.6 — Defence: balls won and lost
 From possession changes between teams, by how they happened:
@@ -99,7 +100,7 @@ From possession changes between teams, by how they happened:
 Two steps, the second only if the first proves too blunt.
 - **Rules first**, so every rating can be explained:
   - Good: a completed forward pass that moves the ball into the final third or past opponents near the ball; a chain of 4+ passes; a shot on target; a save; winning the ball in their half.
-  - Bad: a pass intercepted in our own third; losing the ball in our own third; a shot well wide from far out.
+  - Bad: a pass intercepted in our own third; a pass into danger; losing the ball in our own third; a shot well wide from far out.
 - **Then a value of each action** from where it moves the ball: expected threat (xT), a published grid of how likely a team is to score from each zone of the field, learned from professional event data. The value of a pass is the grid at its end minus the grid at its start; losing the ball costs the grid's value at that place for the other team. A 9v9 field can be mapped onto the grid in field-relative terms (fractions of length and width), not metres. It rates moves no rule lists, and it's the same measure for every player. It is professional, not youth, soccer, so treat its numbers as a ranking, not as truth.
 - **Output:** each event's rating feeds suggested clips: the best and worst moments of a player's game, offered for accept / reject into normal clips (4.4's plan).
 
@@ -130,17 +131,21 @@ If touches in crowds or airborne passes stay weak, fine-tune an action-spotting 
 - [ ] 6.1 Label dense windows (six windows, three games)
 - [ ] 6.2 Ball state and control by team; possession time per team, half and third
 - [ ] 6.3 Touches, with player and confidence; measured on the dense windows
-- [ ] 6.4 Passes (completed / lost / out), properties, chains
-- [ ] 6.5 Shots and outcomes (goal, save, blocked, wide); score per game in `game.json`
+- [ ] 6.4 Passes (completed / into danger / lost / out), properties, chains; tune how long the receiver must keep the ball
+- [ ] 6.5 Final score per game: entry in the tagger, stored in `game.json`
+- [ ] 6.5 Shots and outcomes (goal, save, blocked, wide)
 - [ ] 6.6 Balls won and lost, by kind and third
 - [ ] 6.7 Event list and timeline in the tagger, corrections, stats page, Player view event filter
 - [ ] 6.8 Good / bad rules, then expected threat; suggested clips
 - [ ] 6.9 (later) learned spotter if the rules plateau
 
+## Decided (2026-11-02)
+- **Passes into danger** are their own category: completed, but the receiver loses the ball too soon. How long they must keep it is a setting to tune against labels.
+- **The other team** is counted as a team only (possession, passes, shots); no per-player numbers for them.
+- **Final scores:** you'll enter each game's score in the tagger; it's the exact check on goals.
+- **Keepers:** our keeper isn't assumed to be one player (it is this season). Found per half; "our goalie" / "their goalie" in the log when not named.
+
 ## Open questions
-- **Bad pass:** only passes that go to the other team or out, or also a pass to a teammate who loses it at once (a "hospital pass")?
-- **Both teams or ours:** team-level stats for both teams come almost free; per-player numbers are only possible for ours. Is the opponents' side of the log wanted?
-- **Score per game:** would you enter the final score (and goal times, if known) in the tagger? It's the cheapest exact check on goals.
-- **Our keeper:** same player every game, or rotating? If one player, naming them once helps the keeper rule.
+- None yet.
 
 ## Findings
