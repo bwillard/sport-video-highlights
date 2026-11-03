@@ -125,7 +125,7 @@
       <span id="flash"></span>
       <div id="calBanner" hidden></div>
       <div id="evBanner" hidden>labelling events at the playhead, on the player under the mouse:
-        <kbd>T</kbd> touch · <kbd>P</kbd> pass · <kbd>S</kbd> shot · <kbd>V</kbd> save · <kbd>G</kbd> goal · <kbd>W</kbd> won the ball ·
+        <kbd>T</kbd> touch · <kbd>P</kbd> pass or kick · <kbd>S</kbd> shot · <kbd>V</kbd> save · <kbd>G</kbd> goal · <kbd>W</kbd> won the ball ·
         <kbd>U</kbd> take back · <kbd>Esc</kbd> stop</div>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
@@ -184,9 +184,11 @@
       </ul></details>
       <details data-sec="events"><summary>Events</summary><ul>
         <li><kbd>Shift</kbd>+<kbd>E</kbd> (or ✍️ label events) label events, until <kbd>Esc</kbd>: pause where it happens, point at the
-          player, and press <kbd>T</kbd> touch, <kbd>P</kbd> pass, <kbd>S</kbd> shot, <kbd>V</kbd> save, <kbd>G</kbd> goal (when it
+          player, and press <kbd>T</kbd> touch, <kbd>P</kbd> pass or kick, <kbd>S</kbd> shot, <kbd>V</kbd> save, <kbd>G</kbd> goal (when it
           crosses the line, on the scorer), <kbd>W</kbd> won the ball (the touch that won it). A pass, shot or save is a touch too, so
-          label it once with its own key. Not pointing at anyone: the event has no player. <kbd>U</kbd> takes back the last one.
+          label it once with its own key. <kbd>P</kbd> is any kick that sends the ball on: a pass, whether it reaches a teammate or not,
+          or a clear / kick up the field with no one in mind. Don't judge it: the next touch (<kbd>T</kbd> on whoever gets it, ours
+          or theirs) says how it turned out. Not pointing at anyone: the event has no player. <kbd>U</kbd> takes back the last one.
           While it's on these keys label instead of their usual jobs; space, arrows and <kbd>,</kbd> <kbd>.</kbd> still move the video</li>
         <li><b>Full windows</b> (Events box): a stretch where you label every touch, start to end; a few minutes at a time. They
           measure what the event finding finds and misses. Labels elsewhere only check what they cover</li>
@@ -271,7 +273,7 @@
     </div>
     <div class="box" id="events">
       <div class="row"><b>Events</b> <span class="stat" id="evCount"></span>
-        <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass, S shot, V save, G goal, W won the ball. A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
+        <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass or kick (aimed or a clear; the next touch says how it went), S shot, V save, G goal, W won the ball. A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
       <div class="row stat"><button id="evWindow" title="A full window is a stretch where you label every touch, so it can measure what's found and what's missed (elsewhere a label only says something happened). Start one, label every touch, then end it here. A few minutes at a time.">⏺ full window from here</button>
         <span id="evWindows"></span></div>
       <ul id="evList" class="list"></ul>
@@ -1986,7 +1988,7 @@ function toggleEventMode(on = !evMode) {
   if (on && !showPeople) togglePeople();  // see who you're pointing at
   $("evBanner").hidden = !on;
   $("evMode").classList.toggle("on", on);
-  flash(on ? "labelling events: T touch, P pass, S shot, V save, G goal, W won · Esc stops" : "stopped labelling events");
+  flash(on ? "labelling events: T touch, P pass/kick, S shot, V save, G goal, W won · Esc stops" : "stopped labelling events");
 }
 function eventKey(e) {
   // in event mode: a kind's key labels it, U takes back, Esc stops; true if the key was used
