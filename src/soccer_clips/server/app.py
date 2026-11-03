@@ -699,9 +699,11 @@ def create_app(store: Store | None = None) -> FastAPI:
         """
         Every tracked box in game frames [start, end), as little-endian float32 rows of frame,
         track, x1, y1, x2, y2 (fractions of the frame), team (0 ours, 1 opponents, 2 other, -1
-        unknown; people.box_roles), sorted by frame. Binary because a minute is ~50k boxes.
+        unknown; people.box_roles), then feet on the field x, y (metres) and off the field (1 / 0;
+        positions.py; NaN, NaN, 0 while the game's positions aren't made: they're started in the
+        background), sorted by frame. Binary because a minute is ~50k boxes.
         """
-        from soccer_clips.track import people
+        from soccer_clips.track import people, positions
 
         if not 0 <= start <= end or end - start > PEOPLE_MAX_FRAMES:
             raise HTTPException(422, f"ask for up to {PEOPLE_MAX_FRAMES} frames")
@@ -711,7 +713,13 @@ def create_app(store: Store | None = None) -> FastAPI:
             return Response(b"", media_type="application/octet-stream")
         a, b = t.window(start, end)
         team = people.roles_for(store, game)[1][a:b].astype(np.float32)
-        rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b], team]).astype("<f4")
+        pos = positions.load(store, game)
+        if pos is not None and len(pos["xy"]) == len(t.frame):
+            xy, off = pos["xy"][a:b], pos["off"][a:b]
+        else:
+            positions.build_soon(store, game)
+            xy, off = np.full((b - a, 2), np.nan), np.zeros(b - a)
+        rows = np.column_stack([t.frame[a:b], t.track[a:b], t.box[a:b], team, xy, off]).astype("<f4")
         return Response(rows.tobytes(), media_type="application/octet-stream")
 
     @app.post("/api/games/{game_id}/people/picks")

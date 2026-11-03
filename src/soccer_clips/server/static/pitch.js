@@ -275,16 +275,24 @@ function pitchBall(ball, f, Ginv, frameW, frameH, fps, size) {
 }
 
 function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
-  // map dots from box rows (frame, track, x1, y1, x2, y2 as fractions, team, ...): feet = bottom centre.
-  // opts.ring(track); opts.num(track) = [number, guessed] for our players whose number is known (else a dot);
-  // people more than 3 m outside the lines (spectators, benches) are left off
+  // map dots from box rows (frame, track, x1, y1, x2, y2 as fractions, team, pitch x, y, off the field).
+  // opts.ring(track); opts.num(track) = [number, guessed] for our players whose number is known (else a dot).
+  // Where the server has placed the game (positions.py: smoothed, the bench and parents flagged off the field)
+  // its positions are used; until then the feet (bottom centre) are placed here, and people more than 3 m
+  // outside the lines are left off
   const out = [];
   if (!G) return out;
   const Gi = inv3(G), L = opts.length ?? 70, Wd = opts.width ?? 46;
   for (let i = i0; i < i1; i++) {
     const o = i * stride;
-    const p = pixelToPitch(Gi, (rows[o + 2] + rows[o + 4]) / 2 * frameW, rows[o + 5] * frameH);
-    if (!p || Math.abs(p[0]) > L / 2 + 3 || Math.abs(p[1]) > Wd / 2 + 3) continue;
+    let p;
+    if (stride >= 10 && Number.isFinite(rows[o + 7])) {
+      if (rows[o + 9]) continue;
+      p = [rows[o + 7], rows[o + 8]];
+    } else {
+      p = pixelToPitch(Gi, (rows[o + 2] + rows[o + 4]) / 2 * frameW, rows[o + 5] * frameH);
+      if (!p || Math.abs(p[0]) > L / 2 + 3 || Math.abs(p[1]) > Wd / 2 + 3) continue;
+    }
     const track = rows[o + 1];
     // numbers for our team, and for anyone labelled or guessed as one of ours whose kit didn't read as ours
     // (half hidden behind the referee); never on the opponents
@@ -295,9 +303,9 @@ function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {
 }
 
 function boxFrames(gameId) {
-  // every tracked box (people/boxes: rows of frame, track, x1, y1, x2, y2, team), fetched in chunks around the
-  // playhead; at(f) = [i0, i1, rows] or null while loading
-  const STRIDE = 7, chunks = new Map();
+  // every tracked box (people/boxes: rows of frame, track, x1, y1, x2, y2, team, pitch x, y, off), fetched in
+  // chunks around the playhead; at(f) = [i0, i1, rows] or null while loading
+  const STRIDE = 10, chunks = new Map();
   function rows(ci) {
     const c = chunks.get(ci);
     if (c instanceof Float32Array) return c;

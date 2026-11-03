@@ -1097,7 +1097,7 @@ function drawRaw(ctx) {
 // frame, track, x1, y1, x2, y2, team), loaded around the playhead as it moves. The followed player
 // is whichever tracklet stretches the picks label with their number (people.segments).
 const CHUNK = 450;  // frames per request (15 s)
-const STRIDE = 7;  // values per box row
+const STRIDE = 10;  // values per box row (people/boxes: frame, track, x1, y1, x2, y2, team, pitch x, y, off)
 // boxes by team (people.box_roles): 0 ours, 1 opponents, 2 the rest (refs, keepers, spectators), -1 unknown
 const TEAM_STYLE = { 0: ["rgba(255,255,255,0.75)", []], 1: ["rgba(90,176,255,0.7)", []],
                      2: ["rgba(170,170,170,0.45)", [3, 3]] };

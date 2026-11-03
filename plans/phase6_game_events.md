@@ -1,8 +1,8 @@
 # Phase 6 — Game Events (what happened, not just where everyone was)
 
-**Status (2026-11-02):** Planned, nothing built. Needs 5.4 (stored, smoothed pitch positions) first.
+**Status (2026-11-02):** Planned. 5.4 (stored, smoothed positions) is built; the other 6.0 prerequisites are next.
 **Goal:** For each game, a log of what happened with the ball: who had it and for how long, every pass (who to whom, completed or not), chains of passes, shots and who took them, saves, goals, and who won or lost the ball. Built on that: possession time per team and per third of the field, per-player numbers, and a first rating of good and bad plays.
-**Depends on:** Phase 4.1 ball path, 4.2 teams, 4.3 names, 5.2 calibration (all built) and 5.4 positions (not built).
+**Depends on:** Phase 4.1 ball path, 4.2 teams, 4.3 names, 5.2 calibration (all built) and 5.4 positions (built 2026-11-02).
 
 ## What we want out of it
 - **Game log:** `12:34  #38 → #15  pass, 14 m forward, mid → final third`, `12:37  #15  shot (saved)`, `13:02  #7  won the ball (interception)`, and so on, each a link to that moment of the video.
@@ -123,7 +123,7 @@ If touches in crowds or airborne passes stay weak, fine-tune an action-spotting 
 - **Errors compound:** a missed touch can turn one pass into another, or a completed pass into a lost one. Each layer gets its own yardstick so problems are found where they start.
 
 ## Tasks
-- [ ] 6.0 5.4 positions stored per box and for the ball, with the off-pitch filter (Phase 5)
+- [x] 6.0 5.4 positions stored per box and for the ball, with the off-pitch filter (Phase 5; 2026-11-02, `track/positions.py`)
 - [ ] 6.0 Attacking direction per half (from kickoffs, override in the tagger)
 - [ ] 6.0 Keepers found per team per half
 - [ ] 6.0 Ball out of play and restart kinds

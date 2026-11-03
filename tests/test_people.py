@@ -166,7 +166,7 @@ def test_people_api(store):
                            ).status_code == 422  # not tracked yet
         two_players(store)
         assert client.get(url).json()["ranges"] == [[0, 100]]
-        rows = np.frombuffer(client.get(f"{url}/boxes", params={"start": 10, "end": 20}).content, "<f4").reshape(-1, 7)
+        rows = np.frombuffer(client.get(f"{url}/boxes", params={"start": 10, "end": 20}).content, "<f4").reshape(-1, 10)
         assert len(rows) == 20 and set(rows[:, 0]) == set(range(10, 20)) and set(rows[:, 6]) == {-1}  # no kit yet
         assert np.allclose(rows[rows[:, 2] < 0.5][0, 2:6], [0.1, 60 / 180, 0.2, 120 / 180], atol=1e-4)
         assert client.get(f"{url}/boxes", params={"start": 0, "end": 5000}).status_code == 422

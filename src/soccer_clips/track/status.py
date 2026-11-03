@@ -2,7 +2,7 @@
 The games page: where each game is in the pipeline, and how much of our team the tracking names.
 
 - `stages`: which steps have been run on a game (detection, kit, tracking, crops, signatures, ball, field
-  calibration, game time, labels), each ok / partial / stale (made before something it's built from was redone)
+  calibration, positions on the field, game time, labels), each ok / partial / stale (made before something it's built from was redone)
   / missing, with what to run to fix it. Only file dates and small arrays: fast enough for every game at once.
 - `recognition`: of our team's time on the field (players on screen, within FIELD_PAD_M of the lines and not
   standing still by a touchline, in game time), how much is labelled, guessed by appearance, guessed by place on the field, or nobody yet; per player,
@@ -61,7 +61,7 @@ def game_spans(game: Game) -> list[tuple[int, int]] | None:
 
 
 def stages(store: Store, game: Game) -> dict:
-    from soccer_clips.track import ball_game, kit, people, pitch, reid, world
+    from soccer_clips.track import ball_game, kit, people, pitch, positions, reid, world
 
     d = ball_game.tracks_dir(store, game)
     total = game.frame_at(game.duration_s)
@@ -177,6 +177,20 @@ def stages(store: Store, game: Game) -> dict:
                                   if bad or "rejected" in cal else
                                   "tagger: click spots in the views not placed yet" if cov < 0.9 else None)
 
+    fix = f"soccer-clips pitch place {game.id} (or open the game's field map: made in the background)"
+    if out["field"]["state"] == "missing" or out["track"]["state"] == "missing":
+        out["positions"] = _stage("missing", "—", "Needs the tracklets and the field calibrated first")
+    else:
+        got = positions.saved_stats(store, game)
+        if got is None:
+            out["positions"] = _stage("missing", "—", "Players and ball not placed on the field yet", fix)
+        else:
+            st, current = got
+            tip = (f"{st['placed']:.0%} of boxes placed on the field, {st['off']:.0%} of them off it (bench, parents); "
+                   f"ball placed in {st['ball_placed']:.0%} of its path")
+            out["positions"] = (_stage("ok", f"{st['placed']:.0%}", tip) if current else
+                                _stage("stale", "older", "Tracked, calibrated or ball path redone since", fix))
+
     picks = people.load_picks(store, game)
     named = {p["player"] for p in picks if p["kind"] == "is"}
     n = sum(p["kind"] == "is" for p in picks)
@@ -243,11 +257,12 @@ def recognition(store: Store, game: Game) -> dict | None:
         return {**out, "current": True}
 
 
-def still_by_line(track: np.ndarray, frame: np.ndarray, xy: np.ndarray, width: float, fps: float) -> np.ndarray:
-    """Per box (sampled every STEP frames): whether its tracklet stays put (x and y each within SIDELINE_SD_M,
+def still_by_line(track: np.ndarray, frame: np.ndarray, xy: np.ndarray, width: float, fps: float,
+                  step: int = STEP) -> np.ndarray:
+    """Per box (sampled every `step` frames): whether its tracklet stays put (x and y each within SIDELINE_SD_M,
     one standard deviation) within SIDELINE_M of a touchline or beyond it, over SIDELINE_S each way (at least
     SIDELINE_S of it tracked)."""
-    half = int(round(SIDELINE_S * fps / STEP))
+    half = int(round(SIDELINE_S * fps / step))
     order = np.lexsort((frame, track))
     k = track[order]
     good = np.isfinite(xy[order]).all(axis=1)

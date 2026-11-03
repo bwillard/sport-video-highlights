@@ -300,6 +300,25 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
             Path(args.json).write_text(json.dumps(out, indent=2))
 
 
+def cmd_pitch(store: Store, args: argparse.Namespace) -> None:
+    from soccer_clips.track import positions
+
+    ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
+    for gid in ids:
+        game = store.load_game(gid)
+        if not args.force and positions.load(store, game) is not None:
+            print(f"{gid}: up to date")
+            continue
+        try:
+            st = positions.place(store, game, log=lambda m: print(m, flush=True))
+        except ValueError as e:
+            print(f"{gid}: skipped ({e})")
+            continue
+        print(f"  frame to frame, median: near half {st['near_step_m']} m, at a seam between views "
+              f"{st['near_seam_m']} m ({st['near_seam_n']}); far half {st['far_step_m']} m, at a seam "
+              f"{st['far_seam_m']} m ({st['far_seam_n']}); smoothing moved boxes {st['smoothing_m']} m", flush=True)
+
+
 def cmd_gametime(store: Store, args: argparse.Namespace) -> None:
     from soccer_clips import gametime
 
@@ -588,6 +607,12 @@ def main() -> None:
                         help=f"join tracklets across gaps up to this many seconds (0 = off; default {dp.link_gap_s})")
         sp.add_argument("--link-kit", type=float, default=dp.link_kit, help="...if their kits are at most this far apart")
         sp.add_argument("--link-heights", type=float, default=1.0, help="...and the start is this close (box heights)")
+    pt = sub.add_parser("pitch", help="the field: where players and the ball are on it (Phase 5)")
+    pt_sub = pt.add_subparsers(dest="pitch_command", required=True)
+    pl = pt_sub.add_parser("place", help="place every player box and the ball on the field in metres "
+                           "(tracks/pitch.npz; CPU, ~30 s a game)")
+    pl.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
+    pl.add_argument("--force", action="store_true", help="redo games whose positions are up to date")
     gt = sub.add_parser("gametime", help="when each half is played; cut videos down to game time")
     gt_sub = gt.add_subparsers(dest="gametime_command", required=True)
     sg = gt_sub.add_parser("suggest", help="suggest half start/end times from the player tracks")
@@ -662,7 +687,7 @@ def main() -> None:
     args = parser.parse_args()
 
     store = Store(get_settings())
-    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people, "gametime": cmd_gametime,
+    {"scan": cmd_scan, "list": cmd_list, "serve": cmd_serve, "bench": cmd_bench, "ball": cmd_ball, "people": cmd_people, "pitch": cmd_pitch, "gametime": cmd_gametime,
      "reid": cmd_reid, "gpu": cmd_gpu}[args.command](store, args)
 
 
