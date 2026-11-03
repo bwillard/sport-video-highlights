@@ -54,6 +54,19 @@ class GamePatch(RequestBody):
     attack_1h: Literal["left", "right"] | None = None
 
 
+class EventIn(RequestBody):
+    frame: int = Field(ge=0)
+    kind: str  # events.KINDS
+    x: float | None = None  # where the player was pointed at (fractions of the frame); none: not on a player
+    y: float | None = None
+    track: int | None = None  # the tracklet under it, as the page saw it
+
+
+class WindowIn(RequestBody):
+    start: int = Field(ge=0)  # frames
+    end: int = Field(ge=0)
+
+
 class ClipCreate(RequestBody):
     start_s: float
     end_s: float
@@ -775,6 +788,56 @@ def create_app(store: Store | None = None) -> FastAPI:
             return pitch.remove_point(store, load(game_id), index)
         except ValueError as e:
             raise HTTPException(404, str(e))
+
+    @app.get("/api/games/{game_id}/events/labels")
+    def game_event_labels(game_id: str) -> dict:
+        """Your event labels (events.py, made with Shift+E in the tagger) with who each was as things stand, and
+        the full windows (every touch labelled)."""
+        from soccer_clips.track import events
+
+        return events.resolved(store, load(game_id))
+
+    @app.post("/api/games/{game_id}/events/labels")
+    def game_event_add(game_id: str, body: EventIn) -> dict:
+        """Label an event; returns it and the labels."""
+        from soccer_clips.track import events
+
+        game = load(game_id)
+        try:
+            ev = events.add_event(store, game, body.frame, body.kind, body.x, body.y, body.track)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"event": ev, **events.resolved(store, game)}
+
+    @app.delete("/api/games/{game_id}/events/labels/{event_id}")
+    def game_event_remove(game_id: str, event_id: str) -> dict:
+        from soccer_clips.track import events
+
+        game = load(game_id)
+        if not events.remove_event(store, game, event_id):
+            raise HTTPException(404, "no such event label")
+        return events.resolved(store, game)
+
+    @app.post("/api/games/{game_id}/events/windows")
+    def game_event_window(game_id: str, body: WindowIn) -> dict:
+        """A full window: every touch in it is labelled (overlapping ones merge)."""
+        from soccer_clips.track import events
+
+        game = load(game_id)
+        try:
+            events.add_window(store, game, body.start, body.end)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return events.resolved(store, game)
+
+    @app.delete("/api/games/{game_id}/events/windows/{window_id}")
+    def game_event_window_remove(game_id: str, window_id: str) -> dict:
+        from soccer_clips.track import events
+
+        game = load(game_id)
+        if not events.remove_window(store, game, window_id):
+            raise HTTPException(404, "no such window")
+        return events.resolved(store, game)
 
     @app.get("/api/games/{game_id}/match")
     def game_match(game_id: str) -> dict:

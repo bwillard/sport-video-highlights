@@ -1,6 +1,6 @@
 # Phase 6 — Game Events (what happened, not just where everyone was)
 
-**Status (2026-11-02):** 6.0 built (`track/match.py`, `soccer-clips pitch match`): restarts, which goal we attack each half (sure in all seven games, and every rated goal clip agrees), goalies, out-of-play stretches; the tagger's Game time box sets the direction by hand if needed and the map says which way we attack. Next: 6.1, event labelling.
+**Status (2026-11-02):** 6.0 built (`track/match.py`, `soccer-clips pitch match`): restarts, which goal we attack each half (sure in all seven games, and every rated goal clip agrees), goalies, out-of-play stretches; the tagger's Game time box sets the direction by hand if needed and the map says which way we attack. 6.1's labelling is built (Shift+E in the tagger, full windows in its Events box; `track/events.py`). Next: label a few full windows (you), then 6.2.
 **Goal:** For each game, a log of what happened with the ball: who had it and for how long, every pass (who to whom, completed or not), chains of passes, shots and who took them, saves, goals, and who won or lost the ball. Built on that: possession time per team and per third of the field, per-player numbers, and a first rating of good and bad plays.
 **Depends on:** Phase 4.1 ball path, 4.2 teams, 4.3 names, 5.2 calibration (all built) and 5.4 positions (built 2026-11-02).
 
@@ -42,6 +42,7 @@ Each layer is recomputed cheaply from the one below (like following by place, `t
 - *Out of play: from the ball crossing a line (looking back from a restart on a line or a kickoff, never past the half's start), else from when it stopped, to the restart kick.*
 
 ## 6.1 — Event labels and yardsticks (build early)
+*As built (2026-11-02): **Shift+E** in the tagger (plain E exports, and every other letter was taken) starts labelling until Esc: T touch, P pass, S shot, V save, G goal, W won the ball, U takes back; space, arrows and , . still move the video. A pass, shot or save is a touch too, labelled once with its own key. Each label is the frame, the kind and where the mouse was (the hovered box's centre when players are shown), matched to the tracklet under it whenever read; the list in the Events box shows who (name, guess, our / their goalie, team). Full windows: ⏺ / ⏹ in the Events box. Labels show on the video as the kind's letter on the player for half a second either side, and on the timeline as ticks (windows as a band).*
 Everything after this needs something to be measured against, so labelling comes first.
 - **Labelling in the tagger:** an event mode (`E`, then a key) that marks the moment: touch by the player under the mouse, pass, shot, save, goal, ball won. Stored like other picks, as clicks (frame, position) in `tracks/event_labels.json`, matched to tracklets each time so they survive re-tracking.
 - **Dense windows:** a few 3–5 minute stretches per game where *every* touch is labelled. These measure touches and possession completely (precision and recall). Six windows across three games, about 20 minutes of play, is a starting target (roughly 150–250 touches).
@@ -135,7 +136,8 @@ If touches in crowds or airborne passes stay weak, fine-tune an action-spotting 
 - [x] 6.0 Keepers found per team per half (90–100% of the time the ball is near their goal in most game-halves; weak spots in Findings)
 - [x] 6.0 Ball out of play and restart kinds
 - [ ] 6.0 Goalie gaps: FC-1's our end (calibration near its goals), PRSC's theirs; a tagger click "this is their goalie" if more clicks near the goals don't do it
-- [ ] 6.1 Event labelling mode in the tagger, `event_labels.json`, `events eval`
+- [x] 6.1 Event labelling mode in the tagger (Shift+E: T touch, P pass, S shot, V save, G goal, W won), `event_labels.json`, full windows in the Events box (2026-11-02)
+- [ ] 6.1 `events eval`: comes with the first events found (6.2 / 6.3)
 - [ ] 6.1 Label dense windows (six windows, three games)
 - [ ] 6.2 Ball state and control by team; possession time per team, half and third
 - [ ] 6.3 Touches, with player and confidence; measured on the dense windows

@@ -67,6 +67,14 @@
   /* while calibrating: says so over the video, since clicks there place points instead of pausing */
   #calBanner { position: absolute; top: 8px; left: 8px; max-width: 60%; padding: 6px 10px; border-radius: 5px; z-index: 2;
                background: rgba(40, 0, 40, 0.85); border: 2px solid #ff3df5; color: #fff; font-size: 13px; pointer-events: none; }
+  /* labelling events (Shift+E): the keys it takes over, over the video */
+  #evBanner { position: absolute; bottom: 8px; left: 8px; max-width: 75%; padding: 6px 10px; border-radius: 5px; z-index: 2;
+              background: rgba(0, 30, 40, 0.85); border: 2px solid #40e0ff; color: #fff; font-size: 13px; pointer-events: none; }
+  #evBanner kbd { color: #40e0ff; }
+  #events .list { max-height: 30vh; }
+  #events .list li { grid-template-columns: 64px 54px 1fr auto; }
+  #events .list li.near { background: #1d3550; }
+  #events button.x { padding: 0 6px; }
 </style>
 </head>
 <body>
@@ -116,6 +124,9 @@
       <div id="picker" hidden></div>
       <span id="flash"></span>
       <div id="calBanner" hidden></div>
+      <div id="evBanner" hidden>labelling events at the playhead, on the player under the mouse:
+        <kbd>T</kbd> touch · <kbd>P</kbd> pass · <kbd>S</kbd> shot · <kbd>V</kbd> save · <kbd>G</kbd> goal · <kbd>W</kbd> won the ball ·
+        <kbd>U</kbd> take back · <kbd>Esc</kbd> stop</div>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <div id="pitchBox" hidden>
@@ -170,6 +181,16 @@
           more points on the circle. Then click goal posts or corners at both ends: they tell it how long and wide the field is</li>
         <li><kbd>Shift</kbd>+<kbd>Q</kbd> (or 📐 field lines) <b>field lines</b>: the calibrated field drawn over the video (magenta), just to look; it's always shown while calibrating. Where it misses the painted lines, add a click
           there. A red × is a click that disagrees with the rest (often on the other set of lines on a double-marked field): click it to remove it</li>
+      </ul></details>
+      <details data-sec="events"><summary>Events</summary><ul>
+        <li><kbd>Shift</kbd>+<kbd>E</kbd> (or ✍️ label events) label events, until <kbd>Esc</kbd>: pause where it happens, point at the
+          player, and press <kbd>T</kbd> touch, <kbd>P</kbd> pass, <kbd>S</kbd> shot, <kbd>V</kbd> save, <kbd>G</kbd> goal (when it
+          crosses the line, on the scorer), <kbd>W</kbd> won the ball (the touch that won it). A pass, shot or save is a touch too, so
+          label it once with its own key. Not pointing at anyone: the event has no player. <kbd>U</kbd> takes back the last one.
+          While it's on these keys label instead of their usual jobs; space, arrows and <kbd>,</kbd> <kbd>.</kbd> still move the video</li>
+        <li><b>Full windows</b> (Events box): a stretch where you label every touch, start to end; a few minutes at a time. They
+          measure what the event finding finds and misses. Labels elsewhere only check what they cover</li>
+        <li>Labels show on the video as a letter on the player near their moment, and as ticks on the timeline (bands = full windows)</li>
       </ul></details>
       <details data-sec="players"><summary>Players</summary><ul>
         <li><kbd>V</kbd> show tracked players: boxes by kit (white = our team, blue = opponents, grey dashed = refs, keepers,
@@ -241,6 +262,13 @@
       <div class="row stat"><label title="Which goal we attack in the 1st half, as the camera sees it (the 2nd half is the other way). Auto: found from where our kit stands at the kickoffs; set it here if that's wrong or not sure. The field map says which way we attack.">we attack in the 1st half
         <select id="gtAttack"><option value="">auto</option><option value="left">← left</option><option value="right">right →</option></select></label>
         <span id="gtAttackNote"></span></div>
+    </div>
+    <div class="box" id="events">
+      <div class="row"><b>Events</b> <span class="stat" id="evCount"></span>
+        <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass, S shot, V save, G goal, W won the ball. A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
+      <div class="row stat"><button id="evWindow" title="A full window is a stretch where you label every touch, so it can measure what's found and what's missed (elsewhere a label only says something happened). Start one, label every touch, then end it here. A few minutes at a time.">⏺ full window from here</button>
+        <span id="evWindows"></span></div>
+      <ul id="evList" class="list"></ul>
     </div>
     <div class="box" id="detail"></div>
   </aside>
@@ -706,6 +734,19 @@ function drawTimeline() {
     ctx.fillStyle = "rgba(255,159,64,0.45)";  // automatic (appearance): a thinner, fainter strip above
     for (const sg of (autoLabels?.gameId === game.id && autoLabels.byPlayer[followWho]) || []) {
       ctx.fillRect(x(sg.start * spf), h - 7, Math.max(1, x((sg.end - sg.start) * spf)), 2);
+    }
+  }
+  if (evLabels?.gameId === game.id) {  // event labels: full windows as a band, each label a tick, along the top
+    ctx.fillStyle = "rgba(64,224,255,0.25)";
+    for (const w of evLabels.windows) ctx.fillRect(x(w.start / fps), 14, Math.max(1, x((w.end - w.start) / fps)), 5);
+    if (evWindowStart?.gameId === game.id) {
+      ctx.fillStyle = "rgba(64,224,255,0.5)";
+      const a = evWindowStart.frame / fps;
+      ctx.fillRect(x(a), 14, Math.max(1, x(v.currentTime) - x(a)), 5);
+    }
+    for (const ev of evLabels.events) {
+      ctx.fillStyle = EV_KINDS[ev.kind]?.[2] || "#fff";
+      ctx.fillRect(x(ev.frame / fps), 14, 1, 7);
     }
   }
   ctx.font = "11px system-ui, sans-serif";
@@ -1830,6 +1871,7 @@ function drawOverlay() {
   drawOthers(ctx);
   drawBall(ctx);
   drawPitchLines(ctx);
+  drawEvents(ctx);
   let co = null;
   if (placing) {
     co = placing.x == null ? null : placing;
@@ -1858,6 +1900,136 @@ function drawOverlay() {
   ctx.moveTo(cx, tip); ctx.lineTo(cx - size * 0.6, base); ctx.lineTo(cx + size * 0.6, base);
   ctx.fill();
   ctx.fillRect(cx - size * 0.18, Math.min(base, base + dir * size * 0.6), size * 0.36, size * 0.6);
+}
+
+// ---------- event labels (Phase 6.1) ----------
+// Shift+E: each key labels an event at the playhead on the player under the mouse (events.py). The labels
+// are what the event finding is measured against; full windows are stretches with every touch labelled.
+const EV_KINDS = { touch: ["T", "touch", "#b0bec5"], pass: ["P", "pass", "#4fc3f7"], shot: ["S", "shot", "#ff7043"],
+                   save: ["V", "save", "#ffd54f"], goal: ["G", "goal", "#66bb6a"], won: ["W", "won the ball", "#ce93d8"] };
+const EV_KEYS = Object.fromEntries(Object.entries(EV_KINDS).map(([k, [key]]) => [key.toLowerCase(), k]));
+let evMode = false, evLabels = null;  // evLabels: {gameId, events, windows, counts} (GET events/labels)
+let evDone = [];  // ids labelled since the game was opened, newest last: what U takes back
+let evWindowStart = null;  // {gameId, frame}: a full window started, not ended yet
+async function loadEvents() {
+  if (!game) return;
+  const id = game.id;
+  const got = await getJson(`${gameUrl()}/events/labels`).catch(() => null);
+  if (got && game?.id === id) setEvents(got, id);
+}
+function setEvents(got, id = game.id) {
+  evLabels = { gameId: id, ...got };
+  renderEvents();
+}
+function toggleEventMode(on = !evMode) {
+  evMode = on;
+  if (on && !showPeople) togglePeople();  // see who you're pointing at
+  $("evBanner").hidden = !on;
+  $("evMode").classList.toggle("on", on);
+  flash(on ? "labelling events: T touch, P pass, S shot, V save, G goal, W won · Esc stops" : "stopped labelling events");
+}
+function eventKey(e) {
+  // in event mode: a kind's key labels it, U takes back, Esc stops; true if the key was used
+  const k = e.key.toLowerCase();
+  if (e.key === "Escape") { e.preventDefault(); toggleEventMode(false); return true; }
+  if (e.shiftKey) return false;
+  if (EV_KEYS[k]) { e.preventDefault(); addEvent(EV_KEYS[k]); return true; }
+  if (k === "u") { e.preventDefault(); undoEvent(); return true; }
+  return false;
+}
+function evWho(ev) {
+  const goalie = ev.keeper === 1 ? "our goalie" : ev.keeper === 2 ? "their goalie" : null;
+  if (ev.player != null) return `#${ev.player}${goalie ? " (goalie)" : ""}`;
+  if (ev.guess != null) return `#${ev.guess}?${goalie ? " (goalie)" : ""}`;
+  if (goalie) return goalie;
+  return { 0: "ours", 1: "theirs", 2: "other" }[ev.team] ?? (ev.x == null ? "no player" : "not on a box");
+}
+async function addEvent(kind) {
+  const f = Math.round(v.currentTime * fps);
+  // the player under the mouse: the hovered box's centre (players shown, paused), else the mouse itself
+  const at = hoverBox ? { x: hoverBox.x, y: hoverBox.y, track: hoverBox.track }
+    : hoverAt && hoverAt.x >= 0 && hoverAt.x <= 1 && hoverAt.y >= 0 && hoverAt.y <= 1 ? { x: hoverAt.x, y: hoverAt.y } : {};
+  const id = game.id;
+  const got = await api("POST", `${gameUrl()}/events/labels`, { frame: f, kind, ...at });
+  if (game?.id !== id) return;
+  evDone.push(got.event.id);
+  setEvents(got, id);
+  const ev = got.events.find((x) => x.id === got.event.id);
+  flash(`${EV_KINDS[kind][1]} · ${ev ? evWho(ev) : ""} at ${label(f / fps)}`);
+}
+async function undoEvent() {
+  const eid = evDone.pop();
+  if (!eid) return flash("nothing to take back", true);
+  setEvents(await api("DELETE", `${gameUrl()}/events/labels/${eid}`));
+  flash("took back the last event");
+}
+function renderEvents() {
+  const el = $("evList");
+  if (!evLabels || evLabels.gameId !== game?.id) { el.innerHTML = ""; $("evCount").textContent = ""; return; }
+  const { events: evs, windows, counts } = evLabels;
+  $("evCount").textContent = evs.length ? Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(" · ") : "none yet";
+  const f = Math.round(v.currentTime * fps);
+  el.innerHTML = evs.length ? evs.map((ev) => {
+    const [, name, colour] = EV_KINDS[ev.kind] || ["?", ev.kind, "#fff"];
+    const near = Math.abs(ev.frame - f) <= fps / 2;
+    return `<li data-ev="${ev.id}" data-t="${ev.frame / fps}" class="${near ? "near" : ""}">
+      <span class="t">${esc(label(ev.frame / fps))}</span>
+      <span style="color:${colour}">${esc(name)}</span>
+      <span class="tags" title="${ev.at ? `at ${ev.at[0]}, ${ev.at[1]} m on the field` : "not placed on the field"}">${esc(evWho(ev))}</span>
+      <button class="x" data-del="${ev.id}" title="Remove this label">✕</button></li>`;
+  }).join("") : `<li class="empty">Shift+E to label events</li>`;
+  $("evWindows").innerHTML = windows.map((w) => {
+    const n = evs.filter((ev) => ev.frame >= w.start && ev.frame < w.end).length;
+    return `<span title="A full window: ${n} events labelled in it"><a href="#" data-t="${w.start / fps}">${esc(label(w.start / fps))}–${esc(label(w.end / fps))}</a>
+      <button class="x" data-delwin="${w.id}" title="Remove this window (its labels stay)">✕</button></span>`;
+  }).join(" ");
+  $("evWindow").textContent = evWindowStart?.gameId === game.id ? `⏹ end the window here (from ${label(evWindowStart.frame / fps)})`
+    : "⏺ full window from here";
+}
+$("evMode").addEventListener("click", (e) => { e.target.blur(); toggleEventMode(); });
+$("evWindow").addEventListener("click", async (e) => {
+  e.target.blur();
+  const f = Math.round(v.currentTime * fps);
+  if (evWindowStart?.gameId !== game.id) {
+    evWindowStart = { gameId: game.id, frame: f };
+    renderEvents();
+    return flash("full window started: label every touch until you end it");
+  }
+  const start = evWindowStart.frame;
+  evWindowStart = null;
+  if (Math.abs(f - start) < fps) { renderEvents(); return flash("window too short: not kept", true); }
+  setEvents(await api("POST", `${gameUrl()}/events/windows`, { start: Math.min(start, f), end: Math.max(start, f) }));
+  flash(`full window kept: ${label(Math.min(start, f) / fps)}–${label(Math.max(start, f) / fps)}`);
+});
+$("events").addEventListener("click", async (e) => {
+  const del = e.target.dataset?.del, delwin = e.target.dataset?.delwin;
+  if (del) { e.target.blur(); setEvents(await api("DELETE", `${gameUrl()}/events/labels/${del}`)); evDone = evDone.filter((x) => x !== del); return; }
+  if (delwin) { e.target.blur(); setEvents(await api("DELETE", `${gameUrl()}/events/windows/${delwin}`)); return; }
+  const t = e.target.closest("[data-t]")?.dataset.t;
+  if (t != null) { e.preventDefault(); v.pause(); seekTo(+t); }
+});
+function drawEvents(ctx) {
+  // labels near the playhead: the kind's letter on the player (fading over half a second either side)
+  if (!evLabels || evLabels.gameId !== game?.id || !evLabels.events.length) return;
+  const f = v.currentTime * fps, r = videoRect(), span = fps / 2;
+  ctx.save();
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  let corner = 0;
+  for (const ev of evLabels.events) {
+    const d = Math.abs(ev.frame - f);
+    if (d > span) continue;
+    const [key, , colour] = EV_KINDS[ev.kind] || ["?", "", "#fff"];
+    ctx.globalAlpha = 1 - 0.7 * (d / span);
+    const X = ev.x == null ? r.x + 20 + 26 * corner++ : r.x + ev.x * r.w, Y = ev.x == null ? r.y + 50 : r.y + ev.y * r.h;
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.beginPath(); ctx.arc(X, Y, 11, 0, 2 * Math.PI); ctx.fill();
+    ctx.strokeStyle = colour; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = colour;
+    ctx.fillText(key, X, Y + 1);
+  }
+  ctx.restore();
 }
 
 // ---------- field map and calibration (Phase 5) ----------
@@ -2277,6 +2449,7 @@ document.addEventListener("keydown", (e) => {
   if (otherMode && e.key === "Escape") { e.preventDefault(); toggleOtherMode(false); return; }
   if (picking && e.key === "Escape") { e.preventDefault(); stopPicking(); return; }
   if (suggestion && e.key === "Escape") { e.preventDefault(); suggestion = null; render(); return; }
+  if (evMode && eventKey(e)) return;
   // O while fixing the ball switches to other balls (as on the labelling page); otherwise it's the out point
   if ((fixingBall || otherMode) && e.key.toLowerCase() === "o" && !e.shiftKey) {
     e.preventDefault(); toggleOtherMode(); return;
@@ -2331,7 +2504,7 @@ document.addEventListener("keydown", (e) => {
     t: () => patchSelected({ team: !selected()?.team }),
     n: () => $("note")?.focus(),
     r: replay,
-    e: () => (selectedId ? exportClips([selectedId]) : flash("no clip selected", true)),
+    e: () => (e.shiftKey ? toggleEventMode() : selectedId ? exportClips([selectedId]) : flash("no clip selected", true)),
     ArrowUp: () => step(-1),
     ArrowDown: () => step(1),
     Delete: deleteSelected,
@@ -2443,6 +2616,10 @@ async function loadGame(id, startT = 0, clipId = null) {
   if (pitchMode) stopPitchMode();
   loadPitch();
   loadMatch();
+  evLabels = null;
+  evDone = [];
+  evWindowStart = null;
+  loadEvents();
 }
 
 function applyHash() {
