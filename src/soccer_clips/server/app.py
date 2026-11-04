@@ -959,6 +959,43 @@ def create_app(store: Store | None = None) -> FastAPI:
         ev = touches.compare(tc["touches"], lab["events"], lab["windows"], game.fps) if lab["windows"] else None
         return {"touches": out, "stats": tc["stats"], "eval": ev}
 
+    @app.get("/api/games/{game_id}/passes")
+    def game_passes(game_id: str) -> dict:
+        """Passes, how they went, and chains (passes.py): {passes: [{frame, to_frame, track, team, to_track,
+        outcome, danger, ..., player, guess, to_player, to_guess}], chains, stats (per team), players (ours by
+        name, labelled or guessed: {passes, completed, lost, out, danger}), eval (against your full windows:
+        passes.compare; null without any)}. Worked out if out of date; {"pending"} / {"error"} as for possession."""
+        from soccer_clips.track import ball_state, events, passes, touches
+
+        got = game_match(game_id)
+        if "pending" in got or "error" in got:
+            return got
+        game = load(game_id)
+        try:
+            st = worked_out(ball_state, game)
+            worked_out(touches, game)
+            ps = worked_out(passes, game)
+        except ValueError as e:
+            return {"error": str(e)}
+        name = events.namer(store, game)
+        out, players = [], {}
+        for p in ps["passes"]:
+            a = dict(zip(("player", "guess"), name(p["track"], p["frame"])))
+            b = (dict(zip(("to_player", "to_guess"), name(p["to_track"], p["to_frame"])))
+                 if p["to_track"] is not None else {"to_player": None, "to_guess": None})
+            out.append({**p, **a, **b})
+            who = a["player"] if a["player"] is not None else a["guess"]
+            if p["team"] == 0 and who is not None:
+                n = players.setdefault(str(who), {"passes": 0, "completed": 0, "lost": 0, "out": 0, "danger": 0})
+                n["passes"] += 1
+                n["danger"] += p["danger"]
+                if p["outcome"] in ("completed", "lost", "out"):
+                    n[p["outcome"]] += 1
+        lab = events.resolved(store, game)
+        ev = (passes.compare(ps["passes"], lab["events"], lab["windows"], st["in_play"], game.fps)
+              if lab["windows"] else None)
+        return {"passes": out, "chains": ps["chains"], "stats": ps["stats"], "players": players, "eval": ev}
+
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:
         """

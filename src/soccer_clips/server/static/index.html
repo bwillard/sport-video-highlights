@@ -236,6 +236,12 @@
           timeline. Next to the button: against your full windows, how many of your labelled touches it found, how many of the
           ones it found you labelled (a dribble touch or a throw-in you didn't label counts against it), and how often it names
           the player you pointed at</li>
+        <li><b>🎯 found passes</b> (Events box): from the found touches, a touch followed by someone else's with the ball carried
+          5 m or more. While the ball travels, an arrow from the kicker to whoever got it, in the kicker's colour (dashed when not
+          completed): ✓ completed, ⚠ completed but lost again within 2 s (into danger), ✗ lost to them, out, ? not known (a
+          kit read as neither, or nobody touched it for 3 s and who had it then isn't known). Next to the button: each team's
+          passes and completion, chains of 3 or more passes, ours by player (completed of passes), and against your full
+          windows. Only as good as the touches: a pass needs both the kicker and the receiver read right</li>
       </ul></details>
       <details data-sec="players"><summary>Players</summary><ul>
         <li><kbd>V</kbd> show tracked players: boxes by kit (white = our team, blue = opponents, grey dashed = refs, keepers,
@@ -330,6 +336,8 @@
         <span id="evWindows"></span></div>
       <div class="row stat"><button id="tcBtn" title="Touches found from the ball's path and the players (who played the ball when): a ring under the player's feet around each one, solid in their team's colour (dashed: another player nearly as close), and ticks along the bottom of the timeline. Next to it, how they compare with your full windows.">👟 found touches</button>
         <span id="tcStat"></span></div>
+      <div class="row stat"><button id="psBtn" title="Passes found from the touches: a touch followed by someone else's, with the ball carried 5 m or more on the way. While the ball travels, an arrow from the kicker to whoever gets it, in the kicker's team colour (dashed: not completed), with how it went: ✓ completed, ⚠ completed into danger (lost again within 2 s), ✗ lost, out, ? not known. Next to it, each team's numbers, ours by player, and how they compare with your full windows.">🎯 found passes</button>
+        <span id="psStat"></span></div>
       <ul id="evList" class="list"></ul>
     </div>
     <div class="box" id="detail"></div>
@@ -588,6 +596,7 @@ async function loadPossession() {
   renderPossession();
   drawTimeline();
   loadTouches();
+  loadPasses();
 }
 function possessionAt(f) {
   // 1 ours, 2 theirs, 3 contested, 4 loose, 0 not known or out of play, at frame f
@@ -2350,6 +2359,7 @@ function drawOverlay() {
   drawPitchLines(ctx);
   drawEvents(ctx);
   drawTouches(ctx);
+  drawPasses(ctx);
   let co = null;
   if (placing) {
     co = placing.x == null ? null : placing;
@@ -2577,6 +2587,91 @@ function drawTouches(ctx) {
     const txt = touchWho(t);
     ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.fillStyle = "#fff";
     ctx.strokeText(txt, cx, y2 + Math.max(6, bw * 0.3)); ctx.fillText(txt, cx, y2 + Math.max(6, bw * 0.3));
+  }
+  ctx.restore();
+}
+
+// ---------- passes found (Phase 6.4) ----------
+// 🎯 found passes (passes.py): while the ball travels, an arrow from the kicker's feet to the receiver's, in the
+// kicker's team colour (dashed: not completed) and how it went; next to the button, the numbers per team.
+let showPasses = false, passInfo = null;  // {gameId, passes, chains, stats, players, eval} (GET passes) or {gameId, error}
+try { showPasses = localStorage.getItem("showPasses") === "1"; } catch {}
+const PASS_MARK = { completed: "✓", lost: "✗", out: "out", unknown: "?" };
+async function loadPasses() {
+  const id = game?.id;
+  passInfo = null;
+  renderPasses();
+  if (!id || !showPasses || matchInfo?.error) return;
+  const got = await getJson(`${gameUrl()}/passes`).catch(() => null);
+  if (game?.id !== id || !got || got.pending) return;
+  passInfo = { gameId: id, ...got };
+  renderPasses();
+}
+function renderPasses() {
+  $("psBtn").classList.toggle("on", showPasses);
+  const el = $("psStat");
+  if (!showPasses || !game) { el.textContent = ""; return; }
+  if (passInfo?.gameId !== game.id) { el.textContent = "finding passes…"; return; }
+  if (passInfo.error) { el.textContent = passInfo.error; return; }
+  const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+  const team = (name, s) => `${name}: ${s.passes} passes, ${pct(s.completion)} completed (${s.lost} lost, ${s.out} out, ` +
+    `${s.danger} into danger), chains of 3+: ${s.chains["3"] + s.chains["4+"]}`;
+  const st = passInfo.stats, e = passInfo.eval;
+  const who = Object.entries(passInfo.players).sort((a, b) => b[1].passes - a[1].passes)
+    .map(([n, p]) => `#${n} ${p.completed}/${p.passes}`).join(", ");
+  el.textContent = `${team("ours", st.ours)} · ${team("theirs", st.theirs)}` +
+    (st.neither ? ` · ${st.neither} by a kit read as neither` : "") + (who ? ` · completed of passes: ${who}` : "") +
+    (e ? ` · in your full windows: found ${pct(e.found)} of your ${e.labelled_n} labelled passes; ${pct(e.labelled)} of the ` +
+      `${e.found_n} found are labelled a pass or shot; the kicker you pointed at ${pct(e.kicker)}, the receiver ` +
+      `${pct(e.receiver)}; how it went agrees ${pct(e.outcome)} (of ${e.outcome_n})` : "");
+}
+$("psBtn").addEventListener("click", (e) => {
+  e.target.blur();
+  showPasses = !showPasses;
+  try { localStorage.setItem("showPasses", showPasses ? "1" : "0"); } catch {}
+  if (showPasses && passInfo?.gameId !== game?.id) loadPasses();
+  renderPasses();
+});
+function drawPasses(ctx) {
+  // passes in flight at the playhead (from TOUCH_SPAN_S before the kick to that after the ball gets there)
+  if (!showPasses || passInfo?.gameId !== game?.id || !passInfo.passes) return;
+  const f = v.currentTime * fps, span = TOUCH_SPAN_S * fps, ps = passInfo.passes;
+  let hi = 0, n = ps.length;
+  while (hi < n) { const mid = (hi + n) >> 1; if (ps[mid].frame <= f + span) hi = mid + 1; else n = mid; }
+  const live = [];
+  for (let k = hi - 1; k >= 0 && ps[k].frame >= f - 30 * fps; k--) if (ps[k].to_frame + span >= f) live.push(ps[k]);
+  if (!live.length) return;
+  const at = boxesAt(Math.round(f));
+  if (!at) return;
+  const [i0, i1, rows] = at, r = videoRect();
+  const feet = (track) => {
+    if (track == null) return null;
+    for (let i = i0; i < i1; i++) {
+      const o = i * STRIDE;
+      if (rows[o + 1] === track) return [r.x + (rows[o + 2] + rows[o + 4]) / 2 * r.w, r.y + rows[o + 5] * r.h];
+    }
+    return null;
+  };
+  ctx.save();
+  ctx.font = "bold 13px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  for (const p of live) {
+    const a = feet(p.track), b = feet(p.to_track);
+    const mark = p.danger ? "⚠" : PASS_MARK[p.outcome];
+    ctx.strokeStyle = TOUCH_COLOR[p.team]; ctx.lineWidth = 2.5;
+    ctx.setLineDash(p.outcome === "completed" ? [] : [6, 4]);
+    if (a && b) {
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(b[0] - 10 * Math.cos(ang - 0.4), b[1] - 10 * Math.sin(ang - 0.4)); ctx.lineTo(b[0], b[1]);
+      ctx.lineTo(b[0] - 10 * Math.cos(ang + 0.4), b[1] - 10 * Math.sin(ang + 0.4)); ctx.stroke();
+    }
+    const txt = `pass ${mark}`, c = b || a;
+    if (!c) continue;
+    ctx.setLineDash([]);
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.fillStyle = "#fff";
+    ctx.strokeText(txt, c[0], c[1] - 4); ctx.fillText(txt, c[0], c[1] - 4);
   }
   ctx.restore();
 }

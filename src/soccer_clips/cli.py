@@ -301,15 +301,16 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
 
 
 def cmd_events(store: Store, args: argparse.Namespace) -> None:
-    from soccer_clips.track import ball_state, touches
+    from soccer_clips.track import ball_state, passes, touches
 
     ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
     log = lambda m: print(m, flush=True)  # noqa: E731
     for gid in ids:
         game = store.load_game(gid)
-        if args.events_command in ("state", "touches"):
+        if args.events_command in ("state", "touches", "passes"):
+            mod = {"state": ball_state, "touches": touches, "passes": passes}[args.events_command]
             try:
-                (ball_state if args.events_command == "state" else touches).build(store, game, log=log)
+                mod.build(store, game, log=log)
             except ValueError as e:
                 print(f"{gid}: skipped ({e})")
             continue
@@ -328,6 +329,13 @@ def cmd_events(store: Store, args: argparse.Namespace) -> None:
                   f"labelled ones ({', '.join(f'{k} {pct(v)}' for k, v in sorted(tg['kinds'].items()))}), "
                   f"{pct(tg['labelled'])} of found ones are labelled; the player you pointed at {pct(tg['player'])}, "
                   f"their team {pct(tg['team'])}")
+        pg = passes.evaluate(store, game)
+        if pg is not None:
+            pct = lambda x: "–" if x is None else f"{x:.0%}"  # noqa: E731
+            print(f"  Passes: {pg['found_n']} found, {pg['labelled_n']} labelled; found {pct(pg['found'])} of labelled "
+                  f"ones, {pct(pg['labelled'])} of found ones are labelled a pass or shot; the kicker you pointed at "
+                  f"{pct(pg['kicker'])}, the receiver {pct(pg['receiver'])}; the outcome agrees "
+                  f"{pct(pg['outcome'])} (of {pg['outcome_n']})")
 
 
 def cmd_pitch(store: Store, args: argparse.Namespace) -> None:
@@ -666,7 +674,10 @@ def main() -> None:
     es.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     et = ev_sub.add_parser("touches", help="who played the ball when (tracks/touches.json; seconds a game)")
     et.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
-    ee = ev_sub.add_parser("eval", help="possession and touches against the full windows you've labelled (tagger Shift+E)")
+    ep = ev_sub.add_parser("passes", help="passes, how they went, and chains (tracks/passes.json; from the touches)")
+    ep.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
+    ee = ev_sub.add_parser("eval", help="possession, touches and passes against the full windows you've labelled "
+                           "(tagger Shift+E)")
     ee.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     gt = sub.add_parser("gametime", help="when each half is played; cut videos down to game time")
     gt_sub = gt.add_subparsers(dest="gametime_command", required=True)
