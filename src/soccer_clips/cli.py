@@ -319,7 +319,7 @@ def cmd_events(store: Store, args: argparse.Namespace) -> None:
             continue
         print(f"{gid}: {got['windows']} window(s), {got['window_min']} min. Possession: we have a team for "
               f"{got['covered']:.0%} of labelled play, right {got['right']:.0%} of that. At labelled touches "
-              f"({got['touches']}): that team within reach {got['touch_team']:.0%}, anyone {got['touch_anyone']:.0%}, "
+              f"({got['touches']}): that team in control {got['touch_team']:.0%}, anyone {got['touch_anyone']:.0%}, "
               f"ball seen {got['touch_ball']:.0%}")
 
 

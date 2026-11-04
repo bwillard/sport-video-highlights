@@ -27,8 +27,10 @@ def test_nearest_and_control():
     assert np.allclose(dist[0], [1, 5]) and who[0].tolist() == [1, 2]  # the referee (team -1) left out
     assert np.isinf(dist[2]).all() and who[3].tolist() == [-1, 2]
     ctl = bs.control(dist, ball, np.zeros(4, bool), width=40.0)
-    # frame 3: 2.5 m away, but at the far touchline (reach 3 m)
+    # frame 3: 2.5 m away, but at the far touchline (reach 2.5 m)
     assert ctl.tolist() == [bs.OURS, bs.CONTESTED, bs.UNKNOWN, bs.THEIRS]
+    fast = bs.control(dist, ball, np.zeros(4, bool), width=40.0, speed=np.array([2.0, 12.0, np.nan, np.nan]))
+    assert fast.tolist() == [bs.OURS, bs.LOOSE, bs.UNKNOWN, bs.THEIRS]  # frame 1: going past, nobody has it
 
 
 def test_bridge_possession_runs():

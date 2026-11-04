@@ -9,7 +9,7 @@ Built from the positions on the field (positions.py) and the game's shape (match
 - **Nearest of each team:** the closest on-field player of ours and theirs (goalies with their team, refs and
   others left out) and how far. Within reach (REACH_M, plus up to REACH_FAR_M more at the far touchline,
   where a pixel is a metre or more) a team **controls** the ball: ours, theirs, contested (both), loose
-  (neither), unknown (no ball, or in the air). A short stretch (BRIDGE_S) that isn't one team's, between
+  (neither, or the ball faster than CONTROL_MS: going past, not kept), unknown (no ball, or in the air). A short stretch (BRIDGE_S) that isn't one team's, between
   two of the same team's, is theirs.
 - **Possession:** the last team to control the ball alone has it until the other team does or it goes out
   of play. Loose and contested moments belong to the run in progress; after GAP_S without a ball, nobody
@@ -34,11 +34,13 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 1
+VERSION = 2
 BRIDGE_S = 0.5  # gaps in the ball path filled in a straight line up to this; also control bridged over this
 SPEED_HALF = 3  # frames each way the ball's speed is measured over
 AIR_MS = 30.0  # faster than this (m/s, projected) the ball's in the air: a youth kick on the ground is slower
-REACH_M = 1.5  # a player this close to the ball (near touchline) controls it...
+CONTROL_MS = 7.0  # a ball faster than this (m/s) isn't controlled, whoever is near: a pass going past a
+# defender. Possession right 70 / 67 / 74% -> 83 / 75 / 76% on the labelled windows; 5-8 m/s about the same
+REACH_M = 1.0  # a player this close to the ball (near touchline) controls it...
 REACH_FAR_M = 1.5  # ...plus up to this much more at the far touchline
 GAP_S = 6.0  # no ball for longer than this: who has it isn't known until someone controls it
 LOOSE, OURS, THEIRS, CONTESTED, UNKNOWN = 0, 1, 2, 3, -1  # control codes
@@ -118,13 +120,18 @@ def reach(ball_y: np.ndarray, width: float) -> np.ndarray:
     return REACH_M + REACH_FAR_M * np.clip((ball_y + width / 2) / width, 0, 1)
 
 
-def control(dist: np.ndarray, ball: np.ndarray, air: np.ndarray, width: float) -> np.ndarray:
-    """Per frame: OURS / THEIRS / CONTESTED / LOOSE, UNKNOWN where the ball isn't placed or is in the air."""
+def control(dist: np.ndarray, ball: np.ndarray, air: np.ndarray, width: float,
+            speed: np.ndarray | None = None) -> np.ndarray:
+    """Per frame: OURS / THEIRS / CONTESTED / LOOSE (nobody within reach, or the ball faster than CONTROL_MS),
+    UNKNOWN where the ball isn't placed or is in the air."""
     out = np.full(len(ball), UNKNOWN, np.int8)
     ok = np.isfinite(ball[:, 0]) & ~air
     r = reach(ball[ok, 1], width)
     a, b = dist[ok, 0] <= r, dist[ok, 1] <= r
     out[ok] = np.select([a & b, a, b], [CONTESTED, OURS, THEIRS], LOOSE)
+    if speed is not None:
+        with np.errstate(invalid="ignore"):
+            out[ok & (speed > CONTROL_MS)] = LOOSE
     return out
 
 
@@ -257,7 +264,7 @@ def build(store: Store, game: Game, log=None) -> dict:
     on = ~pos["off"] & np.isfinite(pos["xy"][:, 0])
     team = np.where(on, _row_teams(role, mi["keeper"]), -1)
     near, near_track = nearest(t.frame, team, t.track, pos["xy"].astype(np.float64), xy)
-    ctl = bridge(control(near, xy, air, sizes["width"]), fps)
+    ctl = bridge(control(near, xy, air, sizes["width"], speed), fps)
     known = np.isfinite(xy[:, 0]) & ~air
     poss = possession(ctl, in_play, known, fps)
     signs = [match.attack_sign(mi, h) for h in (1, 2)]
@@ -359,7 +366,8 @@ def compare(poss: np.ndarray, ctl: np.ndarray, in_play: np.ndarray, tru: np.ndar
     """How possession agrees with the labels: of in-play frames in windows with a labelled team (leaving out
     TOL_S either side of the labelled team changing: the ball on its way between teams), the share we have a
     team for (covered) and the share of those that's right; and at each labelled touch with a team, whether
-    that team controls the ball within TOL_S (or anybody does, or the ball is seen)."""
+    that team controls the ball within TOL_S (or anybody does, or the ball is seen). A kick is a fast ball, so
+    a touch can be missed here and still change possession right."""
     tol = round(TOL_S * fps)
     near_change = np.zeros(len(tru), bool)
     for f in np.flatnonzero(np.diff(tru) != 0) + 1:
