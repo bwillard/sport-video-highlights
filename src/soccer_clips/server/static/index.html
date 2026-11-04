@@ -59,6 +59,9 @@
   #pitchInfo b { color: var(--text); }
   #pitchInfo .bad { color: #ff6b6b; }
   #pitchInfo summary { cursor: pointer; }
+  details.marks { flex-basis: 100%; }
+  details.marks summary { cursor: pointer; }
+  details.marks ul { margin: 2px 0 4px; padding-left: 20px; }
   #pitchInfo table.clicks { border-collapse: collapse; margin: 4px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
   #pitchInfo table.clicks td { padding: 1px 8px 1px 0; }
   #pitchInfo table.clicks td.px { text-align: right; }
@@ -577,13 +580,24 @@ function renderAttack() {
     : `(found ${ARROW[d.found]}${d.sure ? "" : ", not sure: check"}${game.attack_1h && game.attack_1h !== d.found ? "; set the other way" : ""})`;
   renderGoalies();
 }
+const marksOpen = {};  // which lists of marks are open (the Game time box is redrawn often)
+function marksList(key, title, items) {
+  // a list of marks folded away under its count: items are HTML, one per line
+  return items.length ? `<details class="marks" data-marks="${key}"${marksOpen[key] ? " open" : ""}><summary>${title} (${items.length})</summary>` +
+    `<ul>${items.map((x) => `<li>${x}</li>`).join("")}</ul></details>` : "";
+}
+for (const id of ["gtGoalies", "gtKits"]) {
+  $(id).addEventListener("toggle", (e) => { if (e.target.dataset?.marks) marksOpen[e.target.dataset.marks] = e.target.open; }, true);
+}
 function renderGoalies() {
   const el = $("gtGoalies"), ks = matchInfo?.keepers, marks = matchInfo?.goalie_marks || [];
   if (!ks?.length) { el.innerHTML = ""; return; }
   const pct = (team, h) => { const k = ks.find((x) => x.team === team && x.half === h); return k?.seen == null ? "–" : `${Math.round(k.seen * 100)}%`; };
+  const what = { ours: "our goalie", theirs: "their goalie", none: "not a goalie" };
   el.innerHTML = `goalies found: ours ${pct("ours", 1)} / ${pct("ours", 2)}, theirs ${pct("theirs", 1)} / ${pct("theirs", 2)} (1H / 2H)` +
-    (marks.length ? `<br>marked: ` + marks.map((m) => `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ${m.team === "none" ? "not a goalie" : m.team}` +
-      `${m.track == null ? " (no box there now)" : ""} <button class="x" data-delgk="${m.id}" title="Remove this mark">✕</button>`).join(" · ") : "");
+    marksList("goalies", "goalie marks", [...marks].sort((a, b) => a.frame - b.frame).map((m) =>
+      `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ${what[m.team] || m.team}` +
+      `${m.track == null ? " (no box there now)" : ""} <button class="x" data-delgk="${m.id}" title="Remove this mark">✕</button>`));
 }
 $("gtGoalies").addEventListener("click", async (e) => {
   const del = e.target.dataset?.delgk, t = e.target.dataset?.t;
@@ -673,10 +687,11 @@ async function nextGrey() {
 }
 function renderKits() {
   const el = $("gtKits"), marks = people?.gameId === game?.id ? people.kit_marks || [] : [];
-  el.innerHTML = (marks.length ? "kits named: " + marks.map((m) => `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ` +
-    `${m.team === "opponents" ? "theirs" : m.team === "other" ? "neither" : "ours"}${m.cluster < 0 ? " (no box there now)" : ""} ` +
-    `<button class="x" data-delkit="${m.id}" title="Take this back">✕</button>`).join(" · ") + " · " : "") +
-    `<button data-greykit title="Jump to a player in a kit read as neither team that you haven't named (Shift+V)">next grey kit ▸</button>`;
+  el.innerHTML = `<button data-greykit title="Jump to a player in a kit read as neither team that you haven't named (Shift+V)">next grey kit ▸</button>` +
+    marksList("kits", "kits named", [...marks].sort((a, b) => a.frame - b.frame).map((m) =>
+      `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ` +
+      `${m.team === "opponents" ? "theirs" : m.team === "other" ? "neither" : "ours"}${m.cluster < 0 ? " (no box there now)" : ""} ` +
+      `<button class="x" data-delkit="${m.id}" title="Take this back">✕</button>`));
 }
 $("gtKits").addEventListener("click", async (e) => {
   const del = e.target.dataset?.delkit, t = e.target.dataset?.t;
