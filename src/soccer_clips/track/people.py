@@ -1148,6 +1148,55 @@ def kit_marks(t: Tracks, marks: list[dict], fps: float) -> list[dict]:
     return out
 
 
+GREY_MIN_SHARE = 0.01  # kit clusters under this share of on-field boxes aren't worth a mark
+GREY_EXAMPLES = 3  # players shown per grey kit, different tracklets
+
+
+def grey_kits(store: Store, game: Game) -> list[dict]:
+    """Kits read as neither team that no kit mark names yet, the most on the field first, each with up to
+    GREY_EXAMPLES players in it on the field in game time (the tracklets with the most such boxes, each where
+    its box is biggest):
+    [{cluster, share (of on-field boxes), track, frame}], one item per example, cluster by cluster.
+    Empty if the game isn't tracked or placed on the field."""
+    from soccer_clips.track import match, positions
+
+    t = tracks(store, game)
+    got = roles_for(store, game)
+    pos = positions.load(store, game)
+    if t is None or got is None or pos is None or len(pos["off"]) != len(t.track):
+        return []
+    roles, role = got
+    on = ~pos["off"] & np.isfinite(pos["xy"][:, 0])
+    hs = match.halves(game)
+    if hs:
+        inside = np.zeros(len(t.frame), bool)
+        for a, b in hs:
+            inside |= (t.frame >= a) & (t.frame < b)
+        on &= inside
+    teams = t.teams_of(0, len(t.track))
+    marked = {m["cluster"] for m in kit_marks(t, load_kit_marks(store, game), game.fps)}
+    k = int(teams.max()) + 1 if len(teams) else 0
+    counts = np.bincount(teams[on & (teams >= 0)], minlength=k)
+    total = max(int(on.sum()), 1)
+    out = []
+    for c in np.argsort(-counts):
+        c = int(c)
+        share = counts[c] / total
+        if share < GREY_MIN_SHARE:
+            break
+        if roles.get(c, "other") != "other" or c in marked:
+            continue
+        rows = np.flatnonzero(on & (teams == c) & (role == ROLE_CODES["other"]))
+        if not len(rows):
+            continue
+        ids, n = np.unique(t.track[rows], return_counts=True)
+        for tid in ids[np.argsort(-n)][:GREY_EXAMPLES]:
+            r = rows[t.track[rows] == tid]
+            big = r[np.argmax(t.box[r, 3] - t.box[r, 1])]  # where they're biggest: the kit easiest to see
+            out.append({"cluster": c, "share": round(float(share), 3), "track": int(tid), "frame": int(t.frame[big])})
+    return out
+
+
 def roles_of(t: Tracks, picks: list[dict], game: Game, player: int | None,
              on_field: np.ndarray | None = None, kits: list[dict] | None = None) -> tuple[dict[int, str], np.ndarray]:
     """team_roles, and every box's team (box_roles, labelled stretches ours, stretches marked not ours other).

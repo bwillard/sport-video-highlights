@@ -144,6 +144,7 @@ If touches in crowds or airborne passes stay weak, fine-tune an action-spotting 
 - [ ] 6.1 Label dense windows (six windows, three games)
 - [x] 6.2 Ball state and control by team; possession time per team, half and third (2026-11-03; first numbers, short of the 90% target: see Findings)
 - [x] 6.2 Teams for players read as neither kit: on-field kit clusters join the team they share tracklets with; 👕 ours / theirs / neither in the tagger's click box names a kit for the game (2026-11-03)
+- [x] 6.2 Shift+V / *next grey kit* in the tagger: jumps to a player in a kit read as neither that no 👕 mark names, the most on the field first, a few players per kit, each where their box is biggest (`GET /api/games/{id}/people/grey-kits`) (2026-11-04)
 - [x] 6.2 Possession rule: control only for a slow ball (under 7 m/s), reach 1 m (2.5 m far side): 71 / 68 / 74% → 82 / 75 / 76% right (2026-11-03)
 - [ ] 6.2 Possession to 90%: kit clusters that put a player in the wrong team (players overlapping), late labels; more full windows to tune on
 - [ ] 6.3 Touches, with player and confidence; measured on the dense windows

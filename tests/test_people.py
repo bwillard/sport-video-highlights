@@ -336,6 +336,30 @@ def test_kit_marks(store, monkeypatch):
     assert people.load_kit_marks(store, game) == []
 
 
+def test_grey_kits(store, monkeypatch):
+    from soccer_clips.track import positions
+
+    game, t, _ = _split_kits(store, monkeypatch)  # left in clusters 0 then 1, right in 2 then 3
+
+    def roles_for(s, g):  # cluster 3 (the right player from frame 50) read as neither, until a kit mark names it
+        roles = {0: "ours", 1: "ours", 2: "opponents", 3: "other"}
+        for m in people.kit_marks(t, people.load_kit_marks(s, g), g.fps):
+            roles[m["cluster"]] = m["team"]
+        return roles, people.box_roles(t, roles, window=5)
+
+    monkeypatch.setattr(people, "tracks", lambda *a, **k: t)
+    monkeypatch.setattr(people, "KIT_WINDOW_S", 0.5)
+    monkeypatch.setattr(people, "roles_for", roles_for)
+    off = t.frame >= 90  # the last 10 frames off the field
+    monkeypatch.setattr(positions, "load", lambda s, g: {"off": off, "xy": np.zeros((len(off), 2))})
+    got = people.grey_kits(store, game)
+    assert [(it["cluster"], it["track"]) for it in got] == [(3, t.at(80, 0.65, 0.5))]
+    assert 50 <= got[0]["frame"] < 90  # in that kit, on the field
+    assert got[0]["share"] == round(float((t.box_team[~off] == 3).mean()), 3)
+    people.add_kit_mark(store, game, 80, 0.65, 0.5, "opponents")  # named: no longer grey
+    assert people.grey_kits(store, game) == []
+
+
 def test_box_teams_follow_a_swap_inside_a_tracklet():
     from soccer_clips.track import kit
 

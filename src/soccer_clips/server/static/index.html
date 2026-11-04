@@ -212,7 +212,10 @@
         <li><b>Kits</b>: a player in a grey box (neither team) who's on a team: click them and pick 👕 ours or 👕 theirs. Their kit
           colour (as it looks in that light) is that team's for the whole game, so everyone else in it changes too; 👕 neither puts
           a kit back with the refs and spectators. Who has the ball, and the goalies, go by these teams. Your kit marks are in
-          the Game time box (✕ takes one back)</li>
+          the Game time box (✕ takes one back). <kbd>Shift</kbd>+<kbd>V</kbd> (or <i>next grey kit</i> there) jumps to a player
+          in a grey kit nobody's named yet, the most on the field first, outlined in yellow: click them and pick 👕; then it goes
+          on to the next kit. <kbd>Shift</kbd>+<kbd>V</kbd> again shows another player in the same kit (a kit may mix players
+          with spectators: name it by the players on the field)</li>
         <li>The orange strip under the timeline = where they're labelled</li>
         <li><kbd>W</kbd> only them: plays just the stretches where the player you follow is on screen (labelled or guessed),
           skipping the rest (darkened on the timeline) · <kbd>W</kbd> again plays everything. The <b>Player view</b> page does
@@ -617,18 +620,65 @@ async function markKit(team, t) {
   render();
   flash(`this kit colour is ${KIT_NAMES[team]} all game` +
     (got.share != null ? ` (${Math.round(got.share * 100)}% of the boxes on the field)` : "") + ": ✕ in the Game time box takes it back");
+  greyList = null;  // that kit isn't grey any more
+  if (wanted?.from === "grey" && wanted.gameId === game.id) {
+    const id = game.id;
+    wanted = null;
+    setTimeout(() => { if (game?.id === id && !wanted) nextGrey(); }, 1200);
+  }
+}
+// Shift+V: players in kits read as neither team that no 👕 mark names yet, the most on the field first
+let greyList = null;  // {gameId, items: [{cluster, share, track, frame}]}, a few players per kit, kit by kit
+let greyAt = -1;
+let greyBusy = false;
+async function nextGrey() {
+  if (!game || greyBusy) return;
+  if (!showPeople) togglePeople();
+  if (!people && peopleLoading) await peopleLoading.catch(() => {});
+  if (people?.gameId !== game.id) return flash("players still loading…", true);
+  if (!showTeams[2]) setTeams({ 2: true });  // the grey boxes, to click
+  greyBusy = true;
+  try {
+    if (greyList?.gameId !== game.id) {
+      const id = game.id;
+      flash("finding kits nobody's named… (a few seconds)");
+      const r = await getJson(`${gameUrl()}/people/grey-kits`);
+      if (game?.id !== id) return;
+      greyList = { gameId: id, items: r.items || [] };
+      greyAt = -1;
+    }
+    const items = greyList.items;
+    if (!items.length) { wanted = null; render(); return flash("no grey kits left to name in this game (on the field, 1% or more of the boxes)"); }
+    greyAt = (greyAt + 1) % items.length;
+    const it = items[greyAt], kits = [...new Set(items.map((x) => x.cluster))], ofKit = items.filter((x) => x.cluster === it.cluster);
+    wanted = { gameId: game.id, track: it.track, from: "grey", n: kits.indexOf(it.cluster) + 1, of: kits.length };
+    suggestion = null;
+    hoverLive = false;
+    v.pause();
+    seekTo((it.frame + 0.5) / fps);
+    flash(`grey kit ${wanted.n} of ${kits.length} (${Math.round(it.share * 100)}% of the boxes on the field), ` +
+          `player ${ofKit.indexOf(it) + 1} of ${ofKit.length}: click them and pick 👕`);
+    render();
+  } catch (e) {
+    flash(`couldn't find the grey kits: ${e.message}`, true);
+  } finally {
+    greyBusy = false;
+  }
 }
 function renderKits() {
   const el = $("gtKits"), marks = people?.gameId === game?.id ? people.kit_marks || [] : [];
-  el.innerHTML = marks.length ? "kits named: " + marks.map((m) => `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ` +
+  el.innerHTML = (marks.length ? "kits named: " + marks.map((m) => `<a href="#" data-t="${m.frame / fps}">${esc(label(m.frame / fps))}</a> ` +
     `${m.team === "opponents" ? "theirs" : m.team === "other" ? "neither" : "ours"}${m.cluster < 0 ? " (no box there now)" : ""} ` +
-    `<button class="x" data-delkit="${m.id}" title="Take this back">✕</button>`).join(" · ") : "";
+    `<button class="x" data-delkit="${m.id}" title="Take this back">✕</button>`).join(" · ") + " · " : "") +
+    `<button data-greykit title="Jump to a player in a kit read as neither team that you haven't named (Shift+V)">next grey kit ▸</button>`;
 }
 $("gtKits").addEventListener("click", async (e) => {
   const del = e.target.dataset?.delkit, t = e.target.dataset?.t;
+  if (e.target.dataset?.greykit != null) { e.target.blur(); nextGrey(); return; }
   if (del) {
     e.target.blur();
     setLabels(await api("DELETE", `${gameUrl()}/people/kit/${del}`));
+    greyList = null;
     loadMatch();
     render();
     flash("kit mark taken back");
@@ -1616,8 +1666,9 @@ function drawPeople(ctx) {
       ctx.strokeRect(x1 - 4, y1 - 4, x2 - x1 + 8, y2 - y1 + 8);
       ctx.font = "bold 12px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3;
       ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.fillStyle = "#ffe14d";
-      ctx.strokeText("who is this?", (x1 + x2) / 2, y1 - 10);
-      ctx.fillText("who is this?", (x1 + x2) / 2, y1 - 10);
+      const ask = wanted.from === "grey" ? "whose kit?" : "who is this?";
+      ctx.strokeText(ask, (x1 + x2) / 2, y1 - 10);
+      ctx.fillText(ask, (x1 + x2) / 2, y1 - 10);
     }
   }
   // the player under the mouse (paused, once it has moved since the last jump): what Y / X / a click act on
@@ -1641,6 +1692,9 @@ function drawPeople(ctx) {
     ? `players: is this #${suggestion.player}? (guess ${suggestion.n} of ${suggestion.of} by appearance) Y yes · X no · A skip`
     : suggestion
     ? `players: is this #${suggestion.player}? (best match ${suggestion.n} of ${suggestion.of} unlabelled tracklets of our team)`
+    : wanted?.gameId === game.id && wanted.from === "grey"
+    ? (wantedHere ? `players: whose kit is the yellow box? (grey kit ${wanted.n} of ${wanted.of}) click it and pick 👕 ours / theirs / neither · Shift+V another player`
+                  : `players: the grey kit's player isn't on screen here · Shift+V next`)
     : wanted?.gameId === game.id && wanted.from === "unknown"
     ? (wantedHere ? `players: who is the yellow box? (unknown tracklet ${wanted.n} of ${wanted.of}) click it to name them · Shift+X not our team · S skip · Shift+S back`
                   : `players: unknown tracklet ${wanted.n} of ${wanted.of} isn't on screen here · S next`)
@@ -2621,7 +2675,7 @@ document.addEventListener("keydown", (e) => {
     b: () => toggleBall(),
     d: () => (e.shiftKey ? toggleOthersLayers() : toggleDebug()),
     k: () => (e.shiftKey ? fixBall("none") : startBallFix()),
-    v: () => togglePeople(),
+    v: () => (e.shiftKey ? nextGrey() : togglePeople()),
     w: () => toggleOnly(),
     z: () => (e.shiftKey ? cycleLoupeZoom() : toggleLoupe()),
     l: () => (e.shiftKey ? pickPlayer("not") : startPicking()),

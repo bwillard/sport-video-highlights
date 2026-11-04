@@ -958,6 +958,14 @@ def create_app(store: Store | None = None) -> FastAPI:
             share = round(float((t.teams_of(0, len(t.track))[on] == cluster).mean()), 3) if on.any() else None
         return {"mark": mark, "share": share, **labels}
 
+    @app.get("/api/games/{game_id}/people/grey-kits")
+    def game_people_grey_kits(game_id: str) -> dict:
+        """Kits read as neither team with no kit mark yet, the most on the field first, a few players in each
+        (people.grey_kits): where a 👕 mark is wanted."""
+        from soccer_clips.track import people
+
+        return {"items": people.grey_kits(store, load(game_id))}
+
     @app.delete("/api/games/{game_id}/people/kit/{mark_id}")
     def game_people_kit_remove(game_id: str, mark_id: str) -> dict:
         from soccer_clips.track import people
