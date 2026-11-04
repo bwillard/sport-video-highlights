@@ -588,7 +588,8 @@ function possessionAt(f) {
   while (lo < hi) { const mid = (lo + hi) >> 1; if (runs[mid].to <= f) lo = mid + 1; else hi = mid; }
   return lo < runs.length && runs[lo].from <= f ? runs[lo].team : 0;
 }
-const POSS_COLOR = { 1: "#ffffff", 2: "#5ab0ff", 3: "#d95926", 4: "#7a7a7a", 5: "#3a3a3a" };  // ball_state.PHASES
+const POSS_COLOR = { 1: "#4fc472", 2: "#d93f3f", 3: "#9d7ae8", 4: "#7a7a7a", 5: "#3a3a3a" };  // ball_state.PHASES; green us,
+// red them (the green lighter, so they still part for red-green colour blindness); the same in pitch.js
 const POSS_NAME = { 1: "ours", 2: "theirs", 3: "contested", 4: "loose", 5: "not known" };
 const POSS_HAS = { 1: "we have it", 2: "they have it", 3: "contested", 4: "loose", 5: "not known", 0: "out of play" };
 const NOT_KNOWN_FILL = "repeating-linear-gradient(45deg, #2c2c2c 0 4px, #3a3a3a 4px 8px)";

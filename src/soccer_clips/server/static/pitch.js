@@ -260,10 +260,10 @@ function drawPitchMap(canvas, o) {
     ctx.fillText(o.attack > 0 ? "we attack →" : "← we attack", o.attack > 0 ? m.W - 6 : 6, m.H - 4);
     ctx.restore();
   }
-  if (o.possession) {  // who has the ball, top left, in the team's colour
+  if (o.possession) {  // who has the ball, top left, in the Analytics colours (index.html POSS_COLOR)
     ctx.save();
     ctx.font = "11px system-ui, sans-serif";
-    ctx.fillStyle = { 1: MAP_TEAM[0], 2: MAP_TEAM[1], 3: "#e0703f", 4: "#aaaaaa" }[o.possession] || "#aaaaaa";
+    ctx.fillStyle = { 1: "#4fc472", 2: "#d93f3f", 3: "#9d7ae8", 4: "#aaaaaa" }[o.possession] || "#aaaaaa";
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
     ctx.fillText({ 1: "we have the ball", 2: "they have the ball", 3: "contested ball", 4: "loose ball" }[o.possession] || "", 6, 4);
