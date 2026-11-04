@@ -877,6 +877,27 @@ def create_app(store: Store | None = None) -> FastAPI:
             raise HTTPException(404, "no such goalie mark")
         return game_match(game_id)
 
+    build_locks: dict[str, threading.Lock] = {}
+    build_locks_guard = threading.Lock()
+
+    def worked_out(mod, game: Game) -> dict:
+        """mod.load (match / ball_state), built first if out of date: one build per game at a time, and built
+        again if what it reads changed while it ran (a mark made meanwhile: an older build can finish last and
+        save a result already out of date). ValueError if it can't be worked out."""
+        with build_locks_guard:
+            lock = build_locks.setdefault(f"{mod.__name__} {game.id}", threading.Lock())
+        for _ in range(3):
+            got = mod.load(store, game)
+            if got is not None:
+                return got
+            with lock:
+                if mod.load(store, game) is None:
+                    mod.build(store, game)
+        got = mod.load(store, game)
+        if got is None:
+            raise ValueError("the game changed while it was being worked out: try again")
+        return got
+
     @app.get("/api/games/{game_id}/match")
     def game_match(game_id: str) -> dict:
         """The shape of the game (match.py): restarts, which goal we attack in each half (found from the kickoffs,
@@ -891,7 +912,7 @@ def create_app(store: Store | None = None) -> FastAPI:
             positions.build_soon(store, game)
             return {"pending": True}
         try:
-            got = match.load(store, game) or (match.build(store, game) and match.load(store, game))
+            got = worked_out(match, game)
         except ValueError as e:
             return {"error": str(e)}
         return {k: v for k, v in got.items() if k != "keeper"}
@@ -907,7 +928,7 @@ def create_app(store: Store | None = None) -> FastAPI:
             return got
         game = load(game_id)
         try:
-            st = ball_state.load(store, game) or (ball_state.build(store, game) and ball_state.load(store, game))
+            st = worked_out(ball_state, game)
         except ValueError as e:
             return {"error": str(e)}
         return {"runs": st["runs"], "stats": st["stats"]}

@@ -97,3 +97,23 @@ def test_possession_api_not_calibrated(settings):
     store, game = four_tracklets(settings)  # tracked, not calibrated
     got = TestClient(create_app(store)).get(f"/api/games/{game.id}/possession").json()
     assert "calibrated" in got["error"]
+
+
+def test_match_api_builds_again_when_overtaken(settings, monkeypatch):
+    # a mark made while the game's shape was being worked out: that build's result is out of date when it's
+    # saved (an older build finishing last), so it's built again rather than failing
+    from fastapi.testclient import TestClient
+    from test_gallery import four_tracklets
+
+    from soccer_clips.server.app import create_app
+    from soccer_clips.track import match, positions
+
+    store, game = four_tracklets(settings)
+    builds = []
+    monkeypatch.setattr(positions, "load", lambda s, g: {})
+    monkeypatch.setattr(match, "build", lambda s, g, log=None: builds.append(1))
+    monkeypatch.setattr(match, "load", lambda s, g: {"restarts": [], "keeper": []} if len(builds) >= 2 else None)
+    got = TestClient(create_app(store)).get(f"/api/games/{game.id}/match").json()
+    assert got == {"restarts": []} and len(builds) == 2
+    monkeypatch.setattr(match, "load", lambda s, g: None)  # never up to date: an error, not a crash
+    assert "try again" in TestClient(create_app(store)).get(f"/api/games/{game.id}/match").json()["error"]
