@@ -931,7 +931,8 @@ def create_app(store: Store | None = None) -> FastAPI:
             st = worked_out(ball_state, game)
         except ValueError as e:
             return {"error": str(e)}
-        return {"runs": st["runs"], "stats": st["stats"], "timeline": st.get("timeline")}
+        return {"runs": st["runs"], "stats": st["stats"], "timeline": st.get("timeline"),
+                "goals": ball_state.goal_moments(game, st["xy"])}
 
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:

@@ -282,6 +282,25 @@ def timeline(phase: np.ndarray, xy: np.ndarray, hs: list[tuple[int, int]], signs
     return out
 
 
+def goal_moments(game: Game, xy: np.ndarray) -> list[dict]:
+    """The goals, from the goal clips (😊 ours, 🙁 theirs, unrated: team None), in the halves: [{t (seconds), team}]
+    by time, t where the ball gets nearest an end in the clip (the clip's last 2 s if it isn't seen)."""
+    from soccer_clips.track import match
+
+    hs = match.halves(game)
+    out = []
+    for c in game.clips:
+        if "goal" not in c.tags:
+            continue
+        a, b = game.frame_at(c.start_s), min(game.frame_at(c.end_s), len(xy))
+        if not any(h0 <= a < h1 for h0, h1 in hs):
+            continue
+        x = np.abs(xy[a:b, 0]) if b > a else np.zeros(0)
+        t = (a + int(np.nanargmax(x))) / game.fps if np.isfinite(x).any() else max(c.start_s, c.end_s - 2.0)
+        out.append({"t": round(t, 2), "team": {"happy": "ours", "sad": "theirs"}.get(c.rating)})
+    return sorted(out, key=lambda g: g["t"])
+
+
 # ---- making it ----
 
 def _row_teams(role: np.ndarray, keeper: np.ndarray | None) -> np.ndarray:

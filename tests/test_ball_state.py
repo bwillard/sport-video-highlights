@@ -142,3 +142,17 @@ def test_match_api_builds_again_when_overtaken(settings, monkeypatch):
     assert got == {"restarts": []} and len(builds) == 2
     monkeypatch.setattr(match, "load", lambda s, g: None)  # never up to date: an error, not a crash
     assert "try again" in TestClient(create_app(store)).get(f"/api/games/{game.id}/match").json()["error"]
+
+
+def test_goal_moments():
+    from types import SimpleNamespace as NS
+
+    clip = lambda a, b, rating, tags=("goal",): NS(start_s=a, end_s=b, rating=rating, tags=list(tags))  # noqa: E731
+    game = NS(fps=FPS, kickoff_1h_s=0.0, end_1h_s=10.0, kickoff_2h_s=12.0, end_2h_s=20.0,
+              frame_at=lambda t: int(round(t * FPS)),
+              clips=[clip(14.0, 18.0, "sad"), clip(1.0, 5.0, "happy"), clip(10.5, 11.5, "happy"),  # at half time: left out
+                     clip(6.0, 9.0, None), clip(2.0, 4.0, "happy", ("shot",))])
+    xy = np.zeros((200, 2))
+    xy[30, 0] = 30.0  # the ball at the end in the first clip
+    xy[60:90, 0] = np.nan  # the unrated one: the ball never seen
+    assert bs.goal_moments(game, xy) == [{"t": 3.0, "team": "ours"}, {"t": 7.0, "team": None}, {"t": 14.0, "team": "theirs"}]
