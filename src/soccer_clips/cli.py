@@ -301,18 +301,24 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
 
 
 def cmd_events(store: Store, args: argparse.Namespace) -> None:
-    from soccer_clips.track import ball_state, passes, touches
+    from soccer_clips.track import ball_state, events, passes, restarts, shots, touches
 
     ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
     log = lambda m: print(m, flush=True)  # noqa: E731
     for gid in ids:
         game = store.load_game(gid)
-        if args.events_command in ("state", "touches", "passes"):
-            mod = {"state": ball_state, "touches": touches, "passes": passes}[args.events_command]
+        if args.events_command in ("state", "touches", "passes", "shots"):
+            mod = {"state": ball_state, "touches": touches, "passes": passes, "shots": shots}[args.events_command]
             try:
                 mod.build(store, game, log=log)
             except ValueError as e:
                 print(f"{gid}: skipped ({e})")
+            if args.events_command == "shots" and (rs := restarts.get(store, game)):
+                st = rs["stats"]
+                log("  restarts (ours / theirs / not known): " + ", ".join(
+                    f"{k} {st[k]['ours']} / {st[k]['theirs']} / {st[k]['unknown']}" for k in restarts.KINDS)
+                    + (f"; who took it and the rules agree {st['agree']:.0%} of {st['agree_n']}"
+                       if st["agree_n"] else ""))
             continue
         got = ball_state.evaluate(store, game)
         if got is None:
@@ -336,6 +342,18 @@ def cmd_events(store: Store, args: argparse.Namespace) -> None:
                   f"ones, {pct(pg['labelled'])} of found ones are labelled a pass or shot; the kicker you pointed at "
                   f"{pct(pg['kicker'])}, the receiver {pct(pg['receiver'])}; the outcome agrees "
                   f"{pct(pg['outcome'])} (of {pg['outcome_n']})")
+        sg = shots.evaluate(store, game)
+        if sg is not None:
+            pct = lambda x: "–" if x is None else f"{x:.0%}"  # noqa: E731
+            print(f"  Shots: found {pct(sg['found'])} of {sg['labelled_n']} labelled; in full windows "
+                  f"{pct(sg['labelled'])} of {sg['found_n']} found are labelled a shot or goal; saves found {pct(sg['saves'])} of "
+                  f"{sg['saves_n']}; goals {sg['goals'][0]}-{sg['goals'][1]}"
+                  + (f" against the score {sg['score'][0]}-{sg['score'][1]}" if sg["score"] else " (no score entered)"))
+            lab = events.resolved(store, game)["events"]
+            if any(e["kind"] == "restart" for e in lab) and (rs := restarts.get(store, game)):
+                rg = restarts.compare(rs["restarts"], lab, game.fps)
+                print(f"  Restarts: found {pct(rg['found'])} of {rg['labelled_n']} labelled; the team right "
+                      f"{pct(rg['team'])} (of {rg['team_n']})")
 
 
 def cmd_pitch(store: Store, args: argparse.Namespace) -> None:
@@ -676,8 +694,10 @@ def main() -> None:
     et.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     ep = ev_sub.add_parser("passes", help="passes, how they went, and chains (tracks/passes.json; from the touches)")
     ep.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
-    ee = ev_sub.add_parser("eval", help="possession, touches and passes against the full windows you've labelled "
-                           "(tagger Shift+E)")
+    eh = ev_sub.add_parser("shots", help="shots, goals and restarts (tracks/shots.json; from the touches)")
+    eh.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
+    ee = ev_sub.add_parser("eval", help="possession, touches, passes, shots and restarts against the full windows "
+                           "you've labelled (tagger Shift+E)")
     ee.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     gt = sub.add_parser("gametime", help="when each half is played; cut videos down to game time")
     gt_sub = gt.add_subparsers(dest="gametime_command", required=True)

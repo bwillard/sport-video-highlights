@@ -52,6 +52,8 @@ class GamePatch(RequestBody):
     end_1h_s: float | None = None
     end_2h_s: float | None = None
     attack_1h: Literal["left", "right"] | None = None
+    score_ours: int | None = Field(default=None, ge=0)
+    score_theirs: int | None = Field(default=None, ge=0)
 
 
 class EventIn(RequestBody):
@@ -995,6 +997,39 @@ def create_app(store: Store | None = None) -> FastAPI:
         ev = (passes.compare(ps["passes"], lab["events"], lab["windows"], st["in_play"], game.fps)
               if lab["windows"] else None)
         return {"passes": out, "chains": ps["chains"], "stats": ps["stats"], "players": players, "eval": ev}
+
+    @app.get("/api/games/{game_id}/shots")
+    def game_shots(game_id: str) -> dict:
+        """Shots, goals and restarts (shots.py, restarts.py): {shots: [{frame (the shooter's touch or null), at,
+        end, team, track, outcome, ..., player, guess}], goals: [{frame, team, by, guessed, shot}], restarts:
+        [{frame, kind, team, track, by_taker, by_rule, disagree, player, guess}], stats (shots per team),
+        restart_stats, score ([ours, theirs] entered, or null), eval (shots.compare, and restarts.compare when
+        restarts are labelled)}. Worked out if out of date; {"pending"} / {"error"} as for possession."""
+        from soccer_clips.track import ball_state, events, restarts, shots, touches
+
+        got = game_match(game_id)
+        if "pending" in got or "error" in got:
+            return got
+        game = load(game_id)
+        try:
+            worked_out(ball_state, game)
+            worked_out(touches, game)
+            sh = worked_out(shots, game)
+        except ValueError as e:
+            return {"error": str(e)}
+        rs = restarts.get(store, game) or {"restarts": [], "stats": None}
+        name = events.namer(store, game)
+        who = lambda x, f: dict(zip(("player", "guess"), name(x["track"], f) if x["track"] is not None  # noqa: E731
+                                    else (None, None)))
+        lab = events.resolved(store, game)
+        score = ((game.score_ours, game.score_theirs) if game.score_ours is not None and game.score_theirs is not None
+                 else None)
+        ev = shots.compare(sh["shots"], sh["goals"], lab["events"], lab["windows"], score, game.fps)
+        if any(e["kind"] == "restart" for e in lab["events"]):
+            ev["restarts"] = restarts.compare(rs["restarts"], lab["events"], game.fps)
+        return {"shots": [{**x, **who(x, x["frame"] if x["frame"] is not None else x["at"])} for x in sh["shots"]],
+                "goals": sh["goals"], "restarts": [{**r, **who(r, r["frame"])} for r in rs["restarts"]],
+                "stats": sh["stats"], "restart_stats": rs["stats"], "score": list(score) if score else None, "eval": ev}
 
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:

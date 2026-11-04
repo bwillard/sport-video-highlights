@@ -10,16 +10,18 @@ Passes, bad passes and chains (Phase 6.4), from the touches (touches.py).
   the receiver's touch was missed): the outcome is then whoever has the ball then (ball_state possession).
 - **Into danger:** completed, but the receiver's ball goes to the other team within DANGER_S (not by a pass of
   theirs, which is their own bad pass).
+- **Shots** (shots.py) aren't passes: a kick found as a shot is left out.
 - **Properties:** length (where kicked to where received, or the ball last seen), direction from the half's
   attacking direction (forward / back within 45°, else sideways), the third it starts and ends in, in the air
   (ball_state's airborne anywhere on the way).
 - **Chains:** consecutive completed passes by one team, ended by a pass not completed, a touch by the other team
   or the ball going out.
 
-Against your full windows (2026-11-04, 88 labelled passes in three games, one to one within touches.TOL_S): 57%
-of labelled passes found (touches find 66% of them at all), 38% of passes found are labelled P or S (most of
-the rest are labelled touches that went to someone else, or touches nobody labelled); the kicker the tracklet you
-pointed at 61%, the receiver 50% (where one is found); the outcome agrees with your next label 63% (19 of 30). Both ends
+Against your full windows (2026-11-04, 88 labelled passes in three games, one to one within touches.TOL_S; shots
+left out): 56% of labelled passes found (touches find 66% of them at all), 38% of passes found are labelled P or
+S (most of the rest are labelled touches that went to someone else, or touches nobody labelled); the kicker the
+tracklet you pointed at 63%, the receiver 50% (where one is found); the outcome agrees with your next label 62%
+(18 of 29). Both ends
 of a pass have to be read right, so it is bounded by the touches: most wrong outcomes are the kicker or the
 receiver read as the wrong player (two players together), or the receiver's touch missed. Other distances
 (3-8 m), skipping ambiguous touches, and the same named player across tracklets were no better.
@@ -38,7 +40,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 1
+VERSION = 2  # 2: shots left out
 PASS_M = 5.0  # the ball carried this far from the kick before someone else's touch: a pass
 RECV_S = 3.0  # the next touch later than this: receiver unknown
 DANGER_S = 2.0  # completed, but the ball to the other team within this of receiving it: into danger
@@ -52,9 +54,9 @@ def path(store: Store, game: Game) -> Path:
 
 
 def key(store: Store, game: Game) -> str | None:
-    from soccer_clips.track import touches
+    from soccer_clips.track import shots
 
-    k = touches.key(store, game)
+    k = shots.key(store, game)  # the touches', and the shots' to leave out
     return None if k is None else f"p{VERSION} {k}"
 
 
@@ -200,23 +202,28 @@ def build(store: Store, game: Game, log=None) -> dict:
     """Find and save the game's passes; returns what's saved. ValueError when the touches can't be found yet."""
     import time
 
-    from soccer_clips.track import ball_state, match, touches
+    from soccer_clips.track import ball_state, match, shots, touches
 
     t0 = time.time()
     tc = touches.get(store, game)
     if tc is None:
         touches.build(store, game)  # raises why
         tc = touches.load(store, game)
+    sh = shots.get(store, game)
     st = ball_state.load(store, game)
     mi = match.get(store, game)
     k = key(store, game)
     ball = st["xy"].astype(np.float64)
     ps = find(tc["touches"], ball, st["in_play"], st["possession"], game.fps)
+    kicks = {s["frame"] for s in sh["shots"]} if sh else set()
+    shot_n = sum(p["frame"] in kicks for p in ps)
+    ps = [p for p in ps if p["frame"] not in kicks]  # a shot isn't a pass
     describe(ps, ball, st["air"], match.halves(game), [match.attack_sign(mi, h) for h in (1, 2)],
              (st.get("timeline") or {}).get("length"))
     chs = chains(ps, tc["touches"], st["in_play"])
     stats = {name: team_stats(ps, chs, i) for i, name in enumerate(TEAMS)}
     stats["neither"] = sum(p["team"] < 0 for p in ps)
+    stats["shots_left_out"] = shot_n
     stats["seconds"] = round(time.time() - t0, 1)
     out = {"key": k, "passes": ps, "chains": chs, "stats": stats}
     atomic_write_text(path(store, game), json.dumps(out) + "\n")

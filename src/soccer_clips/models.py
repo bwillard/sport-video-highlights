@@ -124,6 +124,8 @@ class Game(BaseModel):
     attack_1h: Literal["left", "right"] | None = None  # the goal we attack in the 1st half, as the camera sees
     # it (set in the tagger; None: worked out from the kickoffs, track/match.py)
     cut: GameCut | None = None  # set once the video has been cut to game time
+    score_ours: int | None = Field(default=None, ge=0)  # the final score, entered in the tagger: the check on goals
+    score_theirs: int | None = Field(default=None, ge=0)
     created_at: datetime
     clips: list[Clip] = []
 

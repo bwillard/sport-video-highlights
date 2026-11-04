@@ -4,7 +4,7 @@ Game events (Phase 6). For now, the labels they'll be measured against (6.1).
 Labels are made in the tagger (Shift+E, then a key per event): a moment, a kind, and where you pointed (the
 player who did it). Like player labels they're kept as clicks, not track ids, and matched to the tracklet
 under the click each time they're read, so they survive re-tracking. A pass, shot or save is a touch too;
-"won" is the touch that won the ball back.
+"won" is the touch that won the ball back; "restart" is the kick (or throw) that restarts play, on the taker.
 
 Full windows are stretches where every touch is labelled: they measure touches and possession completely
 (found / wrong / missed). Elsewhere a label only says that this happened, not that nothing else did.
@@ -23,7 +23,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-KINDS = ("touch", "pass", "shot", "save", "goal", "won")
+KINDS = ("touch", "pass", "shot", "save", "goal", "won", "restart")
 VERSION = 1
 
 

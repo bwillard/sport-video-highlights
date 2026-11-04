@@ -91,6 +91,7 @@
               background: rgba(0, 30, 40, 0.85); border: 2px solid #40e0ff; color: #fff; font-size: 13px; pointer-events: none; }
   #evBanner kbd { color: #40e0ff; }
   #events .list { max-height: 30vh; }
+  #events .list li.log { display: block; padding: 2px 4px; }  /* the shots / goals / restarts list: one line each */
   #events .list li { grid-template-columns: 64px 54px 1fr auto; }
   #events .list li.near { background: #1d3550; }
   #events button.x { padding: 0 6px; }
@@ -145,7 +146,7 @@
       <div id="calBanner" hidden></div>
       <div id="evBanner" hidden>labelling events at the playhead, on the player under the mouse:
         <kbd>T</kbd> touch · <kbd>P</kbd> pass or kick · <kbd>S</kbd> shot · <kbd>V</kbd> save · <kbd>G</kbd> goal · <kbd>W</kbd> won the ball ·
-        <kbd>U</kbd> take back · <kbd>Esc</kbd> stop</div>
+        <kbd>K</kbd> restart · <kbd>U</kbd> take back · <kbd>Esc</kbd> stop</div>
     </div>
     <canvas id="timeline" title="The whole game: click or drag to seek.&#10;Bars = clips: orange with the default player, purple team play, blue others; faded = hidden by the filters; white outline = selected; white dot = a callout.&#10;1H / 2H lines = kickoffs; green = the marked in point (to now, or the out point)."></canvas>
     <div id="pitchBox" hidden>
@@ -222,7 +223,8 @@
       <details data-sec="events"><summary>Events</summary><ul>
         <li><kbd>Shift</kbd>+<kbd>E</kbd> (or ✍️ label events) label events, until <kbd>Esc</kbd>: pause where it happens, point at the
           player, and press <kbd>T</kbd> touch, <kbd>P</kbd> pass or kick, <kbd>S</kbd> shot, <kbd>V</kbd> save, <kbd>G</kbd> goal (when it
-          crosses the line, on the scorer), <kbd>W</kbd> won the ball (the touch that won it). A pass, shot or save is a touch too, so
+          crosses the line, on the scorer), <kbd>W</kbd> won the ball (the touch that won it), <kbd>K</kbd> restart (the kick or throw that restarts play after a
+          stoppage: kickoff, throw-in, goal kick, corner, penalty, free kick; on the taker). A pass, shot or save is a touch too, so
           label it once with its own key. <kbd>P</kbd> is any kick that sends the ball on: a pass, whether it reaches a teammate or not,
           or a clear / kick up the field with no one in mind. Don't judge it: the next touch (<kbd>T</kbd> on whoever gets it, ours
           or theirs) says how it turned out. Not pointing at anyone: the event has no player. <kbd>U</kbd> takes back the last one.
@@ -242,6 +244,14 @@
           kit read as neither, or nobody touched it for 3 s and who had it then isn't known). Next to the button: each team's
           passes and completion, chains of 3 or more passes, ours by player (completed of passes), and against your full
           windows. Only as good as the touches: a pass needs both the kicker and the receiver read right</li>
+        <li><b>🥅 shots, goals &amp; restarts</b> (Events box): goals from the kickoffs after them (who scored: the end the ball went
+          in at and the team kicking off, when they agree) and your goal clips (a rated clip decides), checked against the score
+          you enter by the game date. Shots are found back from where they ended: in the goal, over the goal line (a goal kick:
+          wide; a corner: saved or deflected), in the goalie's hands (saved); plus shots heading in that a defender blocked.
+          Restarts (kickoffs, throw-ins, goal kicks, corners, penalties, free kicks) come with the team that took them, from
+          the taker and the rules (a goal kick is the defenders', a corner the attackers', a throw-in the team that didn't touch
+          it last). Listed under the button with a link to each; on the video, a label over the shooter's or taker's head.
+          Label restarts with <kbd>K</kbd> (Shift+E) to measure them</li>
       </ul></details>
       <details data-sec="players"><summary>Players</summary><ul>
         <li><kbd>V</kbd> show tracked players: boxes by kit (white = our team, blue = opponents, grey dashed = refs, keepers,
@@ -293,6 +303,8 @@
     <div class="box filters" title="Shown on the opening card of reels made from this game">
       <input type="date" id="playedOn" aria-label="game date" title="Date the game was played (shown on reel opening cards)">
       <input id="desc" aria-label="game description" placeholder="game description, e.g. Home vs SAA, 3-1 win" title="Shown on the opening card of reels made from this game" style="flex:1; min-width:12em; padding:2px 6px">
+      <span class="stat" title="The final score, ours – theirs: the exact check on the goals found (🥅 in the Events box)">score
+        <input id="scoreOurs" type="number" min="0" aria-label="our goals" style="width:3.2em">–<input id="scoreTheirs" type="number" min="0" aria-label="their goals" style="width:3.2em"></span>
     </div>
     <div class="box filters">
       <select id="ftag" aria-label="filter by tag" title="Show only clips with this tag (the list, the timeline and Export shown / Add shown to reel all follow the filters)"><option value="">all tags</option></select>
@@ -331,13 +343,16 @@
     </div>
     <div class="box" id="events">
       <div class="row"><b>Events</b> <span class="stat" id="evCount"></span>
-        <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass or kick (aimed or a clear; the next touch says how it went), S shot, V save, G goal, W won the ball. A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
+        <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass or kick (aimed or a clear; the next touch says how it went), S shot, V save, G goal, W won the ball, K restart (the kick or throw that restarts play, on the taker). A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
       <div class="row stat"><button id="evWindow" title="A full window is a stretch where you label every touch, so it can measure what's found and what's missed (elsewhere a label only says something happened). Start one, label every touch, then end it here. A few minutes at a time.">⏺ full window from here</button>
         <span id="evWindows"></span></div>
       <div class="row stat"><button id="tcBtn" title="Touches found from the ball's path and the players (who played the ball when): a ring under the player's feet around each one, solid in their team's colour (dashed: another player nearly as close), and ticks along the bottom of the timeline. Next to it, how they compare with your full windows.">👟 found touches</button>
         <span id="tcStat"></span></div>
       <div class="row stat"><button id="psBtn" title="Passes found from the touches: a touch followed by someone else's, with the ball carried 5 m or more on the way. While the ball travels, an arrow from the kicker to whoever gets it, in the kicker's team colour (dashed: not completed), with how it went: ✓ completed, ⚠ completed into danger (lost again within 2 s), ✗ lost, out, ? not known. Next to it, each team's numbers, ours by player, and how they compare with your full windows.">🎯 found passes</button>
         <span id="psStat"></span></div>
+      <div class="row stat"><button id="shBtn" title="Shots, goals and restarts found: the game log's big moments. Shots are found back from where they ended (in the goal, over the goal line, in the goalie's hands) and blocked ones; goals from the kickoffs after them and your goal clips, checked against the score next to the game date; restarts (kickoffs, throw-ins, goal kicks, corners, penalties, free kicks) with who took them. Listed below with a link to each; on the video, a label on the shooter or the taker.">🥅 shots, goals &amp; restarts</button>
+        <span id="shStat"></span></div>
+      <details id="shListBox" hidden><summary>the list</summary><ul id="shList" class="list"></ul></details>
       <ul id="evList" class="list"></ul>
     </div>
     <div class="box" id="detail"></div>
@@ -543,6 +558,9 @@ function render() {
   $("markin").textContent = markIn == null ? "–" : `${label(markIn)}${markOut != null ? " → " + label(markOut) : ""}`;
   if (game && document.activeElement !== $("playedOn")) $("playedOn").value = game.played_on || "";
   if (game && document.activeElement !== $("desc")) $("desc").value = game.description || "";
+  for (const [id, k] of [["scoreOurs", "score_ours"], ["scoreTheirs", "score_theirs"]]) {
+    if (game && document.activeElement !== $(id)) $(id).value = game[k] ?? "";
+  }
   $("kickoffs").textContent = [game?.kickoff_1h_s, game?.kickoff_2h_s]
     .map((k, i) => (k == null ? null : `${i + 1}H ${fmt(k)}`)).filter(Boolean).join(" · ") || "– (press H)";
   renderGameTime();
@@ -597,6 +615,7 @@ async function loadPossession() {
   drawTimeline();
   loadTouches();
   loadPasses();
+  loadShots();
 }
 function possessionAt(f) {
   // 1 ours, 2 theirs, 3 contested, 4 loose, 0 not known or out of play, at frame f
@@ -2360,6 +2379,7 @@ function drawOverlay() {
   drawEvents(ctx);
   drawTouches(ctx);
   drawPasses(ctx);
+  drawShots(ctx);
   let co = null;
   if (placing) {
     co = placing.x == null ? null : placing;
@@ -2394,7 +2414,8 @@ function drawOverlay() {
 // Shift+E: each key labels an event at the playhead on the player under the mouse (events.py). The labels
 // are what the event finding is measured against; full windows are stretches with every touch labelled.
 const EV_KINDS = { touch: ["T", "touch", "#b0bec5"], pass: ["P", "pass", "#4fc3f7"], shot: ["S", "shot", "#ff7043"],
-                   save: ["V", "save", "#ffd54f"], goal: ["G", "goal", "#66bb6a"], won: ["W", "won the ball", "#ce93d8"] };
+                   save: ["V", "save", "#ffd54f"], goal: ["G", "goal", "#66bb6a"], won: ["W", "won the ball", "#ce93d8"],
+                   restart: ["K", "restart", "#f5f5f5"] };
 const EV_KEYS = Object.fromEntries(Object.entries(EV_KINDS).map(([k, [key]]) => [key.toLowerCase(), k]));
 let evMode = false, evLabels = null;  // evLabels: {gameId, events, windows, counts} (GET events/labels)
 let evDone = [];  // ids labelled since the game was opened, newest last: what U takes back
@@ -2414,7 +2435,7 @@ function toggleEventMode(on = !evMode) {
   if (on && !showPeople) togglePeople();  // see who you're pointing at
   $("evBanner").hidden = !on;
   $("evMode").classList.toggle("on", on);
-  flash(on ? "labelling events: T touch, P pass/kick, S shot, V save, G goal, W won · Esc stops" : "stopped labelling events");
+  flash(on ? "labelling events: T touch, P pass/kick, S shot, V save, G goal, W won, K restart · Esc stops" : "stopped labelling events");
 }
 function eventKey(e) {
   // in event mode: a kind's key labels it, U takes back, Esc stops; true if the key was used
@@ -2672,6 +2693,100 @@ function drawPasses(ctx) {
     ctx.setLineDash([]);
     ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.fillStyle = "#fff";
     ctx.strokeText(txt, c[0], c[1] - 4); ctx.fillText(txt, c[0], c[1] - 4);
+  }
+  ctx.restore();
+}
+
+// ---------- shots, goals and restarts (Phase 6.5) ----------
+// 🥅 (shots.py, restarts.py): the counts and the check against the score next to the button, a list to jump
+// from, and on the video a label over the shooter's or the taker's head around the moment.
+let showShots = false, shotInfo = null;  // {gameId, shots, goals, restarts, stats, restart_stats, score, eval} or {gameId, error}
+try { showShots = localStorage.getItem("showShots") === "1"; } catch {}
+const SHOT_SAYS = { goal: "goal", saved: "saved", corner: "out for a corner", wide: "wide", blocked: "blocked" };
+const SHOT_SPAN_S = 0.8;  // labels shown this long either side of the moment
+async function loadShots() {
+  const id = game?.id;
+  shotInfo = null;
+  renderShots();
+  if (!id || !showShots || matchInfo?.error) return;
+  const got = await getJson(`${gameUrl()}/shots`).catch(() => null);
+  if (game?.id !== id || !got || got.pending) return;
+  shotInfo = { gameId: id, ...got };
+  renderShots();
+}
+function teamName(t) { return { 0: "ours", 1: "theirs" }[t] ?? "team not known"; }
+function shotWho(x) {
+  const n = x.player ?? x.guess;
+  return n != null ? `#${n}${x.player == null ? "?" : ""}` : null;
+}
+function renderShots() {
+  $("shBtn").classList.toggle("on", showShots);
+  const el = $("shStat"), box = $("shListBox");
+  box.hidden = !(showShots && shotInfo?.gameId === game?.id && shotInfo.shots);
+  if (!showShots || !game) { el.textContent = ""; return; }
+  if (shotInfo?.gameId !== game.id) { el.textContent = "finding shots…"; return; }
+  if (shotInfo.error) { el.textContent = shotInfo.error; return; }
+  const st = shotInfo.stats, e = shotInfo.eval, rs = shotInfo.restart_stats, sc = shotInfo.score;
+  const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+  const team = (name, s) => `${name}: ${s.goals} goals, ${s.shots} shots (${s.saved} saved, ${s.wide} wide, ${s.corner} out for a ` +
+    `corner, ${s.blocked} blocked)`;
+  const goals = `goals found ${e.goals[0]}–${e.goals[1]}` + (sc ? (sc[0] === e.goals[0] && sc[1] === e.goals[1] ? " ✓ the score"
+    : ` ✗ the score is ${sc[0]}–${sc[1]}`) : " (enter the score by the game date to check them)") +
+    (st.goals_not_known ? `, ${st.goals_not_known} not put down to a team` : "");
+  const rest = rs ? ` · restarts (ours–theirs): ` + ["corner", "goal kick", "throw-in", "free kick"]
+    .map((k) => `${k}s ${rs[k].ours}–${rs[k].theirs}`).join(", ") + (rs.agree_n ? `; who took it and the rules agree ${pct(rs.agree)}` : "") : "";
+  el.textContent = `${goals} · ${team("ours", st.ours)} · ${team("theirs", st.theirs)}${rest}` +
+    (e.labelled_n ? ` · your labelled shots: found ${pct(e.found)} of ${e.labelled_n}` : "") +
+    (e.found_n ? `; in your full windows ${pct(e.labelled)} of the ${e.found_n} found are labelled a shot or goal` : "") +
+    (e.saves_n ? `; saves found ${pct(e.saves)} of ${e.saves_n}` : "") +
+    (e.restarts ? ` · your labelled restarts: found ${pct(e.restarts.found)} of ${e.restarts.labelled_n}, the team right ${pct(e.restarts.team)}` : "");
+  const rows = [
+    ...shotInfo.goals.map((g) => ({ f: g.frame, html: `⚽ <b>goal</b>, ${teamName(g.team)}${g.guessed ? "?" : ""} <span class="stat">(${g.by.join(" + ")})</span>` })),
+    ...shotInfo.shots.filter((x) => x.outcome !== "goal").map((x) => ({ f: x.frame ?? x.at,
+      html: `🥅 shot, ${teamName(x.team)}${shotWho(x) ? " " + shotWho(x) : ""}: ${SHOT_SAYS[x.outcome]}` +
+        (x.distance != null ? ` <span class="stat">${Math.round(x.distance)} m out</span>` : "") })),
+    ...shotInfo.restarts.filter((r) => r.kind !== "free kick").map((r) => ({ f: r.frame,
+      html: `↺ ${r.kind}, ${teamName(r.team)}${r.disagree ? " <span class=\"stat\">(taker and rules disagree)</span>" : ""}` })),
+  ].sort((a, b) => a.f - b.f);
+  $("shList").innerHTML = rows.map((r) => `<li class="log"><a href="#" data-t="${r.f / fps}">${esc(label(r.f / fps))}</a> ${r.html}</li>`).join("");
+}
+$("shList").addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-t]");
+  if (!a) return;
+  e.preventDefault();
+  v.pause();
+  seekTo(Math.max(0, Number(a.dataset.t) - 2));  // a little before, to see it come
+});
+$("shBtn").addEventListener("click", (e) => {
+  e.target.blur();
+  showShots = !showShots;
+  try { localStorage.setItem("showShots", showShots ? "1" : "0"); } catch {}
+  if (showShots && shotInfo?.gameId !== game?.id) loadShots();
+  renderShots();
+});
+function drawShots(ctx) {
+  // over the shooter's or taker's head around the moment: "shot: saved", "corner, ours"
+  if (!showShots || shotInfo?.gameId !== game?.id || !shotInfo.shots) return;
+  const f = v.currentTime * fps, span = SHOT_SPAN_S * fps;
+  const items = [
+    ...shotInfo.shots.filter((x) => x.frame != null && Math.abs(x.frame - f) <= span)
+      .map((x) => ({ track: x.track, team: x.team, txt: `shot: ${SHOT_SAYS[x.outcome]}` })),
+    ...shotInfo.restarts.filter((r) => r.track != null && Math.abs(r.frame - f) <= span)
+      .map((r) => ({ track: r.track, team: r.team, txt: `${r.kind}, ${teamName(r.team)}` })),
+  ];
+  if (!items.length) return;
+  const at = boxesAt(Math.round(f));
+  if (!at) return;
+  const [i0, i1, rows] = at, r = videoRect();
+  ctx.save();
+  ctx.font = "bold 13px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  for (const it of items) {
+    let o = -1;
+    for (let i = i0; i < i1 && o < 0; i++) if (rows[i * STRIDE + 1] === it.track) o = i * STRIDE;
+    if (o < 0) continue;
+    const cx = r.x + (rows[o + 2] + rows[o + 4]) / 2 * r.w, y1 = r.y + rows[o + 3] * r.h;
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.fillStyle = TOUCH_COLOR[it.team ?? -1];
+    ctx.strokeText(it.txt, cx, y1 - 4); ctx.fillText(it.txt, cx, y1 - 4);
   }
   ctx.restore();
 }
@@ -3170,7 +3285,8 @@ document.addEventListener("keydown", (e) => {
 // ---------- game info ----------
 async function patchGame(changes, what) {
   const updated = await api("PATCH", gameUrl(), changes);
-  game = { ...game, played_on: updated.played_on, description: updated.description };
+  game = { ...game, played_on: updated.played_on, description: updated.description, score_ours: updated.score_ours,
+           score_theirs: updated.score_theirs };
   // check the server actually stored it (an out-of-date server can drop new fields)
   const kept = Object.entries(changes).every(([k, val]) => (updated[k] ?? null) === val);
   if (kept) flash(`saved ${what}`);
@@ -3179,7 +3295,14 @@ async function patchGame(changes, what) {
 }
 $("playedOn").addEventListener("change", (e) => patchGame({ played_on: e.target.value || null }, "game date"));
 $("desc").addEventListener("change", (e) => patchGame({ description: e.target.value.trim() || null }, "game description"));
-for (const id of ["playedOn", "desc"]) {
+for (const [id, k] of [["scoreOurs", "score_ours"], ["scoreTheirs", "score_theirs"]]) {
+  $(id).addEventListener("change", async (e) => {
+    const n = e.target.value === "" ? null : Math.max(0, Math.round(Number(e.target.value)));
+    await patchGame({ [k]: n }, "score");
+    if (showShots) loadShots();  // the check against the goals found
+  });
+}
+for (const id of ["playedOn", "desc", "scoreOurs", "scoreTheirs"]) {
   $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
 }
 
