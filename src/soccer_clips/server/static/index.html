@@ -59,7 +59,7 @@
   .an-bar span { border-radius: 3px; min-width: 1px; font-size: 11px; line-height: 18px; padding-left: 4px; overflow: hidden;
                  white-space: nowrap; color: #111; font-variant-numeric: tabular-nums; }
   .an-bar span.nk { color: var(--text); }
-  #anTimeline { display: block; width: 100%; height: 240px; cursor: pointer; margin-top: 2px; }
+  #anTimeline { display: block; width: 100%; height: 254px; cursor: pointer; margin-top: 2px; }
   #anHover { min-height: 1.4em; font-size: 12px; }
   /* help: one collapsible section per topic; closed ones share a line, an open one takes the full width */
   .help-secs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin-top: 6px; line-height: 1.7; }
@@ -621,12 +621,12 @@ function renderPossession() {
     `</div>` + row("game", g) + row("1H", st.halves[0]) + row("2H", st.halves[1]) +
     `<div class="stat" style="font-size:12px;margin:6px 0 2px">ours of possession, by the third the ball is in: ${th.join(", ")}</div>` +
     (possInfo.timeline ? `<h4>Timeline</h4><div class="an-legend"><span>line: where the ball mostly is (${AN_SMOOTH_S * 2} s average), coloured by who has it most</span>` +
-      `<span>dots: each second</span><span>along the top: goals and the score</span></div><canvas id="anTimeline" title="Where the ball is up the field (up = toward the goal we attack), coloured by who has it; the strip along the bottom is who has it. Click to jump there."></canvas><div id="anHover" class="stat"></div>` : "");
+      `<span>dots: each second</span><span>goals and the score: ours along the top (at their goal), theirs along the bottom (at ours)</span></div><canvas id="anTimeline" title="Where the ball is up the field (up = toward the goal we attack), coloured by who has it; the strip along the bottom is who has it. Click to jump there."></canvas><div id="anHover" class="stat"></div>` : "");
   anChart = null;  // drawn again at the next frame
 }
 // the timeline chart: drawn once into an offscreen canvas (data or width changes), then copied each frame with the playhead
 let anChart = null;  // {w, h, img (canvas), cols: [{t0, t1, phase, x}], x0, plot: {top, bottom}, toX(t)}
-const AN = { left: 64, right: 8, top: 34, strip: 8, gap: 10, bottom: 2, halfGap: 10 };
+const AN = { left: 64, right: 8, top: 34, strip: 8, gap: 24, bottom: 2, halfGap: 10 };
 const AN_SMOOTH_S = 15;  // the timeline's line: the ball's average over this either side
 function buildAnalyticsChart(cv) {
   const tl = possInfo.timeline, L = tl.length || 60, dpr = window.devicePixelRatio || 1;
@@ -720,27 +720,31 @@ function buildAnalyticsChart(cv) {
       }
     }
   }
-  // goals: a line down the chart in the scorer's colour, and the score after it along the top
+  // goals: a line down the chart in the scorer's colour, and the score after it at the end it went in (ours along
+  // the top, at their goal; theirs along the bottom, at ours; not known whose: the top)
   const gx = (t) => { const c = cols.find((c) => t >= c.t0 && t < c.t1); return c ? c.px + c.pw / 2 : null; };
   const goals = [];
-  let us = 0, them = 0, lastRight = -1e9;
+  let us = 0, them = 0;
+  const lastRight = { top: -1e9, bottom: -1e9 };
   for (const g of possInfo.goals || []) {
     if (g.team === "ours") us++; else if (g.team === "theirs") them++;
     const px = gx(g.t);
     if (px == null) continue;
     const col = g.team === "ours" ? POSS_COLOR[1] : g.team === "theirs" ? POSS_COLOR[2] : "#9a9a9a";
+    const lane = g.team === "theirs" ? "bottom" : "top", dotY = lane === "top" ? top - 4 : bottom + 4;
     ctx.fillStyle = col;
     ctx.globalAlpha = 0.8;
-    ctx.fillRect(Math.round(px) - 0.5, top - 4, 1, bottom - top + 4);
+    ctx.fillRect(Math.round(px) - 0.5, top - 4, 1, bottom - top + 8);
     ctx.globalAlpha = 1;
-    ctx.beginPath(); ctx.arc(px, top - 4, 3.5, 0, 2 * Math.PI); ctx.fill();
+    ctx.beginPath(); ctx.arc(px, dotY, 3.5, 0, 2 * Math.PI); ctx.fill();
     const txt = g.team ? `${us}–${them}` : "goal?";
-    ctx.font = "bold 11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    ctx.font = "bold 11px system-ui, sans-serif"; ctx.textAlign = "center";
+    ctx.textBaseline = lane === "top" ? "bottom" : "top";
     const tw = ctx.measureText(txt).width;
-    if (px - tw / 2 > lastRight + 3) {  // the score if there's room; hover says it anyway
+    if (px - tw / 2 > lastRight[lane] + 3) {  // the score if there's room; hover says it anyway
       ctx.fillStyle = "#eee";
-      ctx.fillText(txt, px, top - 9);
-      lastRight = px + tw / 2;
+      ctx.fillText(txt, px, lane === "top" ? top - 9 : bottom + 9);
+      lastRight[lane] = px + tw / 2;
     }
     goals.push({ px, t: g.t, team: g.team, score: `${us}–${them}` });
   }
