@@ -607,6 +607,12 @@ async function markGoalie(team, t) {
   setMatch(got);
   const k = (got.keepers || []).filter((x) => x.team === team && x.seen != null);
   flash(`marked ${what}` + (k.length ? `: found ${k.map((x) => `${Math.round(x.seen * 100)}%`).join(" / ")} of the time near their goal (1H / 2H)` : ""));
+  greyList = null;  // goalies aren't asked about
+  if (team !== "none" && wanted?.from === "grey" && wanted.gameId === game.id) {
+    const id = game.id;
+    wanted = null;
+    setTimeout(() => { if (game?.id === id && !wanted) nextGrey(); }, 1200);
+  }
 }
 // kit marks (people.py): "this kit colour is ours / theirs / neither", for the whole game
 const KIT_NAMES = { ours: "ours", opponents: "theirs", other: "neither team's" };

@@ -1155,7 +1155,7 @@ GREY_EXAMPLES = 3  # players shown per grey kit, different tracklets
 def grey_kits(store: Store, game: Game) -> list[dict]:
     """Kits read as neither team that no kit mark names yet, the most on the field first, each with up to
     GREY_EXAMPLES players in it on the field in game time (the tracklets with the most such boxes, each where
-    its box is biggest):
+    its box is biggest; goalies, found or marked, left out: a goalie's own kit needs no team):
     [{cluster, share (of on-field boxes), track, frame}], one item per example, cluster by cluster.
     Empty if the game isn't tracked or placed on the field."""
     from soccer_clips.track import match, positions
@@ -1173,6 +1173,11 @@ def grey_kits(store: Store, game: Game) -> list[dict]:
         for a, b in hs:
             inside |= (t.frame >= a) & (t.frame < b)
         on &= inside
+    mi = match.load(store, game)
+    if mi is not None and len(mi["keeper"]) == len(on):
+        on &= mi["keeper"] == 0
+    goalies = [g["track"] for g in match.load_goalies(store, game) if g["team"] != match.NOT_GOALIE and g.get("track") is not None]
+    on &= ~np.isin(t.track, goalies)
     teams = t.teams_of(0, len(t.track))
     marked = {m["cluster"] for m in kit_marks(t, load_kit_marks(store, game), game.fps)}
     k = int(teams.max()) + 1 if len(teams) else 0

@@ -356,6 +356,12 @@ def test_grey_kits(store, monkeypatch):
     assert [(it["cluster"], it["track"]) for it in got] == [(3, t.at(80, 0.65, 0.5))]
     assert 50 <= got[0]["frame"] < 90  # in that kit, on the field
     assert got[0]["share"] == round(float((t.box_team[~off] == 3).mean()), 3)
+    from soccer_clips.track import match
+
+    keeper = np.where(t.track == t.at(80, 0.65, 0.5), 2, 0)  # found as their goalie: their kit needs no team
+    monkeypatch.setattr(match, "load", lambda s, g: {"keeper": keeper})
+    assert people.grey_kits(store, game) == []
+    monkeypatch.setattr(match, "load", lambda s, g: None)
     people.add_kit_mark(store, game, 80, 0.65, 0.5, "opponents")  # named: no longer grey
     assert people.grey_kits(store, game) == []
 
