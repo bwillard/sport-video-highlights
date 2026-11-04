@@ -266,7 +266,7 @@ function drawPitchMap(canvas, o) {
     ctx.fillStyle = MAP_TEAM[o.possession - 1];
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-    ctx.fillText(o.possession === 1 ? "ours have the ball" : "theirs have the ball", 6, 4);
+    ctx.fillText(o.possession === 1 ? "we have the ball" : "they have the ball", 6, 4);
     ctx.restore();
   }
   if (o.note) {
