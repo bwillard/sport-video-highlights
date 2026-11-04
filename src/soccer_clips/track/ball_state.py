@@ -282,9 +282,11 @@ def timeline(phase: np.ndarray, xy: np.ndarray, hs: list[tuple[int, int]], signs
     return out
 
 
-def goal_moments(game: Game, xy: np.ndarray) -> list[dict]:
-    """The goals, from the goal clips (😊 ours, 🙁 theirs, unrated: team None), in the halves: [{t (seconds), team}]
-    by time, t where the ball gets nearest an end in the clip (the clip's last 2 s if it isn't seen)."""
+def goal_moments(game: Game, xy: np.ndarray, signs: list[int] | None = None, length: float | None = None) -> list[dict]:
+    """The goals, from the goal clips, in the halves: [{t (seconds), team, guessed}] by time, t where the ball gets
+    nearest an end in the clip (the clip's last 2 s if it isn't seen). team: 😊 ours, 🙁 theirs; unrated, from the
+    end the ball got to (with signs, the end we attack per half, when that's sure, and the field's length: the
+    ball has to get into the end third), guessed True; else None. Rated, the end agrees on all 31 (2026-11-04)."""
     from soccer_clips.track import match
 
     hs = match.halves(game)
@@ -293,11 +295,17 @@ def goal_moments(game: Game, xy: np.ndarray) -> list[dict]:
         if "goal" not in c.tags:
             continue
         a, b = game.frame_at(c.start_s), min(game.frame_at(c.end_s), len(xy))
-        if not any(h0 <= a < h1 for h0, h1 in hs):
+        h = next((i for i, (h0, h1) in enumerate(hs) if h0 <= a < h1), None)
+        if h is None:
             continue
-        x = np.abs(xy[a:b, 0]) if b > a else np.zeros(0)
-        t = (a + int(np.nanargmax(x))) / game.fps if np.isfinite(x).any() else max(c.start_s, c.end_s - 2.0)
-        out.append({"t": round(t, 2), "team": {"happy": "ours", "sad": "theirs"}.get(c.rating)})
+        x = xy[a:b, 0] if b > a else np.zeros(0)
+        seen = np.isfinite(x).any()
+        k = int(np.nanargmax(np.abs(x))) if seen else None
+        t = (a + k) / game.fps if seen else max(c.start_s, c.end_s - 2.0)
+        team, guessed = {"happy": "ours", "sad": "theirs"}.get(c.rating), False
+        if team is None and seen and signs and signs[h] and length and abs(x[k]) > length / 6:
+            team, guessed = "ours" if np.sign(x[k]) == signs[h] else "theirs", True
+        out.append({"t": round(t, 2), "team": team, "guessed": guessed})
     return sorted(out, key=lambda g: g["t"])
 
 

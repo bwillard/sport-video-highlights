@@ -213,7 +213,9 @@
           The share on the right is ours of the time either team has it. Hover a bar for minutes</li>
         <li>The <b>timeline</b>: the whole game left to right (1H, then 2H), and where the ball is up the field (up = toward the goal
           we attack), coloured by who has it; the strip along the bottom is who has it even where the ball isn't seen. Hover for
-          the moment, click to jump there. The same colours are the thin strip on the video timeline and the label on the field map</li>
+          the moment, click to jump there. Goals come from your clips tagged <b>goal</b>: rate one 😊 (<kbd>+</kbd>) for ours or 🙁
+          (<kbd>-</kbd>) for theirs; one not rated is put down to whoever attacks the end the ball got to (a hollow dot), once
+          which way we attack is sure. The same colours are the thin strip on the video timeline and the label on the field map</li>
         <li>Rough: worked out from the nearest players to the ball, so teams need their kits right (👕), and a ball the tracking
           loses for a while is not known. About 75–80% right against your labelled windows</li>
       </ul></details>
@@ -621,7 +623,7 @@ function renderPossession() {
     `</div>` + row("game", g) + row("1H", st.halves[0]) + row("2H", st.halves[1]) +
     `<div class="stat" style="font-size:12px;margin:6px 0 2px">ours of possession, by the third the ball is in: ${th.join(", ")}</div>` +
     (possInfo.timeline ? `<h4>Timeline</h4><div class="an-legend"><span>line: where the ball mostly is (${AN_SMOOTH_S * 2} s average), coloured by who has it most</span>` +
-      `<span>dots: each second</span><span>goals and the score: ours along the top (at their goal), theirs along the bottom (at ours)</span></div><canvas id="anTimeline" title="Where the ball is up the field (up = toward the goal we attack), coloured by who has it; the strip along the bottom is who has it. Click to jump there."></canvas><div id="anHover" class="stat"></div>` : "");
+      `<span>dots: each second</span><span>goals and the score: ours along the top (at their goal), theirs along the bottom (at ours); hollow: not rated, worked out from the end it went in</span></div><canvas id="anTimeline" title="Where the ball is up the field (up = toward the goal we attack), coloured by who has it; the strip along the bottom is who has it. Click to jump there."></canvas><div id="anHover" class="stat"></div>` : "");
   anChart = null;  // drawn again at the next frame
 }
 // the timeline chart: drawn once into an offscreen canvas (data or width changes), then copied each frame with the playhead
@@ -721,7 +723,8 @@ function buildAnalyticsChart(cv) {
     }
   }
   // goals: a line down the chart in the scorer's colour, and the score after it at the end it went in (ours along
-  // the top, at their goal; theirs along the bottom, at ours; not known whose: the top)
+  // the top, at their goal; theirs along the bottom, at ours; not known whose: the top). A hollow dot: unrated, whose
+  // worked out from the end the ball went in
   const gx = (t) => { const c = cols.find((c) => t >= c.t0 && t < c.t1); return c ? c.px + c.pw / 2 : null; };
   const goals = [];
   let us = 0, them = 0;
@@ -736,7 +739,8 @@ function buildAnalyticsChart(cv) {
     ctx.globalAlpha = 0.8;
     ctx.fillRect(Math.round(px) - 0.5, top - 4, 1, bottom - top + 8);
     ctx.globalAlpha = 1;
-    ctx.beginPath(); ctx.arc(px, dotY, 3.5, 0, 2 * Math.PI); ctx.fill();
+    ctx.beginPath(); ctx.arc(px, dotY, 3.5, 0, 2 * Math.PI);
+    if (g.guessed) { ctx.lineWidth = 1.5; ctx.strokeStyle = col; ctx.stroke(); } else ctx.fill();
     const txt = g.team ? `${us}–${them}` : "goal?";
     ctx.font = "bold 11px system-ui, sans-serif"; ctx.textAlign = "center";
     ctx.textBaseline = lane === "top" ? "bottom" : "top";
@@ -746,7 +750,7 @@ function buildAnalyticsChart(cv) {
       ctx.fillText(txt, px, lane === "top" ? top - 9 : bottom + 9);
       lastRight[lane] = px + tw / 2;
     }
-    goals.push({ px, t: g.t, team: g.team, score: `${us}–${them}` });
+    goals.push({ px, t: g.t, team: g.team, guessed: g.guessed, score: `${us}–${them}` });
   }
   return { w, h, dpr, img, cols, goals, top, bottom: stripY + AN.strip, L, yOf };
 }
@@ -781,7 +785,7 @@ function drawAnalytics() {
   const goal = anHoverX != null ? anChart.goals.find((g) => Math.abs(g.px - anHoverX) <= 4) : null;
   const third = (x) => (x == null ? "ball not seen" : x > anChart.L / 6 ? "ball in our attacking third" : x < -anChart.L / 6 ? "ball in our defending third" : "ball in the middle third");
   const txt = goal ? `⚽ ${label(goal.t)} ${goal.team === "ours" ? "our goal" : goal.team === "theirs" ? "their goal" : "a goal (rate the clip 😊 / 🙁 to say whose)"}` +
-      (goal.team ? `: ${goal.score}` : "") + " · click to see it"
+      (goal.team ? `: ${goal.score}` : "") + (goal.guessed ? " (from the end it went in: rate the clip 😊 / 🙁 to be sure)" : "") + " · click to see it"
     : hv ? `${label(hv.t0)} · ${POSS_HAS[hv.phase]} · ${third(hv.x)}` : "hover the timeline for a moment; click to jump there";
   const el = $("anHover");
   if (el && el.textContent !== txt) el.textContent = txt;

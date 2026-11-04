@@ -921,7 +921,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     def game_possession(game_id: str) -> dict:
         """Who had the ball (ball_state.py): {runs: [{team (phase: 1 ours, 2 theirs, 3 contested, 4 loose), from, to
         (frames)}], stats: time per phase, half and third, timeline: per second, the phase and where the ball is}. Worked out if out of date (seconds); {"pending"} / {"error"} as for match."""
-        from soccer_clips.track import ball_state
+        from soccer_clips.track import ball_state, match
 
         got = game_match(game_id)
         if "pending" in got or "error" in got:
@@ -931,8 +931,10 @@ def create_app(store: Store | None = None) -> FastAPI:
             st = worked_out(ball_state, game)
         except ValueError as e:
             return {"error": str(e)}
+        d = got["direction"]  # whose an unrated goal is goes by the end it went in, so only when that's sure
+        signs = [match.attack_sign(got, h) for h in (1, 2)] if d["sure"] or d["set"] else None
         return {"runs": st["runs"], "stats": st["stats"], "timeline": st.get("timeline"),
-                "goals": ball_state.goal_moments(game, st["xy"])}
+                "goals": ball_state.goal_moments(game, st["xy"], signs, (st.get("timeline") or {}).get("length"))}
 
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:

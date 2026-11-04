@@ -155,4 +155,15 @@ def test_goal_moments():
     xy = np.zeros((200, 2))
     xy[30, 0] = 30.0  # the ball at the end in the first clip
     xy[60:90, 0] = np.nan  # the unrated one: the ball never seen
-    assert bs.goal_moments(game, xy) == [{"t": 3.0, "team": "ours"}, {"t": 7.0, "team": None}, {"t": 14.0, "team": "theirs"}]
+    want = [{"t": 3.0, "team": "ours", "guessed": False}, {"t": 7.0, "team": None, "guessed": False},
+            {"t": 14.0, "team": "theirs", "guessed": False}]
+    assert bs.goal_moments(game, xy) == want
+    # unrated: whoever attacks the end the ball got to, once that's known, and only if it got into the end third
+    game.clips.append(clip(15.0, 19.0, None))
+    xy[160, 0] = -25.0  # the 2nd half, we attack -x: ours
+    assert bs.goal_moments(game, xy, [1, -1], 60.0)[-1] == {"t": 16.0, "team": "ours", "guessed": True}
+    assert bs.goal_moments(game, xy, [1, 1], 60.0)[-1]["team"] == "theirs"
+    assert bs.goal_moments(game, xy, None, 60.0)[-1]["team"] is None  # which way we attack not sure
+    xy[160, 0] = -8.0
+    assert bs.goal_moments(game, xy, [1, -1], 60.0)[-1]["team"] is None  # the ball not near an end
+    assert bs.goal_moments(game, xy, [1, -1], 60.0)[1] == want[1]  # the ball never seen: still not known
