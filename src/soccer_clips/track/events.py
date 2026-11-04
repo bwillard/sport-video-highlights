@@ -100,11 +100,36 @@ def remove_window(store: Store, game: Game, window_id: str) -> bool:
     return True
 
 
+def namer(store: Store, game: Game, t=None):
+    """A function (track, frame) -> (player labelled there, else None; player guessed by appearance or place,
+    else None), as things stand."""
+    from soccer_clips.track import people, reid
+
+    t = t if t is not None else people.tracks(store, game)
+    if t is None:
+        return lambda track, f: (None, None)
+    by: dict[str, dict[int, list]] = {"is": {}, "guess": {}}
+    for s in people.segments(t, people.load_picks(store, game)):
+        by["is"].setdefault(s["track"], []).append(s)
+    for p, cs in reid.auto_all(store, game).items():
+        for c in cs:
+            by["guess"].setdefault(c["track"], []).append({**c, "player": p})
+
+    def named(kind: str, track: int, f: int) -> int | None:
+        return next((s["player"] for s in by[kind].get(track, ()) if s["start"] <= f < s["end"]), None)
+
+    def name(track: int, f: int) -> tuple[int | None, int | None]:
+        p = named("is", track, f)
+        return p, None if p is not None else named("guess", track, f)
+
+    return name
+
+
 def resolved(store: Store, game: Game) -> dict:
     """The labels with who each event was, as things stand: {events: [{..., track, team (0 ours, 1 theirs,
     2 other, None), player (labelled), guess (by appearance or place), keeper (1 our goalie, 2 theirs, 0),
     at (pitch metres or None)}], windows, kinds, counts}."""
-    from soccer_clips.track import match, people, positions, reid
+    from soccer_clips.track import match, people, positions
 
     d = load_labels(store, game)
     t = people.tracks(store, game)
@@ -112,13 +137,7 @@ def resolved(store: Store, game: Game) -> dict:
     role = got[1] if got else None
     pos = positions.load(store, game) if t is not None else None
     mi = match.load(store, game) if t is not None else None
-    segs = people.segments(t, people.load_picks(store, game)) if t is not None else []
-    auto = reid.auto_all(store, game) if t is not None else {}
-
-    def named(track: int, f: int, stretches) -> int | None:
-        return next((s["player"] for s in stretches if s["track"] == track and s["start"] <= f < s["end"]), None)
-
-    guesses = [{"track": c["track"], "start": c["start"], "end": c["end"], "player": p} for p, cs in auto.items() for c in cs]
+    name = namer(store, game, t)
     out = []
     for e in d["events"]:
         r = {**e, "team": None, "player": None, "guess": None, "keeper": 0, "at": None}
@@ -128,8 +147,7 @@ def resolved(store: Store, game: Game) -> dict:
             a, b = t.window(e["frame"], e["frame"] + 1)
             i = a + int(np.flatnonzero(t.track[a:b] == tr)[0])
             r["team"] = int(role[i]) if role is not None and role[i] >= 0 else None
-            r["player"] = named(tr, e["frame"], segs)
-            r["guess"] = None if r["player"] is not None else named(tr, e["frame"], guesses)
+            r["player"], r["guess"] = name(tr, e["frame"])
             if mi is not None and len(mi["keeper"]) == len(t.frame):
                 r["keeper"] = int(mi["keeper"][i])
             if pos is not None and len(pos["xy"]) == len(t.frame) and np.isfinite(pos["xy"][i, 0]):

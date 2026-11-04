@@ -936,6 +936,29 @@ def create_app(store: Store | None = None) -> FastAPI:
         return {"runs": st["runs"], "stats": st["stats"], "timeline": st.get("timeline"),
                 "goals": ball_state.goal_moments(game, st["xy"], signs, (st.get("timeline") or {}).get("length"))}
 
+    @app.get("/api/games/{game_id}/touches")
+    def game_touches(game_id: str) -> dict:
+        """Who played the ball when (touches.py): {touches: [{frame, track, team (0 ours, 1 theirs, -1 neither
+        kit), keeper, ambiguous, confidence, run, player (labelled), guess}], stats, eval (against your full
+        windows: touches.compare; null without any)}. Worked out if out of date (seconds); {"pending"} /
+        {"error"} as for possession."""
+        from soccer_clips.track import ball_state, events, touches
+
+        got = game_match(game_id)
+        if "pending" in got or "error" in got:
+            return got
+        game = load(game_id)
+        try:
+            worked_out(ball_state, game)
+            tc = worked_out(touches, game)
+        except ValueError as e:
+            return {"error": str(e)}
+        name = events.namer(store, game)
+        out = [{**t, **dict(zip(("player", "guess"), name(t["track"], t["frame"])))} for t in tc["touches"]]
+        lab = events.resolved(store, game)
+        ev = touches.compare(tc["touches"], lab["events"], lab["windows"], game.fps) if lab["windows"] else None
+        return {"touches": out, "stats": tc["stats"], "eval": ev}
+
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:
         """

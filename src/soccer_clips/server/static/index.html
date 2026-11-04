@@ -230,6 +230,12 @@
         <li><b>Full windows</b> (Events box): a stretch where you label every touch, start to end; a few minutes at a time. They
           measure what the event finding finds and misses. Labels elsewhere only check what they cover</li>
         <li>Labels show on the video as a letter on the player near their moment, and as ticks on the timeline (bands = full windows)</li>
+        <li><b>👟 found touches</b> (Events box): the touches worked out from the ball and the players: the nearest player gets to
+          the ball and its path changes. Shown as a ring under that player's feet around the moment (green ours, red theirs, grey
+          a kit read as neither; dashed when someone else is nearly as close) with who it is, and as ticks along the bottom of the
+          timeline. Next to the button: against your full windows, how many of your labelled touches it found, how many of the
+          ones it found you labelled (a dribble touch or a throw-in you didn't label counts against it), and how often it names
+          the player you pointed at</li>
       </ul></details>
       <details data-sec="players"><summary>Players</summary><ul>
         <li><kbd>V</kbd> show tracked players: boxes by kit (white = our team, blue = opponents, grey dashed = refs, keepers,
@@ -322,6 +328,8 @@
         <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass or kick (aimed or a clear; the next touch says how it went), S shot, V save, G goal, W won the ball. A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
       <div class="row stat"><button id="evWindow" title="A full window is a stretch where you label every touch, so it can measure what's found and what's missed (elsewhere a label only says something happened). Start one, label every touch, then end it here. A few minutes at a time.">⏺ full window from here</button>
         <span id="evWindows"></span></div>
+      <div class="row stat"><button id="tcBtn" title="Touches found from the ball's path and the players (who played the ball when): a ring under the player's feet around each one, solid in their team's colour (dashed: another player nearly as close), and ticks along the bottom of the timeline. Next to it, how they compare with your full windows.">👟 found touches</button>
+        <span id="tcStat"></span></div>
       <ul id="evList" class="list"></ul>
     </div>
     <div class="box" id="detail"></div>
@@ -579,6 +587,7 @@ async function loadPossession() {
   possInfo = { gameId: id, ...got };
   renderPossession();
   drawTimeline();
+  loadTouches();
 }
 function possessionAt(f) {
   // 1 ours, 2 theirs, 3 contested, 4 loose, 0 not known or out of play, at frame f
@@ -1172,6 +1181,12 @@ function drawTimeline() {
     for (const ev of evLabels.events) {
       ctx.fillStyle = EV_KINDS[ev.kind]?.[2] || "#fff";
       ctx.fillRect(x(ev.frame / fps), 14, 1, 7);
+    }
+  }
+  if (showTouches && touchInfo?.gameId === game.id && touchInfo.touches) {  // found touches: ticks near the bottom
+    for (const t of touchInfo.touches) {
+      ctx.fillStyle = TOUCH_COLOR[t.team];
+      ctx.fillRect(x(t.frame / fps), h - 12, 1, 4);
     }
   }
   ctx.font = "11px system-ui, sans-serif";
@@ -2334,6 +2349,7 @@ function drawOverlay() {
   drawBall(ctx);
   drawPitchLines(ctx);
   drawEvents(ctx);
+  drawTouches(ctx);
   let co = null;
   if (placing) {
     co = placing.x == null ? null : placing;
@@ -2490,6 +2506,77 @@ function drawEvents(ctx) {
     ctx.strokeStyle = colour; ctx.lineWidth = 2; ctx.stroke();
     ctx.fillStyle = colour;
     ctx.fillText(key, X, Y + 1);
+  }
+  ctx.restore();
+}
+
+// ---------- touches found (Phase 6.3) ----------
+// 👟 found touches: who played the ball when (touches.py), as a ring under the player's feet around the moment
+// and a tick along the timeline, in the team's colour; next to the button, how they compare with your full windows.
+let showTouches = false, touchInfo = null;  // {gameId, touches, stats, eval} (GET touches) or {gameId, error}
+try { showTouches = localStorage.getItem("showTouches") === "1"; } catch {}
+const TOUCH_COLOR = { 0: POSS_COLOR[1], 1: POSS_COLOR[2], [-1]: "#9a9a9a" };
+const TOUCH_SPAN_S = 0.4;  // shown this long either side of the moment
+async function loadTouches() {
+  const id = game?.id;
+  touchInfo = null;
+  renderTouches();
+  if (!id || !showTouches || matchInfo?.error) return;
+  const got = await getJson(`${gameUrl()}/touches`).catch(() => null);
+  if (game?.id !== id || !got || got.pending) return;
+  touchInfo = { gameId: id, ...got };
+  renderTouches();
+  drawTimeline();
+}
+function touchWho(t) {
+  const n = t.player ?? t.guess, goalie = t.keeper === 1 ? "our goalie" : t.keeper === 2 ? "their goalie" : null;
+  if (n != null) return `#${n}${t.player == null ? "?" : ""}${goalie ? " (goalie)" : ""}`;
+  return goalie || { 0: "ours", 1: "theirs" }[t.team] || "neither kit";
+}
+function renderTouches() {
+  $("tcBtn").classList.toggle("on", showTouches);
+  const el = $("tcStat");
+  if (!showTouches || !game) { el.textContent = ""; return; }
+  if (touchInfo?.gameId !== game.id) { el.textContent = "finding touches…"; return; }
+  if (touchInfo.error) { el.textContent = touchInfo.error; return; }
+  const s = touchInfo.stats, e = touchInfo.eval, pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+  el.textContent = `${s.touches} touches (${s.per_min} a minute of play)` + (e ? ` · in your full windows: found ${pct(e.found)} of your ` +
+    `${e.labelled_n} labelled; ${pct(e.labelled)} of the ${e.found_n} found are labelled; the player you pointed at ${pct(e.player)}, ` +
+    `their team ${pct(e.team)}` : "");
+}
+$("tcBtn").addEventListener("click", (e) => {
+  e.target.blur();
+  showTouches = !showTouches;
+  try { localStorage.setItem("showTouches", showTouches ? "1" : "0"); } catch {}
+  if (showTouches && touchInfo?.gameId !== game?.id) loadTouches();
+  renderTouches();
+  drawTimeline();
+});
+function drawTouches(ctx) {
+  // touches near the playhead: a ring under the toucher's feet (dashed when ambiguous) and who, fading out either side
+  if (!showTouches || touchInfo?.gameId !== game?.id || !touchInfo.touches) return;
+  const f = v.currentTime * fps, span = TOUCH_SPAN_S * fps, ts = touchInfo.touches;
+  let lo = 0, hi = ts.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid].frame < f - span) lo = mid + 1; else hi = mid; }
+  if (lo >= ts.length || ts[lo].frame > f + span) return;
+  const at = boxesAt(Math.round(f));
+  if (!at) return;
+  const [i0, i1, rows] = at, r = videoRect();
+  ctx.save();
+  ctx.font = "bold 11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let k = lo; k < ts.length && ts[k].frame <= f + span; k++) {
+    const t = ts[k];
+    let o = -1;
+    for (let i = i0; i < i1 && o < 0; i++) if (rows[i * STRIDE + 1] === t.track) o = i * STRIDE;
+    if (o < 0) continue;
+    const cx = r.x + (rows[o + 2] + rows[o + 4]) / 2 * r.w, y2 = r.y + rows[o + 5] * r.h, bw = (rows[o + 4] - rows[o + 2]) * r.w;
+    ctx.globalAlpha = 1 - 0.7 * Math.abs(t.frame - f) / span;
+    ctx.strokeStyle = TOUCH_COLOR[t.team]; ctx.lineWidth = 2.5; ctx.setLineDash(t.ambiguous ? [4, 3] : []);
+    ctx.beginPath(); ctx.ellipse(cx, y2, Math.max(9, bw * 0.75), Math.max(4, bw * 0.28), 0, 0, 2 * Math.PI); ctx.stroke();
+    ctx.setLineDash([]);
+    const txt = touchWho(t);
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.fillStyle = "#fff";
+    ctx.strokeText(txt, cx, y2 + Math.max(6, bw * 0.3)); ctx.fillText(txt, cx, y2 + Math.max(6, bw * 0.3));
   }
   ctx.restore();
 }
