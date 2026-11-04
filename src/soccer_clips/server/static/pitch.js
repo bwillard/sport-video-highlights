@@ -155,7 +155,7 @@ function drawPitchMap(canvas, o) {
   //     (num: their number where it's known, drawn instead of a dot; guessed: by appearance, drawn fainter; goalie: 1 ours, 2 theirs),
   //     ball: {x, y, stale} or null (stale: not seen just now, where it was last), targets: bool (show landmarks), hover: target id or null, clicks: [{pitch, bad}], note: text over the map,
   //     attack: +1 / -1 the goal we attack (right / left), 0 or missing: not shown,
-  //     possession: 1 ours / 2 theirs have the ball (ball_state.py), 0 or missing: not shown}
+  //     possession: 1 ours / 2 theirs have the ball, 3 contested, 4 loose (ball_state.py), 0 or missing: not shown}
   const m = mapFrame(canvas, o.drawing), { ctx, to } = m;
   ctx.clearRect(0, 0, m.W, m.H);
   ctx.fillStyle = "#1f3b26";
@@ -263,10 +263,10 @@ function drawPitchMap(canvas, o) {
   if (o.possession) {  // who has the ball, top left, in the team's colour
     ctx.save();
     ctx.font = "11px system-ui, sans-serif";
-    ctx.fillStyle = MAP_TEAM[o.possession - 1];
+    ctx.fillStyle = { 1: MAP_TEAM[0], 2: MAP_TEAM[1], 3: "#e0703f", 4: "#aaaaaa" }[o.possession] || "#aaaaaa";
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-    ctx.fillText(o.possession === 1 ? "we have the ball" : "they have the ball", 6, 4);
+    ctx.fillText({ 1: "we have the ball", 2: "they have the ball", 3: "contested ball", 4: "loose ball" }[o.possession] || "", 6, 4);
     ctx.restore();
   }
   if (o.note) {

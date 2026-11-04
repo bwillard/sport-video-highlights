@@ -919,8 +919,8 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.get("/api/games/{game_id}/possession")
     def game_possession(game_id: str) -> dict:
-        """Who had the ball (ball_state.py): {runs: [{team (1 ours, 2 theirs), from, to (frames)}], stats: possession
-        time per team, half and third}. Worked out if out of date (seconds); {"pending"} / {"error"} as for match."""
+        """Who had the ball (ball_state.py): {runs: [{team (phase: 1 ours, 2 theirs, 3 contested, 4 loose), from, to
+        (frames)}], stats: time per phase, half and third, timeline: per second, the phase and where the ball is}. Worked out if out of date (seconds); {"pending"} / {"error"} as for match."""
         from soccer_clips.track import ball_state
 
         got = game_match(game_id)
@@ -931,7 +931,7 @@ def create_app(store: Store | None = None) -> FastAPI:
             st = worked_out(ball_state, game)
         except ValueError as e:
             return {"error": str(e)}
-        return {"runs": st["runs"], "stats": st["stats"]}
+        return {"runs": st["runs"], "stats": st["stats"], "timeline": st.get("timeline")}
 
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:

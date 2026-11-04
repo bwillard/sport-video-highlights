@@ -58,14 +58,39 @@ def test_possession_forgets_after_a_long_gap():
 
 def test_thirds_and_time():
     assert bs.thirds(np.array([-20.0, 0.0, 20.0, np.nan]), -1, 60.0).tolist() == [2, 1, 0, -1]  # attacking left
-    poss = np.array([1] * 10 + [2] * 10 + [0] * 10, np.int8)
-    in_play = np.ones(30, bool)
-    xy = np.column_stack([np.r_[np.full(10, 25.0), np.full(20, np.nan)], np.zeros(30)])
+    phase = np.array([1] * 10 + [2] * 10 + [bs.NOT_KNOWN] * 10 + [bs.CONTESTED_P] * 5 + [bs.OUT] * 5, np.int8)
+    xy = np.column_stack([np.r_[np.full(10, 25.0), np.full(30, np.nan)], np.zeros(40)])
     xy[10, 0] = -25.0  # theirs: in our defending third (we attack +x)
-    got = bs.time_stats(poss, in_play, np.isfinite(xy[:, 0]), xy, [(0, 30)], [1], 60.0, FPS)
+    got = bs.time_stats(phase, np.isfinite(xy[:, 0]), xy, [(0, 40)], [1], 60.0, FPS)
     g = got["game"]
     assert g["ours_s"] == 1.0 and g["theirs_s"] == 1.0 and g["unknown_s"] == 1.0 and g["ours_share"] == 0.5
+    assert g["contested_s"] == 0.5 and g["loose_s"] == 0.0 and g["in_play_s"] == 3.5 and g["out_s"] == 0.5
     assert g["thirds"]["attacking"]["ours_s"] == 1.0 and g["thirds"]["defending"]["theirs_s"] == 1.0
+
+
+def test_phase_of_play_and_timeline():
+    n = 60
+    poss = np.ones(n, np.int8)
+    in_play = np.ones(n, bool)
+    in_play[55:] = False
+    ball = np.zeros((n, 2))
+    near = np.full((n, 2), 5.0)
+    near[:, 0] = 0.5  # one of ours on the ball...
+    near[10:14, 1] = 1.0  # ...a tackle for 0.4 s: not long enough to be contested
+    near[20:30, 1] = 1.5  # ...a duel for 1 s: contested
+    near[35:50] = 4.0  # nobody within 3 m for 1.5 s: loose
+    near[40:42] = 1.0  # (both near for 0.2 s in the middle: a short break, both stretches too short to count)
+    ph = bs.phase_of_play(poss, in_play, near, ball, np.zeros(n, bool), FPS)
+    assert (ph[:20] == 1).all() and (ph[20:30] == bs.CONTESTED_P).all() and (ph[30:35] == 1).all()
+    assert (ph[35:40] == 1).all() and (ph[40:42] == 1).all() and (ph[42:50] == 1).all()  # 0.5 and 0.8 s: too short
+    near[40:42] = 4.0
+    ph = bs.phase_of_play(poss, in_play, near, ball, np.zeros(n, bool), FPS)
+    assert (ph[35:50] == bs.LOOSE_P).all() and (ph[55:] == bs.OUT).all()
+    xy = np.column_stack([np.linspace(-10, 10, n), np.zeros(n)])
+    tl = bs.timeline(ph, xy, [(0, n)], [-1], FPS)  # attacking left: + is toward -x
+    h = tl["halves"][0]
+    assert tl["step_s"] == 1.0 and h["from"] == 0 and len(h["phase"]) == 6
+    assert h["phase"][2] == bs.CONTESTED_P and h["phase"][5] == bs.OUT and h["x"][0] > h["x"][-1] > -10
 
 
 def test_truth_and_compare():

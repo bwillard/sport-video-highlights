@@ -14,15 +14,22 @@ Built from the positions on the field (positions.py) and the game's shape (match
 - **Possession:** the last team to control the ball alone has it until the other team does or it goes out
   of play. Loose and contested moments belong to the run in progress; after GAP_S without a ball, nobody
   is known to have it until someone controls it again.
-- **Time:** per team and half, and per third (from our attacking direction: where the ball is, last seen).
-  Frames nobody is known to have are counted as unknown, not shared out.
+- **Phase of play:** each frame in play is ours or theirs (possession), or nobody's: **contested** (both teams
+  within CONTEST_M for CONTEST_S or more: a duel), **loose** (the ball seen with nobody within LOOSE_M, or in
+  the air, for LOOSE_S or more: a long ball, a clearance, a ball rolling into space), or **not known** (no ball
+  for longer than GAP_S). Possession still runs on through these (who has the ball next is for passes); the
+  phase is what the time and the timeline show.
+- **Time:** per phase and half, and per third (from our attacking direction: where the ball is, last seen).
+  Frames nobody is known to have are counted as not known, not shared out. A per-second timeline of the phase
+  and where the ball is along the field, for drawing.
 
 `evaluate` checks possession against the labelled full windows (events.py): between labelled touches, the
 team of the last one has the ball.
 
 <game>/tracks/ball_state.npz, per frame from 0 to the end of the 2nd half: `xy` (metres, NaN unknown),
 `speed` (m/s), `air`, `in_play`, `near` (n, 2: metres to our nearest, theirs), `near_track`, `control`
-(CONTROL codes), `possession` (0 unknown, 1 ours, 2 theirs); `info` (JSON: runs, stats) and `key`.
+(CONTROL codes), `possession` (0 unknown, 1 ours, 2 theirs), `phase` (PHASES); `info` (JSON: runs, stats,
+timeline) and `key`.
 """
 from __future__ import annotations
 
@@ -34,7 +41,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 2
+VERSION = 3
 BRIDGE_S = 0.5  # gaps in the ball path filled in a straight line up to this; also control bridged over this
 SPEED_HALF = 3  # frames each way the ball's speed is measured over
 AIR_MS = 30.0  # faster than this (m/s, projected) the ball's in the air: a youth kick on the ground is slower
@@ -45,6 +52,13 @@ REACH_FAR_M = 1.5  # ...plus up to this much more at the far touchline
 GAP_S = 6.0  # no ball for longer than this: who has it isn't known until someone controls it
 LOOSE, OURS, THEIRS, CONTESTED, UNKNOWN = 0, 1, 2, 3, -1  # control codes
 TEAMS = {1: "ours", 2: "theirs"}
+OUT, CONTESTED_P, LOOSE_P, NOT_KNOWN = 0, 3, 4, 5  # phase codes, with 1 ours and 2 theirs
+PHASES = {OUT: "out of play", 1: "ours", 2: "theirs", CONTESTED_P: "contested", LOOSE_P: "loose", NOT_KNOWN: "not known"}
+CONTEST_M = 2.0  # both teams this close to the ball...
+CONTEST_S = 0.5  # ...for this long: contested (3-6% of play)
+LOOSE_M = 3.0  # the ball seen with nobody this close (or in the air)...
+LOOSE_S = 1.0  # ...for this long: loose (7-11% of play; nobody within 1 m is half of it, a dribble included)
+TIMELINE_S = 1.0  # the timeline's step
 THIRDS = ("defending", "middle", "attacking")  # from our attacking direction
 TOL_S = 0.5  # measuring against labels: the ball changing teams this close to a labelled touch counts
 TRUTH_GAP_S = 5.0  # ...and this long after a labelled touch with none since, who has it isn't known: in open
@@ -168,8 +182,31 @@ def possession(ctl: np.ndarray, in_play: np.ndarray, known: np.ndarray, fps: flo
     return out
 
 
+def _lasting(m: np.ndarray, k: float) -> np.ndarray:
+    """m, kept only in stretches at least k frames long."""
+    e = np.flatnonzero(np.diff(np.r_[0, m.astype(np.int8), 0]))
+    out = np.zeros(len(m), bool)
+    for a, b in zip(e[::2], e[1::2]):
+        if b - a >= k:
+            out[a:b] = True
+    return out
+
+
+def phase_of_play(poss: np.ndarray, in_play: np.ndarray, near: np.ndarray, ball: np.ndarray, air: np.ndarray,
+                  fps: float) -> np.ndarray:
+    """Per frame: OUT, 1 ours, 2 theirs (possession), CONTESTED_P, LOOSE_P, NOT_KNOWN (PHASES)."""
+    out = np.where(in_play, np.where(poss > 0, poss, NOT_KNOWN), OUT).astype(np.int8)
+    with np.errstate(invalid="ignore"):
+        free = in_play & ((np.isfinite(ball[:, 0]) & ~air & (near.min(1) > LOOSE_M)) | air)
+        duel = in_play & (near.max(1) <= CONTEST_M)
+    out[_lasting(free, LOOSE_S * fps)] = LOOSE_P
+    out[_lasting(duel, CONTEST_S * fps)] = CONTESTED_P
+    return out
+
+
 def runs(poss: np.ndarray) -> list[dict]:
-    """[{team (1 / 2), from, to (frames, end exclusive)}]: unbroken stretches of one team's possession."""
+    """[{team (1 / 2, or a phase code), from, to (frames, end exclusive)}]: unbroken stretches of one code, 0
+    left out."""
     edges = np.flatnonzero(np.diff(np.r_[0, poss, 0]))
     out = []
     for a, b in zip(edges[:-1], edges[1:]):
@@ -187,22 +224,23 @@ def thirds(x: np.ndarray, sign: int, length: float) -> np.ndarray:
     return out
 
 
-def time_stats(poss: np.ndarray, in_play: np.ndarray, known: np.ndarray, xy: np.ndarray,
+def time_stats(phase: np.ndarray, known: np.ndarray, xy: np.ndarray,
                hs: list[tuple[int, int]], signs: list[int], length: float, fps: float) -> dict:
-    """Possession seconds and shares per half and for the game, overall and per third (the ball where it was
-    last seen in the run)."""
+    """Seconds per phase (phase_of_play) and our share of possession per half and for the game, overall and
+    per third (the ball where it was last seen)."""
     last_x = xy[:, 0].copy()  # forward-filled: a run's frames without a ball count where it was last seen
     idx = np.where(np.isfinite(last_x), np.arange(len(last_x)), 0)
     np.maximum.accumulate(idx, out=idx)
     last_x = last_x[idx]
 
     def block(sl: np.ndarray, sign: int) -> dict:
-        p, ip = poss[sl], in_play[sl]
+        p = phase[sl]
+        ip = p != OUT
         s = lambda m: round(float(m.sum()) / fps, 1)  # noqa: E731
         ours, theirs = s(p == 1), s(p == 2)
         b = {"in_play_s": s(ip), "out_s": s(~ip), "ball_seen": round(float(known[sl][ip].mean()), 3) if ip.any() else None,
-             "ours_s": ours, "theirs_s": theirs, "unknown_s": s(ip & (p == 0)),
-             "ours_share": round(ours / (ours + theirs), 3) if ours + theirs else None}
+             "ours_s": ours, "theirs_s": theirs, "contested_s": s(p == CONTESTED_P), "loose_s": s(p == LOOSE_P),
+             "unknown_s": s(p == NOT_KNOWN), "ours_share": round(ours / (ours + theirs), 3) if ours + theirs else None}
         th = thirds(last_x[sl], sign, length)
         b["thirds"] = {}
         for i, name in enumerate(THIRDS):
@@ -214,11 +252,33 @@ def time_stats(poss: np.ndarray, in_play: np.ndarray, known: np.ndarray, xy: np.
     for (a, b), sign in zip(hs, signs):
         out["halves"].append(block(np.arange(a, b), sign))
     # the game: both halves added up (each third already from our attacking direction in its half)
-    g = {k: round(sum(h[k] for h in out["halves"]), 1) for k in ("in_play_s", "out_s", "ours_s", "theirs_s", "unknown_s")}
+    g = {k: round(sum(h[k] for h in out["halves"]), 1)
+         for k in ("in_play_s", "out_s", "ours_s", "theirs_s", "contested_s", "loose_s", "unknown_s")}
     g["ours_share"] = round(g["ours_s"] / (g["ours_s"] + g["theirs_s"]), 3) if g["ours_s"] + g["theirs_s"] else None
     g["thirds"] = {n: {k: round(sum(h["thirds"][n][k] for h in out["halves"]), 1) for k in ("ours_s", "theirs_s")}
                    for n in THIRDS}
     out["game"] = g
+    return out
+
+
+def timeline(phase: np.ndarray, xy: np.ndarray, hs: list[tuple[int, int]], signs: list[int], fps: float) -> dict:
+    """Per TIMELINE_S step of each half, for drawing: the most common phase, and where the ball is along the
+    field (mean x of where it's seen, metres, + toward the goal we attack; None if not seen).
+    {step_s, halves: [{from (frame), phase: [...], x: [...]}]}."""
+    k = max(1, round(TIMELINE_S * fps))
+    out = {"step_s": k / fps, "halves": []}
+    for (a, b), sign in zip(hs, signs):
+        if b <= a:
+            continue
+        i = np.arange(b - a) // k
+        m = i[-1] + 1
+        counts = np.bincount(i * 6 + phase[a:b], minlength=m * 6).reshape(m, 6)
+        x = sign * xy[a:b, 0]
+        ok = np.isfinite(x)
+        n = np.bincount(i[ok], minlength=m)
+        tot = np.bincount(i[ok], weights=x[ok], minlength=m)
+        xs = [round(float(t / c), 1) if c else None for t, c in zip(tot, n)]
+        out["halves"].append({"from": int(a), "phase": counts.argmax(1).tolist(), "x": xs})
     return out
 
 
@@ -268,21 +328,26 @@ def build(store: Store, game: Game, log=None) -> dict:
     known = np.isfinite(xy[:, 0]) & ~air
     poss = possession(ctl, in_play, known, fps)
     signs = [match.attack_sign(mi, h) for h in (1, 2)]
-    stats = time_stats(poss, in_play, known, xy, hs, signs, sizes["length"], fps)
+    phase = phase_of_play(poss, in_play, near, xy, air, fps)
+    stats = time_stats(phase, known, xy, hs, signs, sizes["length"], fps)
     ip = in_play & known
     stats["control"] = {name: round(float((ctl[ip] == c).mean()), 3) if ip.any() else None
                         for name, c in (("ours", OURS), ("theirs", THEIRS), ("contested", CONTESTED), ("loose", LOOSE))}
-    rs = runs(poss)
-    info = {"runs": rs, "stats": stats, "seconds": round(time.time() - t0, 1)}
+    rs = runs(np.where(phase == NOT_KNOWN, 0, phase))
+    info = {"runs": rs, "stats": stats, "timeline": {**timeline(phase, xy, hs, signs, fps), "length": sizes["length"]},
+            "seconds": round(time.time() - t0, 1)}
     ball_game.save_npz(path(store, game), key=np.array(k), xy=xy.astype(np.float32), speed=speed.astype(np.float32),
                        air=air, in_play=in_play, near=near.astype(np.float32), near_track=near_track.astype(np.int32),
-                       control=ctl, possession=poss, info=np.array(json.dumps(info)))
+                       control=ctl, possession=poss, phase=phase, info=np.array(json.dumps(info)))
     _cache.pop(game.id, None)
     if log:
         g = stats["game"]
         th = g["thirds"]
-        log(f"{game.id}: ours {_pct(g['ours_share'])} of known possession (1H {_pct(stats['halves'][0]['ours_share'])}, "
-            f"2H {_pct(stats['halves'][1]['ours_share'])}); known {_pct(_known(g))} of time in play; "
+        ip = g["in_play_s"] or 1
+        log(f"{game.id}: ours {_pct(g['ours_share'])} of possession (1H {_pct(stats['halves'][0]['ours_share'])}, "
+            f"2H {_pct(stats['halves'][1]['ours_share'])}); of time in play: ours {_pct(g['ours_s'] / ip)}, theirs "
+            f"{_pct(g['theirs_s'] / ip)}, contested {_pct(g['contested_s'] / ip)}, loose {_pct(g['loose_s'] / ip)}, "
+            f"not known {_pct(g['unknown_s'] / ip)}; "
             f"thirds (ours / theirs, min): " + ", ".join(f"{nm} {th[nm]['ours_s'] / 60:.1f} / {th[nm]['theirs_s'] / 60:.1f}"
                                                         for nm in THIRDS)
             + f"; {len(rs)} runs; {info['seconds']} s")
@@ -292,9 +357,6 @@ def build(store: Store, game: Game, log=None) -> dict:
 def _pct(x: float | None) -> str:
     return "–" if x is None else f"{x:.0%}"
 
-
-def _known(g: dict) -> float | None:
-    return (g["ours_s"] + g["theirs_s"]) / g["in_play_s"] if g["in_play_s"] else None
 
 
 _cache: dict[str, tuple[str, dict]] = {}

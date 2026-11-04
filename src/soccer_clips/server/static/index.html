@@ -45,6 +45,22 @@
   #picker button { min-width: 38px; padding: 2px 4px; }
   #picker button.best { outline: 2px solid #ff9f40; }
   #picker button.no { flex-basis: 100%; }
+  /* analytics: possession bars per half, and the game's timeline (ball position up, time across) */
+  #analytics { margin-top: 8px; }
+  #analytics > summary { cursor: pointer; font-weight: 600; }
+  #analytics h4 { margin: 8px 0 4px; font-size: 13px; font-weight: 600; }
+  .an-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 4px 0 6px; }
+  .an-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .an-row { display: grid; grid-template-columns: 40px 1fr 150px; gap: 10px; align-items: center; margin: 4px 0; font-size: 12px; }
+  .an-row .who { color: var(--muted); }
+  .an-row .note { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .an-row .note b { color: var(--text); font-weight: 600; }
+  .an-bar { display: flex; gap: 2px; height: 18px; }
+  .an-bar span { border-radius: 3px; min-width: 1px; font-size: 11px; line-height: 18px; padding-left: 4px; overflow: hidden;
+                 white-space: nowrap; color: #111; font-variant-numeric: tabular-nums; }
+  .an-bar span.nk { color: var(--text); }
+  #anTimeline { display: block; width: 100%; height: 220px; cursor: pointer; margin-top: 2px; }
+  #anHover { min-height: 1.4em; font-size: 12px; }
   /* help: one collapsible section per topic; closed ones share a line, an open one takes the full width */
   .help-secs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin-top: 6px; line-height: 1.7; }
   .help-secs details[open] { flex-basis: 100%; }
@@ -136,6 +152,10 @@
       <canvas id="pitchMap" title="The field from above: the camera's view (lighter); our players as their number where it's known (fainter = guessed: by appearance, at the 'auto-label at' setting in 🔍 layers, or followed on the field), a white dot where not; opponents (blue dots); goalies (green ours, violet theirs); the ball (yellow; hollow = where it was last seen, for a moment after it's lost); the player you follow (orange ring). Press Q to calibrate or correct the field."></canvas>
       <div id="pitchInfo"></div>
     </div>
+    <details id="analytics" class="box" open hidden>
+      <summary>Analytics</summary>
+      <div id="anPossession"></div>
+    </details>
     <div class="help help-secs" id="help">
       <span class="help-title">Keys &amp; help:</span>
       <details data-sec="playback"><summary>Playback</summary><ul>
@@ -184,6 +204,18 @@
           more points on the circle. Then click goal posts or corners at both ends: they tell it how long and wide the field is</li>
         <li><kbd>Shift</kbd>+<kbd>Q</kbd> (or 📐 field lines) <b>field lines</b>: the calibrated field drawn over the video (magenta), just to look; it's always shown while calibrating. Where it misses the painted lines, add a click
           there. A red × is a click that disagrees with the rest (often on the other set of lines on a double-marked field): click it to remove it</li>
+      </ul></details>
+      <details data-sec="analytics"><summary>Analytics</summary><ul>
+        <li>Below the field map, once the game's field is calibrated and both halves' times are set. <b>Possession</b>: of the
+          time the ball is in play, how much each team has it, and how much is nobody's: <b>contested</b> (players of both teams
+          within 2 m of the ball for half a second or more), <b>loose</b> (the ball seen with nobody within 3 m, or in the air, for a
+          second or more: a long ball, a clearance, a ball rolling into space), or <b>not known</b> (the ball not seen for over 6 s).
+          The share on the right is ours of the time either team has it. Hover a bar for minutes</li>
+        <li>The <b>timeline</b>: the whole game left to right (1H, then 2H), and where the ball is up the field (up = toward the goal
+          we attack), coloured by who has it; the strip along the bottom is who has it even where the ball isn't seen. Hover for
+          the moment, click to jump there. The same colours are the thin strip on the video timeline and the label on the field map</li>
+        <li>Rough: worked out from the nearest players to the ball, so teams need their kits right (👕), and a ball the tracking
+          loses for a while is not known. About 75–80% right against your labelled windows</li>
       </ul></details>
       <details data-sec="events"><summary>Events</summary><ul>
         <li><kbd>Shift</kbd>+<kbd>E</kbd> (or ✍️ label events) label events, until <kbd>Esc</kbd>: pause where it happens, point at the
@@ -282,7 +314,6 @@
         <span id="gtAttackNote"></span></div>
       <div class="row stat" id="gtGoalies" title="How often each goalie is found when the ball is within 20 m of their goal. Where it's low, point at the goalie and press Shift+G (ours), or click them and pick 🧤: that tracklet is the goalie, and so is anyone in the same kit staying around that goal. Found goalies show GK on their box; click one that isn't and pick ✕ not a goalie."></div>
       <div class="row stat" id="gtKits" title="Kits you've named (click a player, then 👕 ours / theirs / neither): that player's kit colour is that team's for the whole game. ✕ takes one back."></div>
-      <div class="row stat" id="gtPossession" title="Who had the ball, worked out from the nearest player of each team to it (within about 1.5 m, 3 m at the far touchline): a team has it from when one of theirs has it alone until one of the others does, or it goes out of play. Unknown: no ball seen for a while. Thirds are from our attacking direction. Shown on the timeline (thin strip: white ours, blue theirs) and on the field map. Rough: players read as neither team's kit can't have it, so check it against the video."></div>
     </div>
     <div class="box" id="events">
       <div class="row"><b>Events</b> <span class="stat" id="evCount"></span>
@@ -535,7 +566,7 @@ async function loadMatch() {
   loadPossession();
 }
 // who had the ball (ball_state.py): runs of one team's possession, and the time per team, half and third
-let possInfo = null;  // {gameId, runs: [{team, from, to}], stats} or {gameId, error}
+let possInfo = null;  // {gameId, runs: [{team (a phase: 1-4), from, to}], stats, timeline} or {gameId, error}
 async function loadPossession() {
   const id = game?.id;
   possInfo = null;
@@ -548,27 +579,164 @@ async function loadPossession() {
   drawTimeline();
 }
 function possessionAt(f) {
-  // 1 ours, 2 theirs, 0 not known, at frame f
+  // 1 ours, 2 theirs, 3 contested, 4 loose, 0 not known or out of play, at frame f
   const runs = possInfo?.gameId === game?.id ? possInfo.runs : null;
   if (!runs?.length) return 0;
   let lo = 0, hi = runs.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (runs[mid].to <= f) lo = mid + 1; else hi = mid; }
   return lo < runs.length && runs[lo].from <= f ? runs[lo].team : 0;
 }
+const POSS_COLOR = { 1: "#ffffff", 2: "#5ab0ff", 3: "#d95926", 4: "#7a7a7a", 5: "#3a3a3a" };  // ball_state.PHASES
+const POSS_NAME = { 1: "ours", 2: "theirs", 3: "contested", 4: "loose", 5: "not known" };
+const POSS_HAS = { 1: "we have it", 2: "they have it", 3: "contested", 4: "loose", 5: "not known", 0: "out of play" };
+const NOT_KNOWN_FILL = "repeating-linear-gradient(45deg, #2c2c2c 0 4px, #3a3a3a 4px 8px)";
 function renderPossession() {
-  const el = $("gtPossession");
-  const st = possInfo?.stats;
-  if (possInfo?.error) { el.textContent = `possession: (${possInfo.error})`; return; }
-  if (!st) { el.textContent = ""; return; }
+  // the Analytics box: a bar per game and half (ours | contested | loose | not known | theirs), and the timeline
+  const box = $("analytics"), el = $("anPossession");
+  const st = possInfo?.gameId === game?.id ? possInfo.stats : null;
+  box.hidden = !possInfo?.error && !st;
+  if (possInfo?.error) { el.innerHTML = `<div class="stat">possession: ${esc(possInfo.error)}</div>`; return; }
+  if (!st) { el.innerHTML = ""; return; }
   const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
-  const g = st.game, known = g.in_play_s ? (g.ours_s + g.theirs_s) / g.in_play_s : null;
+  const order = [[1, "ours_s"], [3, "contested_s"], [4, "loose_s"], [5, "unknown_s"], [2, "theirs_s"]];
+  const bar = (b) => {
+    const ip = b.in_play_s || 1;
+    return `<div class="an-bar">` + order.map(([c, k]) => {
+      const f = (b[k] || 0) / ip;
+      if (!f) return "";
+      const style = c === 5 ? `background:${NOT_KNOWN_FILL}` : `background:${POSS_COLOR[c]}`;
+      return `<span class="${c === 5 ? "nk" : ""}" style="flex:${f} 1 0;${style}" title="${POSS_NAME[c]}: ${pct(f)} of the time in play (${(b[k] / 60).toFixed(1)} min)">` +
+        `${f >= 0.08 ? pct(f) : ""}</span>`;
+    }).join("") + `</div>`;
+  };
+  const row = (who, b) => b ? `<div class="an-row"><span class="who">${who}</span>${bar(b)}` +
+    `<span class="note" title="${(b.in_play_s / 60).toFixed(0)} min in play">ours <b>${pct(b.ours_share)}</b> of possession</span></div>` : "";
+  const g = st.game;
   const th = [["defending", "our defending"], ["middle", "middle"], ["attacking", "our attacking"]].map(([n, name]) => {
     const t = g.thirds[n], all = t.ours_s + t.theirs_s;
     return `${name} ${all ? pct(t.ours_s / all) : "–"} (${(all / 60).toFixed(0)} min)`;
   });
-  el.innerHTML = `possession: ours ${pct(g.ours_share)} (1H ${pct(st.halves[0]?.ours_share)}, 2H ${pct(st.halves[1]?.ours_share)}),` +
-    ` known ${pct(known)} of time in play<br>ours, by the third the ball is in: ${th.join(", ")}`;
+  el.innerHTML = `<h4>Possession</h4><div class="an-legend">` +
+    [1, 3, 4, 5, 2].map((c) => `<span><i style="background:${c === 5 ? NOT_KNOWN_FILL : POSS_COLOR[c]}"></i>${POSS_NAME[c]}</span>`).join("") +
+    `</div>` + row("game", g) + row("1H", st.halves[0]) + row("2H", st.halves[1]) +
+    `<div class="stat" style="font-size:12px;margin:6px 0 2px">ours of possession, by the third the ball is in: ${th.join(", ")}</div>` +
+    (possInfo.timeline ? `<h4>Timeline</h4><canvas id="anTimeline" title="Where the ball is up the field (up = toward the goal we attack), coloured by who has it; the strip along the bottom is who has it. Click to jump there."></canvas><div id="anHover" class="stat"></div>` : "");
+  anChart = null;  // drawn again at the next frame
 }
+// the timeline chart: drawn once into an offscreen canvas (data or width changes), then copied each frame with the playhead
+let anChart = null;  // {w, h, img (canvas), cols: [{t0, t1, phase, x}], x0, plot: {top, bottom}, toX(t)}
+const AN = { left: 64, right: 8, top: 16, strip: 8, gap: 10, bottom: 2, halfGap: 10 };
+function buildAnalyticsChart(cv) {
+  const tl = possInfo.timeline, L = tl.length || 60, dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return null;
+  const img = document.createElement("canvas");
+  img.width = w * dpr; img.height = h * dpr;
+  const ctx = img.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const halves = tl.halves.filter((x) => x.phase.length);
+  const total = halves.reduce((n, x) => n + x.phase.length, 0) || 1;
+  const plotW = w - AN.left - AN.right - AN.halfGap * (halves.length - 1);
+  const top = AN.top, stripY = h - AN.bottom - AN.strip, bottom = stripY - AN.gap;
+  const yOf = (x) => bottom - ((x + L / 2) / L) * (bottom - top);
+  // the field, thirds as faint bands, halfway dashed
+  ctx.fillStyle = "#202020"; ctx.fillRect(AN.left, top, w - AN.left - AN.right, bottom - top);
+  ctx.fillStyle = "#262626"; ctx.fillRect(AN.left, yOf(L / 6), w - AN.left - AN.right, yOf(-L / 6) - yOf(L / 6));
+  ctx.strokeStyle = "#444"; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(AN.left, Math.round(yOf(0)) + 0.5); ctx.lineTo(w - AN.right, Math.round(yOf(0)) + 0.5); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = "11px system-ui, sans-serif"; ctx.fillStyle = "#999"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.fillText("their goal", AN.left - 6, top + 5);
+  ctx.fillText("halfway", AN.left - 6, yOf(0));
+  ctx.fillText("our goal", AN.left - 6, bottom - 5);
+  ctx.fillText("has it", AN.left - 6, stripY + AN.strip / 2);
+  // columns of ~2 px: the most common phase, and the mean of where the ball is seen
+  const cols = [];
+  let x0 = AN.left;
+  for (const half of halves) {
+    const n = half.phase.length, hw = plotW * n / total, per = Math.max(1, Math.ceil(n / (hw / 2)));
+    ctx.fillStyle = "#999"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText(half === halves[0] ? "1H" : "2H", x0, 1);
+    for (let i = 0; i < n; i += per) {
+      const cnt = [0, 0, 0, 0, 0, 0];
+      let xs = 0, xn = 0;
+      for (let j = i; j < Math.min(n, i + per); j++) {
+        cnt[half.phase[j]]++;
+        if (half.x[j] != null && half.phase[j] >= 1 && half.phase[j] <= 4) { xs += half.x[j]; xn++; }
+      }
+      const ph = cnt.indexOf(Math.max(...cnt));
+      cols.push({ px: x0 + (i / n) * hw, pw: Math.max(1, (per / n) * hw), t0: (half.from / fps) + i * tl.step_s,
+                  t1: (half.from / fps) + Math.min(n, i + per) * tl.step_s, phase: ph, x: xn ? xs / xn : null, half: halves.indexOf(half) });
+    }
+    x0 += hw + AN.halfGap;
+  }
+  // who has it: the strip along the bottom
+  for (const c of cols) {
+    if (!c.phase) continue;
+    ctx.fillStyle = POSS_COLOR[c.phase];
+    ctx.fillRect(c.px, stripY, c.pw + 0.5, AN.strip);
+  }
+  // where the ball is: a faint dot a second in the colour of who has it, so where it stays shows as density
+  x0 = AN.left;
+  ctx.globalAlpha = 0.55;
+  for (const half of halves) {
+    const n = half.phase.length, hw = plotW * n / total;
+    for (let j = 0; j < n; j++) {
+      const ph = half.phase[j], bx = half.x[j];
+      if (bx == null || ph < 1 || ph > 4) continue;
+      ctx.fillStyle = POSS_COLOR[ph];
+      ctx.fillRect(x0 + (j / n) * hw - 1, yOf(bx) - 1, 2, 2);
+    }
+    x0 += hw + AN.halfGap;
+  }
+  ctx.globalAlpha = 1;
+  return { w, h, dpr, img, cols, top, bottom: stripY + AN.strip, L, yOf };
+}
+function drawAnalytics() {
+  const cv = $("anTimeline");
+  if (!cv || !possInfo?.timeline || possInfo.gameId !== game?.id || $("analytics").hidden || !$("analytics").open) return;
+  const w = cv.clientWidth, dpr = window.devicePixelRatio || 1;
+  if (!anChart || anChart.w !== w || anChart.dpr !== dpr) anChart = buildAnalyticsChart(cv);
+  if (!anChart) return;
+  if (cv.width !== anChart.img.width || cv.height !== anChart.img.height) { cv.width = anChart.img.width; cv.height = anChart.img.height; }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(anChart.img, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const at = (t) => anChart.cols.find((c) => t >= c.t0 && t < c.t1);
+  const now = at(v.currentTime);
+  if (now) {  // the playhead
+    ctx.fillStyle = "#ffe14d";
+    ctx.fillRect(now.px + now.pw / 2 - 0.5, anChart.top, 1, anChart.bottom - anChart.top);
+  }
+  const hv = anHoverX != null ? anChart.cols.reduce((b, c) => (Math.abs(c.px - anHoverX) < Math.abs(b.px - anHoverX) ? c : b), anChart.cols[0]) : null;
+  if (hv) {
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.fillRect(hv.px + hv.pw / 2 - 0.5, anChart.top, 1, anChart.bottom - anChart.top);
+    if (hv.x != null) {
+      ctx.beginPath(); ctx.arc(hv.px + hv.pw / 2, anChart.yOf(hv.x), 4, 0, 2 * Math.PI);
+      ctx.fillStyle = POSS_COLOR[hv.phase] || "#999"; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = "#1b1b1b"; ctx.stroke();
+    }
+  }
+  const third = (x) => (x == null ? "ball not seen" : x > anChart.L / 6 ? "ball in our attacking third" : x < -anChart.L / 6 ? "ball in our defending third" : "ball in the middle third");
+  const txt = hv ? `${label(hv.t0)} · ${POSS_HAS[hv.phase]} · ${third(hv.x)}` : "hover the timeline for a moment; click to jump there";
+  const el = $("anHover");
+  if (el && el.textContent !== txt) el.textContent = txt;
+}
+let anHoverX = null;
+$("analytics").addEventListener("pointermove", (e) => {
+  if (e.target.id !== "anTimeline") return;
+  anHoverX = e.clientX - e.target.getBoundingClientRect().left;
+});
+$("analytics").addEventListener("pointerout", (e) => { if (e.target.id === "anTimeline") anHoverX = null; });
+$("analytics").addEventListener("click", (e) => {
+  if (e.target.id !== "anTimeline" || !anChart) return;
+  const x = e.clientX - e.target.getBoundingClientRect().left;
+  const c = anChart.cols.reduce((b, c) => (Math.abs(c.px - x) < Math.abs(b.px - x) ? c : b), anChart.cols[0]);
+  if (c) { v.pause(); seekTo(c.t0); }
+});
 const ARROW = { left: "← left", right: "right →" };
 function renderAttack() {
   if (!game) return;
@@ -921,7 +1089,7 @@ function drawTimeline() {
   }
   if (possInfo?.gameId === game.id && possInfo.runs) {  // who had the ball: a thin strip under the top band
     for (const r of possInfo.runs) {
-      ctx.fillStyle = r.team === 1 ? "rgba(255,255,255,0.75)" : "rgba(90,176,255,0.9)";
+      ctx.fillStyle = POSS_COLOR[r.team] || "#999";
       ctx.fillRect(x(r.from / fps), 20, Math.max(0.5, x((r.to - r.from) / fps)), 2);
     }
   }
@@ -985,6 +1153,7 @@ function frame() {
   drawOverlay();
   drawMap();
   drawLoupe();
+  drawAnalytics();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
