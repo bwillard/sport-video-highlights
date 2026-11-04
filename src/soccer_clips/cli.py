@@ -301,19 +301,29 @@ def cmd_people(store: Store, args: argparse.Namespace) -> None:
 
 
 def cmd_events(store: Store, args: argparse.Namespace) -> None:
-    from soccer_clips.track import ball_state, events, passes, restarts, shots, touches
+    from soccer_clips.track import ball_state, events, passes, restarts, shots, touches, turnovers
 
     ids = [g.id for g in store.list_games()] if args.game == "all" else [args.game]
     log = lambda m: print(m, flush=True)  # noqa: E731
     for gid in ids:
         game = store.load_game(gid)
-        if args.events_command in ("state", "touches", "passes", "shots"):
-            mod = {"state": ball_state, "touches": touches, "passes": passes, "shots": shots}[args.events_command]
+        if args.events_command == "stats":
+            _event_stats(store, game)
+            continue
+        if args.events_command in ("state", "touches", "passes", "shots", "build"):
+            mods = {"state": [ball_state], "touches": [touches], "passes": [passes], "shots": [shots],
+                    "build": [ball_state, touches, shots, passes]}[args.events_command]
             try:
-                mod.build(store, game, log=log)
+                for mod in mods:
+                    mod.build(store, game, log=log)
             except ValueError as e:
                 print(f"{gid}: skipped ({e})")
-            if args.events_command == "shots" and (rs := restarts.get(store, game)):
+                continue
+            if args.events_command == "build" and (tos := turnovers.get(store, game)):
+                log("  balls won (ours / theirs): " + ", ".join(
+                    f"{k} {tos['stats']['ours']['won_by'][k]} / {tos['stats']['theirs']['won_by'][k]}"
+                    for k in turnovers.KINDS))
+            if args.events_command in ("shots", "build") and (rs := restarts.get(store, game)):
                 st = rs["stats"]
                 log("  restarts (ours / theirs / not known): " + ", ".join(
                     f"{k} {st[k]['ours']} / {st[k]['theirs']} / {st[k]['unknown']}" for k in restarts.KINDS)
@@ -335,6 +345,13 @@ def cmd_events(store: Store, args: argparse.Namespace) -> None:
                   f"labelled ones ({', '.join(f'{k} {pct(v)}' for k, v in sorted(tg['kinds'].items()))}), "
                   f"{pct(tg['labelled'])} of found ones are labelled; the player you pointed at {pct(tg['player'])}, "
                   f"their team {pct(tg['team'])}")
+        tg2 = turnovers.evaluate(store, game)
+        if tg2 is not None:
+            pct = lambda x: "–" if x is None else f"{x:.0%}"  # noqa: E731
+            print(f"  Balls won: found {pct(tg2['found'])} of {tg2['labelled_n']} changes of team in your labels, "
+                  f"{pct(tg2['labelled'])} of {tg2['found_n']} found are; the team that won it right "
+                  f"{pct(tg2['team'])}; "
+                  f"W labels found {pct(tg2['won'])} of {tg2['won_n']}")
         pg = passes.evaluate(store, game)
         if pg is not None:
             pct = lambda x: "–" if x is None else f"{x:.0%}"  # noqa: E731
@@ -350,10 +367,62 @@ def cmd_events(store: Store, args: argparse.Namespace) -> None:
                   f"{sg['saves_n']}; goals {sg['goals'][0]}-{sg['goals'][1]}"
                   + (f" against the score {sg['score'][0]}-{sg['score'][1]}" if sg["score"] else " (no score entered)"))
             lab = events.resolved(store, game)["events"]
-            if any(e["kind"] == "restart" for e in lab) and (rs := restarts.get(store, game)):
+            if any(e["kind"] == "restart" for e in lab) and (rs := restarts.get(store, game, found=True)):
                 rg = restarts.compare(rs["restarts"], lab, game.fps)
                 print(f"  Restarts: found {pct(rg['found'])} of {rg['labelled_n']} labelled; the team right "
                       f"{pct(rg['team'])} (of {rg['team_n']})")
+
+
+def _event_stats(store: Store, game) -> None:
+    """events stats: the game's numbers per team and for our players, as in the tagger's Game log box."""
+    from soccer_clips.track import ball_state, events, passes, restarts, shots, touches, turnovers
+
+    st, tc, sh, ps = (m.get(store, game) for m in (ball_state, touches, shots, passes))
+    if None in (st, tc, sh, ps):
+        print(f"{game.id}: skipped (the events can't be worked out yet: soccer-clips events build)")
+        return
+    tos, rs = turnovers.get(store, game), restarts.get(store, game)
+    pct = lambda x: "–" if x is None else f"{x:.0%}"  # noqa: E731
+    own = st["stats"]["game"].get("ours_share")
+    score = f"{game.score_ours}-{game.score_theirs}" if game.score_ours is not None else "not entered"
+    print(f"{game.id} (score {score})")
+    rows = [("goals found", *(sh["stats"][t]["goals"] for t in ("ours", "theirs"))),
+            ("possession", pct(own), pct(None if own is None else 1 - own)),
+            ("shots (on target)", *(f"{sh['stats'][t]['shots']} ({sh['stats'][t]['goal'] + sh['stats'][t]['saved']})"
+                                    for t in ("ours", "theirs"))),
+            ("passes completed", *(f"{pct(ps['stats'][t]['completion'])} of {ps['stats'][t]['passes']}"
+                                   for t in ("ours", "theirs"))),
+            ("chains of 3+", *(ps["stats"][t]["chains"]["3"] + ps["stats"][t]["chains"]["4+"]
+                               for t in ("ours", "theirs"))),
+            ("balls won (their half)", *(f"{tos['stats'][t]['won']} ({tos['stats'][t]['won_their_half']})"
+                                         for t in ("ours", "theirs"))),
+            ("lost in own third", *(tos["stats"][t]["lost_own_third"] for t in ("ours", "theirs")))]
+    rows += [(k + "s", rs["stats"][k]["ours"], rs["stats"][k]["theirs"]) for k in ("corner", "goal kick", "throw-in")]
+    print(f"  {'':24} {'ours':>14} {'theirs':>14}")
+    for name, a, b in rows:
+        print(f"  {name:24} {a!s:>14} {b!s:>14}")
+    name = events.namer(store, game)
+    players: dict = {}
+    for t in tc["touches"]:
+        if t["team"] == 0:
+            p, g = name(t["track"], t["frame"])
+            if (n := p if p is not None else g) is not None:
+                players.setdefault(n, [0, 0, 0, 0, 0])[0] += 1
+    for p in ps["passes"]:
+        a, g = name(p["track"], p["frame"])
+        if p["team"] == 0 and (n := a if a is not None else g) is not None:
+            players.setdefault(n, [0, 0, 0, 0, 0])[1] += 1
+            players[n][2] += p["outcome"] == "completed"
+    for t in tos["turnovers"]:
+        for tr, team, k in ((t["track"], t["team"], 3), (t["from_track"], 1 - t["team"], 4)):
+            a, g = name(tr, t["frame"])
+            if team == 0 and (n := a if a is not None else g) is not None:
+                players.setdefault(n, [0, 0, 0, 0, 0])[k] += 1
+    if players:
+        print(f"  {'ours':6} {'touches':>8} {'passes':>9} {'won':>5} {'lost':>5}")
+        for n in sorted(players):
+            r = players[n]
+            print(f"  #{n:<5} {r[0]:>8} {r[2]:>4}/{r[1]:<4} {r[3]:>5} {r[4]:>5}")
 
 
 def cmd_pitch(store: Store, args: argparse.Namespace) -> None:
@@ -694,6 +763,11 @@ def main() -> None:
     et.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     ep = ev_sub.add_parser("passes", help="passes, how they went, and chains (tracks/passes.json; from the touches)")
     ep.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
+    eb = ev_sub.add_parser("build", help="everything found, in order: the ball state, touches (with your labels), "
+                           "shots, passes; balls won and restarts")
+    eb.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
+    eS = ev_sub.add_parser("stats", help="the game's numbers per team and for our players (the tagger's Game log box)")
+    eS.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     eh = ev_sub.add_parser("shots", help="shots, goals and restarts (tracks/shots.json; from the touches)")
     eh.add_argument("game", nargs="?", default="all", help="game id, or 'all' (default)")
     ee = ev_sub.add_parser("eval", help="possession, touches, passes, shots and restarts against the full windows "

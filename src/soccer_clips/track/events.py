@@ -4,7 +4,13 @@ Game events (Phase 6). For now, the labels they'll be measured against (6.1).
 Labels are made in the tagger (Shift+E, then a key per event): a moment, a kind, and where you pointed (the
 player who did it). Like player labels they're kept as clicks, not track ids, and matched to the tracklet
 under the click each time they're read, so they survive re-tracking. A pass, shot or save is a touch too;
-"won" is the touch that won the ball back; "restart" is the kick (or throw) that restarts play, on the taker.
+"won" is the touch that won the ball back; "restart" is the kick (or throw) that restarts play, on the taker;
+"none" says a touch found there isn't one.
+
+**Labels correct what's found** (6.7): a labelled touch puts that player on the touch found there (or adds one),
+its kind says what it was (a P is a pass, an S a shot, a T neither), a "none" takes a touch found away, and a
+G is a goal. Everything built on the touches follows. They're measured against what was found before
+correcting (touches.json's `found`), so the yardsticks stay honest.
 
 Full windows are stretches where every touch is labelled: they measure touches and possession completely
 (found / wrong / missed). Elsewhere a label only says that this happened, not that nothing else did.
@@ -23,7 +29,8 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-KINDS = ("touch", "pass", "shot", "save", "goal", "won", "restart")
+KINDS = ("touch", "pass", "shot", "save", "goal", "won", "restart", "none")
+NOT = "none"  # not a touch: takes away one found there
 VERSION = 1
 
 
@@ -60,6 +67,24 @@ def add_event(store: Store, game: Game, frame: int, kind: str, x: float | None =
     d["events"].append(ev)
     _save(store, game, d)
     return ev
+
+
+def on_track(store: Store, game: Game, track: int, frame: int, near: int = 15) -> tuple[float, float] | None:
+    """Where to point at a tracklet's player at a frame (its box's centre, fractions of the frame; from the
+    nearest frame of it within `near`), for a label made from the game log rather than a click; None if it isn't
+    there."""
+    from soccer_clips.track import people
+
+    t = people.tracks(store, game)
+    if t is None:
+        return None
+    a, b = t.window(frame - near, frame + near + 1)
+    i = np.flatnonzero(t.track[a:b] == track)
+    if not len(i):
+        return None
+    k = a + i[np.argmin(np.abs(t.frame[a + i] - frame))]
+    x1, y1, x2, y2 = t.box[k]
+    return float((x1 + x2) / 2), float((y1 + y2) / 2)
 
 
 def remove_event(store: Store, game: Game, event_id: str) -> bool:
@@ -100,9 +125,9 @@ def remove_window(store: Store, game: Game, window_id: str) -> bool:
     return True
 
 
-def namer(store: Store, game: Game, t=None):
+def namer(store: Store, game: Game, t=None, guesses: bool = True):
     """A function (track, frame) -> (player labelled there, else None; player guessed by appearance or place,
-    else None), as things stand."""
+    else None), as things stand. guesses=False: labelled players only (the guesses take seconds to work out)."""
     from soccer_clips.track import people, reid
 
     t = t if t is not None else people.tracks(store, game)
@@ -111,7 +136,7 @@ def namer(store: Store, game: Game, t=None):
     by: dict[str, dict[int, list]] = {"is": {}, "guess": {}}
     for s in people.segments(t, people.load_picks(store, game)):
         by["is"].setdefault(s["track"], []).append(s)
-    for p, cs in reid.auto_all(store, game).items():
+    for p, cs in (reid.auto_all(store, game) if guesses else {}).items():
         for c in cs:
             by["guess"].setdefault(c["track"], []).append({**c, "player": p})
 
@@ -125,10 +150,11 @@ def namer(store: Store, game: Game, t=None):
     return name
 
 
-def resolved(store: Store, game: Game) -> dict:
+def resolved(store: Store, game: Game, guesses: bool = True) -> dict:
     """The labels with who each event was, as things stand: {events: [{..., track, team (0 ours, 1 theirs,
     2 other, None), player (labelled), guess (by appearance or place), keeper (1 our goalie, 2 theirs, 0),
-    at (pitch metres or None)}], windows, kinds, counts}."""
+    at (pitch metres or None)}], nots (the "none" labels, likewise: not in events, so nothing counts them as
+    touches), windows, kinds, counts}. guesses=False: no guessed players (quicker)."""
     from soccer_clips.track import match, people, positions
 
     d = load_labels(store, game)
@@ -137,7 +163,7 @@ def resolved(store: Store, game: Game) -> dict:
     role = got[1] if got else None
     pos = positions.load(store, game) if t is not None else None
     mi = match.load(store, game) if t is not None else None
-    name = namer(store, game, t)
+    name = namer(store, game, t, guesses)
     out = []
     for e in d["events"]:
         r = {**e, "team": None, "player": None, "guess": None, "keeper": 0, "at": None}
@@ -154,4 +180,5 @@ def resolved(store: Store, game: Game) -> dict:
                 r["at"] = [round(float(v), 2) for v in pos["xy"][i]]
         out.append(r)
     counts = {k: sum(e["kind"] == k for e in d["events"]) for k in KINDS}
-    return {"events": out, "windows": d["windows"], "kinds": list(KINDS), "counts": counts}
+    return {"events": [e for e in out if e["kind"] != NOT], "nots": [e for e in out if e["kind"] == NOT],
+            "windows": d["windows"], "kinds": list(KINDS), "counts": counts}

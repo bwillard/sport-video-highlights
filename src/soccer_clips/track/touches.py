@@ -14,6 +14,10 @@ ball state (ball_state.py: the ball per frame in metres, in play or not) and the
   toucher is the tracklet you pointed at 73% of the time with a margin over 2 m, 50% under 0.5 m, so
   `confidence` is the margin over SURE_M, up to 1.
 - **Runs:** touches by the same tracklet with less than DRIBBLE_S between them are one run (a dribble).
+- **Your labels correct them** (`correct`, 6.7): a labelled touch (any kind but a goal) within TOL_S of one found
+  puts its player there and its kind on it (`label`; `fixed` when the player changed); one with none found near
+  is added (`added`); a "none" label takes the one found there away. Passes, shots and the rest are built on
+  the corrected touches; the yardsticks use what was found before (`found`).
 
 Against your full windows (2026-11-04, three games, 265 labelled touches, matched one to one within TOL_S: your
 labels come up to 3/4 s after the moment): 64% of labelled touches found (Elite Strikers 75%, FC-1 61%, EBU 60%),
@@ -23,7 +27,7 @@ then, or the player at it not placed on the field. Shorter gaps, other distances
 mixing them (fitted on two games, tried on the third) were no better.
 
 <game>/tracks/touches.json: {key, touches: [{frame, x, y (metres), track, team, keeper, margin, ambiguous,
-confidence, run}], stats}.
+confidence, run, and from labels: label, fixed, added}], found (the same before your labels), stats}.
 """
 from __future__ import annotations
 
@@ -35,7 +39,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 1
+VERSION = 2  # 2: corrected by your labels
 TOUCH_M = 2.0  # the nearest player within this of the ball...
 TOUCH_GAP_S = 0.5  # ...at the lowest in this long either way
 SMOOTH_HALF = 2  # frames each way the ball path is averaged over before its velocity is measured
@@ -55,10 +59,11 @@ def path(store: Store, game: Game) -> Path:
 
 
 def key(store: Store, game: Game) -> str | None:
-    from soccer_clips.track import ball_state
+    from soccer_clips.track import ball_state, events
 
     k = ball_state.key(store, game)
-    return None if k is None else f"t{VERSION} {k}"
+    lp = events.labels_path(store, game)
+    return None if k is None else f"t{VERSION} {k} {lp.stat().st_mtime_ns if lp.exists() else '-'}"
 
 
 # ---- the pieces (pure, for testing) ----
@@ -155,6 +160,49 @@ def describe(frames: np.ndarray, ball: np.ndarray, d1: np.ndarray, row: np.ndarr
     return out
 
 
+def label_team(e: dict) -> int:
+    """A resolved label's team as a touch's: 0 ours, 1 theirs, -1 not known (goalies with their team, a labelled
+    player ours)."""
+    if e.get("keeper") in (1, 2):
+        return e["keeper"] - 1
+    if e.get("team") in (0, 1):
+        return e["team"]
+    return 0 if e.get("player") is not None else -1
+
+
+def correct(found: list[dict], labs: list[dict], nots: list[dict], ball: np.ndarray, fps: float) -> list[dict]:
+    """The touches with your labels put in (resolved labels: labs every kind, nots the "none" ones): see the
+    module's notes. In frame order, runs worked out again."""
+    tol = round(TOL_S * fps)
+    gone = {i for i, _ in pair([t["frame"] for t in found], [e["frame"] for e in nots], tol)}
+    out = [dict(t) for i, t in enumerate(found) if i not in gone]
+    lt = [e for e in labs if e["kind"] != "goal"]
+    hit = set()
+    for i, j in pair([t["frame"] for t in out], [e["frame"] for e in lt], tol):
+        e, t = lt[j], out[i]
+        hit.add(j)
+        t["label"] = e["kind"]
+        if e["track"] is not None:
+            team = label_team(e)
+            t["fixed"] = e["track"] != t["track"]
+            t.update(track=e["track"], keeper=e["keeper"], team=team if team >= 0 or t["fixed"] else t["team"])
+    for j, e in enumerate(lt):
+        if j in hit or e["track"] is None:
+            continue  # a label on nobody: nothing to add
+        f = e["frame"]
+        at = ball[f] if f < len(ball) and np.isfinite(ball[f, 0]) else e["at"]
+        if at is None:
+            continue
+        out.append({"frame": f, "x": round(float(at[0]), 2), "y": round(float(at[1]), 2), "track": e["track"],
+                    "team": label_team(e), "keeper": e["keeper"], "margin": None, "ambiguous": False,
+                    "confidence": 1.0, "run": 0, "label": e["kind"], "added": True})
+    out.sort(key=lambda t: t["frame"])
+    fr = np.array([t["frame"] for t in out], np.int64)
+    for t, r in zip(out, runs(fr, np.array([t["track"] for t in out]), fps)):
+        t["run"] = int(r)
+    return out
+
+
 # ---- making it ----
 
 def build(store: Store, game: Game, log=None) -> dict:
@@ -162,7 +210,7 @@ def build(store: Store, game: Game, log=None) -> dict:
     worked out yet (ball_state.build)."""
     import time
 
-    from soccer_clips.track import ball_state, match, people, positions
+    from soccer_clips.track import ball_state, events, match, people, positions
 
     t0 = time.time()
     st = ball_state.get(store, game)
@@ -182,13 +230,19 @@ def build(store: Store, game: Game, log=None) -> dict:
     row = np.where(r >= 0, rows[np.maximum(r, 0)], -1)
     team = ball_state._row_teams(role, keeper)  # goalies with their team
     frames = find(ball, st["in_play"], d1, fps)
-    got = describe(frames, ball, d1, row, d2, t.track, team, keeper, fps)
+    found = describe(frames, ball, d1, row, d2, t.track, team, keeper, fps)
+    lab = events.resolved(store, game, guesses=False)
+    got = correct(found, lab["events"], lab["nots"], ball, fps)
     play_min = float(st["in_play"].sum()) / fps / 60
     stats = {"touches": len(got), "per_min": round(len(got) / play_min, 1) if play_min else None,
              "ours": sum(g["team"] == 0 for g in got), "theirs": sum(g["team"] == 1 for g in got),
              "neither": sum(g["team"] == -1 for g in got), "ambiguous": sum(g["ambiguous"] for g in got),
-             "runs": len({g["run"] for g in got}), "seconds": round(time.time() - t0, 1)}
-    out = {"key": k, "touches": got, "stats": stats}
+             "runs": len({g["run"] for g in got}), "found": len(found),
+             "from_labels": {"fixed": sum(bool(g.get("fixed")) for g in got),
+                             "added": sum(bool(g.get("added")) for g in got),
+                             "taken_away": len(found) - sum(not g.get("added") for g in got)},
+             "seconds": round(time.time() - t0, 1)}
+    out = {"key": k, "touches": got, "found": found, "stats": stats}
     atomic_write_text(path(store, game), json.dumps(out) + "\n")
     _cache.pop(game.id, None)
     if log:
@@ -280,4 +334,4 @@ def evaluate(store: Store, game: Game) -> dict | None:
     got = get(store, game)
     if got is None:
         return None
-    return compare(got["touches"], lab["events"], lab["windows"], game.fps)
+    return compare(got["found"], lab["events"], lab["windows"], game.fps)  # as found, before your labels

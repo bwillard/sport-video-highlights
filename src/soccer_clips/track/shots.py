@@ -16,6 +16,10 @@ their ends, and the shooter is the attacking team's last touch before:
   posts (MOUTH_PAD_M either side) at BLOCK_MS or more, and the next touch within BLOCK_S a defender's (not
   the goalie's).
 - **Outcome:** goal, saved (the goalie), corner (saved, deflected or blocked out), wide (goal kick), blocked.
+- **Your labels** (on the touches, touches.correct): a touch labelled P, T, W, V or K isn't a shot, even if a
+  shot's end was found after it; one labelled S is, ending as the first end found within LABEL_SHOT_S after it
+  (else the next touch: their goalie saved, a defender blocked; else missed). G labels are goals like your
+  clips (and decide the team before them).
 - **Goals:** each kickoff after one (who scored: the end the ball went out at and the team kicking off, which
   conceded, when they agree; kickoff_scorer),
   with your goal clips (ball_state.goal_moments): a clip within GOAL_NEAR_S before a kickoff is that goal;
@@ -38,7 +42,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 1
+VERSION = 2  # 2: your labels
 BACK_S = 3.0  # the shooter's touch: this long before the shot's end, or less
 SHOT_M = 30.0  # ...this close to the goal (centre of the goal line)
 APPROACH_S = 1.5  # the goalie's touch ends a shot: the ball came...
@@ -49,9 +53,13 @@ BLOCK_MS = 5.0  # ...this fast (m/s; over the BLOCK_LOOK_S after the touch)
 BLOCK_LOOK_S = 0.4
 BLOCK_S = 1.0  # ...and the next touch, a defender's, this soon
 GOAL_NEAR_S = 120.0  # a goal clip ending this long before a kickoff is that kickoff's goal
+SAME_GOAL_S = 30.0  # goal clips and labels with no kickoff after, this close: the same goal
 TAKER_S = 0.7  # the kickoff's taker: a touch this close to the kick
 TOL_S = 1.0  # measuring against labels: a shooter's touch this close to a labelled shot is it
+LABEL_SHOT_S = 4.0  # a labelled shot: how it ended, from where the ball got to this soon after
+NOT_SHOT = ("pass", "touch", "won", "save", "restart")  # a touch labelled one of these isn't a shot
 ENDS = {"kickoff": "goal", "corner": "corner", "goal kick": "wide", "keeper": "saved"}  # how a shot ended
+OUTCOMES = ("goal", "saved", "corner", "wide", "blocked", "missed")  # missed: a labelled shot, nothing found after
 STRENGTH = ("kickoff", "corner", "goal kick", "keeper")  # one end per moment: the first of these
 TEAMS = ("ours", "theirs")
 
@@ -160,6 +168,10 @@ def find(touches: list[dict], ends: list[dict], ball: np.ndarray, hs: list[tuple
             continue
         team = attacking(e["end"], signs[h])
         t = shooter(touches, frames, e["frame"], e["end"], team, length, fps)
+        if t is not None and t.get("label") in NOT_SHOT:
+            if e["kind"] != "kickoff":
+                continue  # you said the kick before wasn't a shot
+            t = None
         if t is None and e["kind"] not in ("kickoff", "keeper"):
             continue  # over the line with no attacker near: a clearance or a cross, not known as a shot
         if t is not None:
@@ -167,7 +179,7 @@ def find(touches: list[dict], ends: list[dict], ball: np.ndarray, hs: list[tuple
         out.append(_shot(t, e["frame"], e["end"], team, ENDS[e["kind"]], length))
     for i, t in enumerate(touches[:-1]):
         h = half_of(t["frame"], hs)
-        if t["frame"] in used or t["keeper"] or h is None or not signs[h]:
+        if t["frame"] in used or t["keeper"] or h is None or not signs[h] or t.get("label") in NOT_SHOT + ("shot",):
             continue
         nx = touches[i + 1]
         for end in (-1, 1):
@@ -176,6 +188,19 @@ def find(touches: list[dict], ends: list[dict], ball: np.ndarray, hs: list[tuple
                     and nx["team"] == 1 - team and not nx["keeper"] and nx["frame"] - t["frame"] <= BLOCK_S * fps
                     and heading_in(ball, t["frame"], end, length, goal, fps)):
                 out.append(_shot(t, nx["frame"], end, team, "blocked", length))
+    for i, t in enumerate(touches):  # labelled shots not found as one
+        h = half_of(t["frame"], hs)
+        if t.get("label") != "shot" or t["frame"] in used or h is None or not signs[h]:
+            continue
+        team = t["team"]
+        end = (signs[h] if team == 0 else -signs[h]) if team >= 0 else int(np.sign(t["x"])) or 1
+        team = attacking(end, signs[h])
+        e = next((e for e in ends if e["end"] == end and 0 < e["frame"] - t["frame"] <= LABEL_SHOT_S * fps), None)
+        nx = touches[i + 1] if i + 1 < len(touches) else None
+        oc = (ENDS[e["kind"]] if e else "saved" if nx and nx["keeper"] and nx["team"] == 1 - team
+              else "blocked" if nx and nx["team"] == 1 - team and nx["frame"] - t["frame"] <= BLOCK_S * fps
+              else "missed")
+        out.append(_shot(t, e["frame"] if e else t["frame"], end, team, oc, length))
     return sorted(out, key=lambda s: s["at"])
 
 
@@ -195,34 +220,48 @@ def kickoff_scorer(by_end: int | None, by_taker: int | None) -> int | None:
     return by_end if by_end is not None else by_taker
 
 
-def goals(shots: list[dict], kickoffs: list[dict], clip_goals: list[dict], fps: float) -> list[dict]:
-    """The goals: kickoffs after one ([{kick, from, team (who scored: 0 / 1, or None)}]) and your goal clips
-    (ball_state.goal_moments: [{t, team ('ours' / 'theirs' / None), guessed}]), a clip within GOAL_NEAR_S before
-    a kickoff being that goal. [{frame, team, by, guessed}]: team 0 ours, 1 theirs, None not known; frame the
-    goal's shot's end if one was found, else the ball going out (kickoff) or the clip's moment."""
+def goals(shots: list[dict], kickoffs: list[dict], marks: list[dict], fps: float) -> list[dict]:
+    """The goals: kickoffs after one ([{kick, from, team (who scored: 0 / 1, or None)}]) and your marks of them
+    ([{t, team ('ours' / 'theirs' / None), guessed, by ('clip': ball_state.goal_moments; 'label': a G)}]), the
+    last marks within GOAL_NEAR_S before a kickoff being that goal (the surest decides the team: a label, then a rated
+    clip, then the kickoff, then an unrated clip), marks with no kickoff within SAME_GOAL_S of each other one goal.
+    [{frame, team, by, guessed, shot}]: team 0 ours, 1 theirs, None not known; frame the ball going out
+    (kickoff) or the mark's moment."""
+    code = {"ours": 0, "theirs": 1}
+    rank = lambda c: (c.get("by") != "label", c["guessed"], c["team"] is None)  # noqa: E731
+
+    def best(ms: list[dict]) -> dict | None:
+        ms = [m for m in ms if m["team"] is not None]
+        return min(ms, key=rank) if ms else None
+
     out = []
-    left = list(clip_goals)
+    left = sorted(marks, key=lambda c: c["t"])
     for k in kickoffs:
-        c = next((c for c in left if k["kick"] - GOAL_NEAR_S * fps <= c["t"] * fps <= k["kick"]), None)
-        if c is not None:
-            left.remove(c)
+        near = [c for c in left if k["kick"] - GOAL_NEAR_S * fps <= c["t"] * fps <= k["kick"]]
+        near = [c for c in near if near[-1]["t"] - c["t"] <= SAME_GOAL_S]  # the last goal before it; earlier: others
+        left = [c for c in left if c not in near]
         s = next((s for s in shots if s["outcome"] == "goal" and s["at"] == k["from"]), None)
+        b = best(near)
         team = k["team"]
-        ct = {"ours": 0, "theirs": 1}.get(c["team"]) if c else None
-        if c is not None and ct is not None and (team is None or not c["guessed"]):
-            team = ct  # a rated clip wins
-        out.append({"frame": int(k["from"]), "team": team, "by": ["kickoff"] + (["clip"] if c else []),
-                    "guessed": bool(c is None or c["guessed"] or ct is None), "shot": s is not None})
-    for c in left:
-        out.append({"frame": round(c["t"] * fps), "team": {"ours": 0, "theirs": 1}.get(c["team"]), "by": ["clip"],
-                    "guessed": c["guessed"], "shot": False})
+        if b is not None and (team is None or not b["guessed"]):
+            team = code[b["team"]]
+        by = ["kickoff"] + sorted({c.get("by", "clip") for c in near})
+        out.append({"frame": int(k["from"]), "team": team, "by": by,
+                    "guessed": b is None or b["guessed"],  # not settled by a label or a rated clip
+                    "shot": s is not None})
+    while left:  # marks with no kickoff found: one goal per bunch
+        bunch = [c for c in left if c["t"] - left[0]["t"] <= SAME_GOAL_S]
+        left = left[len(bunch):]
+        b = best(bunch)
+        out.append({"frame": round(bunch[0]["t"] * fps), "team": code[b["team"]] if b else None,
+                    "by": sorted({c.get("by", "clip") for c in bunch}), "guessed": b is None or b["guessed"],
+                    "shot": False})
     return sorted(out, key=lambda g: g["frame"])
 
 
 def team_stats(shots: list[dict], gs: list[dict], team: int) -> dict:
     ps = [s for s in shots if s["team"] == team]
-    return {"shots": len(ps), **{o: sum(s["outcome"] == o for s in ps) for o in ("goal", "saved", "corner", "wide",
-                                                                             "blocked")},
+    return {"shots": len(ps), **{o: sum(s["outcome"] == o for s in ps) for o in OUTCOMES},
             "goals": sum(g["team"] == team for g in gs)}
 
 
@@ -233,36 +272,18 @@ def build(store: Store, game: Game, log=None) -> dict:
     found yet."""
     import time
 
-    from soccer_clips.track import ball_state, match, pitch, touches
+    from soccer_clips.track import ball_state, events, touches
 
     t0 = time.time()
     tc = touches.get(store, game)
     if tc is None:
         touches.build(store, game)  # raises why
         tc = touches.load(store, game)
-    st = ball_state.load(store, game)
-    mi = match.get(store, game)
     k = key(store, game)
-    sizes = match._sizes(pitch.load_cal(store, game))
-    hs = match.halves(game)
-    signs = [match.attack_sign(mi, h) for h in (1, 2)]
-    ball = st["xy"].astype(np.float64)
-    ends = end_moments(tc["touches"], mi["out_of_play"], mi["goals_by_kickoff"], ball, hs, signs, sizes["length"],
-                       game.fps)
-    shots = find(tc["touches"], ends, ball, hs, signs, sizes["length"], sizes["goal"], game.fps)
-    kos = []
-    for kick in mi["goals_by_kickoff"]:
-        o = next((o for o in mi["out_of_play"] if o["to"] == kick and o["kind"] == "kickoff"), None)
-        e = next((e for e in ends if o and e["kind"] == "kickoff" and e["frame"] == o["from"]), None)
-        h = half_of(kick, hs)
-        by_end = attacking(e["end"], signs[h]) if e and h is not None and signs[h] else None
-        taker = next((t for t in tc["touches"] if abs(t["frame"] - kick) <= TAKER_S * game.fps and t["team"] >= 0),
-                     None)
-        kos.append({"kick": int(kick), "from": int(o["from"]) if o else int(kick),
-                    "team": kickoff_scorer(by_end, 1 - taker["team"] if taker else None)})
-    clip_goals = ball_state.goal_moments(game, st["xy"], signs if mi["direction"]["sure"] or mi["direction"]["set"]
-                                         else None, sizes["length"])
-    gs = goals(shots, kos, clip_goals, game.fps)
+    lab = events.resolved(store, game, guesses=False)
+    marks = [{"t": e["frame"] / game.fps, "team": {1: "ours", 2: "theirs"}.get(ball_state.label_team(e)),
+              "guessed": False, "by": "label"} for e in lab["events"] if e["kind"] == "goal"]
+    shots, gs = work_out(store, game, tc["touches"], marks)
     stats = {name: team_stats(shots, gs, i) for i, name in enumerate(TEAMS)}
     stats["goals_not_known"] = sum(g["team"] is None for g in gs)
     stats["seconds"] = round(time.time() - t0, 1)
@@ -272,12 +293,41 @@ def build(store: Store, game: Game, log=None) -> dict:
     if log:
         def line(s: dict) -> str:
             return (f"{s['goals']} goals, {s['shots']} shots ({s['goal']} in, {s['saved']} saved, "
-                    f"{s['corner']} corner, "
-                    f"{s['wide']} wide, {s['blocked']} blocked)")
+                    f"{s['corner']} corner, {s['wide']} wide, {s['blocked']} blocked, {s['missed']} missed)")
 
         log(f"{game.id}: ours {line(stats['ours'])}; theirs {line(stats['theirs'])}; goals not put down to a team "
             f"{stats['goals_not_known']}; {stats['seconds']} s")
     return out
+
+
+def work_out(store: Store, game: Game, touch_list: list[dict], marks: list[dict]) -> tuple[list[dict], list[dict]]:
+    """The shots and goals from these touches (the corrected ones, or as found for measuring) and goal marks
+    beside your clips (G labels)."""
+    from soccer_clips.track import ball_state, match, pitch
+
+    st = ball_state.load(store, game)
+    mi = match.get(store, game)
+    sizes = match._sizes(pitch.load_cal(store, game))
+    hs = match.halves(game)
+    signs = [match.attack_sign(mi, h) for h in (1, 2)]
+    ball = st["xy"].astype(np.float64)
+    ends = end_moments(touch_list, mi["out_of_play"], mi["goals_by_kickoff"], ball, hs, signs, sizes["length"],
+                       game.fps)
+    shots = find(touch_list, ends, ball, hs, signs, sizes["length"], sizes["goal"], game.fps)
+    kos = []
+    for kick in mi["goals_by_kickoff"]:
+        o = next((o for o in mi["out_of_play"] if o["to"] == kick and o["kind"] == "kickoff"), None)
+        e = next((e for e in ends if o and e["kind"] == "kickoff" and e["frame"] == o["from"]), None)
+        h = half_of(kick, hs)
+        by_end = attacking(e["end"], signs[h]) if e and h is not None and signs[h] else None
+        taker = next((t for t in touch_list if abs(t["frame"] - kick) <= TAKER_S * game.fps and t["team"] >= 0),
+                     None)
+        kos.append({"kick": int(kick), "from": int(o["from"]) if o else int(kick),
+                    "team": kickoff_scorer(by_end, 1 - taker["team"] if taker else None)})
+    clip_goals = ball_state.goal_moments(game, st["xy"], signs if mi["direction"]["sure"] or mi["direction"]["set"]
+                                         else None, sizes["length"])
+    gs = goals(shots, kos, [{**c, "by": "clip"} for c in clip_goals] + marks, game.fps)
+    return shots, gs
 
 
 _cache: dict[str, tuple[str, dict]] = {}
@@ -344,13 +394,15 @@ def compare(shots: list[dict], gs: list[dict], evs: list[dict], windows: list[di
 
 
 def evaluate(store: Store, game: Game) -> dict | None:
-    """Shots and goals against the game's labels and final score (compare); None if there are no shots yet."""
-    from soccer_clips.track import events
+    """Shots as found (from the touches before your labels) against your labels, and the goals (with your labels)
+    against the final score (compare); None if there are no shots yet."""
+    from soccer_clips.track import events, touches
 
     got = get(store, game)
     if got is None:
         return None
+    raw, _ = work_out(store, game, touches.load(store, game)["found"], [])
     lab = events.resolved(store, game)
     score = ((game.score_ours, game.score_theirs) if game.score_ours is not None and game.score_theirs is not None
              else None)
-    return compare(got["shots"], got["goals"], lab["events"], lab["windows"], score, game.fps)
+    return compare(raw, got["goals"], lab["events"], lab["windows"], score, game.fps)

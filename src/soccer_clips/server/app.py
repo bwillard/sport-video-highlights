@@ -825,8 +825,11 @@ def create_app(store: Store | None = None) -> FastAPI:
         from soccer_clips.track import events
 
         game = load(game_id)
+        x, y = body.x, body.y
+        if x is None and body.track is not None:  # from the game log: on that player's box
+            x, y = events.on_track(store, game, body.track, body.frame) or (None, None)
         try:
-            ev = events.add_event(store, game, body.frame, body.kind, body.x, body.y, body.track)
+            ev = events.add_event(store, game, body.frame, body.kind, x, y, body.track)
         except ValueError as e:
             raise HTTPException(422, str(e))
         return {"event": ev, **events.resolved(store, game)}
@@ -958,7 +961,7 @@ def create_app(store: Store | None = None) -> FastAPI:
         name = events.namer(store, game)
         out = [{**t, **dict(zip(("player", "guess"), name(t["track"], t["frame"])))} for t in tc["touches"]]
         lab = events.resolved(store, game)
-        ev = touches.compare(tc["touches"], lab["events"], lab["windows"], game.fps) if lab["windows"] else None
+        ev = touches.compare(tc["found"], lab["events"], lab["windows"], game.fps) if lab["windows"] else None
         return {"touches": out, "stats": tc["stats"], "eval": ev}
 
     @app.get("/api/games/{game_id}/passes")
@@ -993,9 +996,7 @@ def create_app(store: Store | None = None) -> FastAPI:
                 n["danger"] += p["danger"]
                 if p["outcome"] in ("completed", "lost", "out"):
                     n[p["outcome"]] += 1
-        lab = events.resolved(store, game)
-        ev = (passes.compare(ps["passes"], lab["events"], lab["windows"], st["in_play"], game.fps)
-              if lab["windows"] else None)
+        ev = passes.evaluate(store, game)  # as found, before your labels
         return {"passes": out, "chains": ps["chains"], "stats": ps["stats"], "players": players, "eval": ev}
 
     @app.get("/api/games/{game_id}/shots")
@@ -1024,12 +1025,83 @@ def create_app(store: Store | None = None) -> FastAPI:
         lab = events.resolved(store, game)
         score = ((game.score_ours, game.score_theirs) if game.score_ours is not None and game.score_theirs is not None
                  else None)
-        ev = shots.compare(sh["shots"], sh["goals"], lab["events"], lab["windows"], score, game.fps)
+        ev = shots.evaluate(store, game)  # shots as found, before your labels
         if any(e["kind"] == "restart" for e in lab["events"]):
-            ev["restarts"] = restarts.compare(rs["restarts"], lab["events"], game.fps)
+            found = restarts.get(store, game, found=True)["restarts"]
+            ev["restarts"] = restarts.compare(found, lab["events"], game.fps)
         return {"shots": [{**x, **who(x, x["frame"] if x["frame"] is not None else x["at"])} for x in sh["shots"]],
                 "goals": sh["goals"], "restarts": [{**r, **who(r, r["frame"])} for r in rs["restarts"]],
                 "stats": sh["stats"], "restart_stats": rs["stats"], "score": list(score) if score else None, "eval": ev}
+
+    @app.get("/api/games/{game_id}/log")
+    def game_log(game_id: str) -> dict:
+        """The game log (6.7): every event found, in time order, with who (your labels in): {events: [{frame,
+        kind (goal / shot / pass / won / restart), team (0 ours, 1 theirs, None), track, player, guess, and per
+        kind: outcome, to_track, to_player, to_guess, how (won: interception / tackle / recovery), third...}],
+        stats (per team), players (ours by name: touches, passes, completed, shots, goals, won, lost)}.
+        {"pending"} / {"error"} as for possession."""
+        from soccer_clips.track import ball_state, events, passes, restarts, shots, touches, turnovers
+
+        got = game_match(game_id)
+        if "pending" in got or "error" in got:
+            return got
+        game = load(game_id)
+        try:
+            st = worked_out(ball_state, game)
+            tc = worked_out(touches, game)
+            sh = worked_out(shots, game)
+            ps = worked_out(passes, game)
+        except ValueError as e:
+            return {"error": str(e)}
+        tos = turnovers.get(store, game) or {"turnovers": [], "stats": None}
+        rs = restarts.get(store, game) or {"restarts": [], "stats": None}
+        name = events.namer(store, game)
+
+        def who(track, f, pre=""):
+            p, g = name(track, f) if track is not None else (None, None)
+            return {f"{pre}player": p, f"{pre}guess": g}
+
+        log = [{**g, "kind": "goal", "track": None, **who(None, 0)} for g in sh["goals"]]
+        log += [{**x, "kind": "shot", "frame": x["frame"] if x["frame"] is not None else x["at"],
+                 **who(x["track"], x["frame"] if x["frame"] is not None else x["at"])} for x in sh["shots"]]
+        log += [{**p, "kind": "pass", **who(p["track"], p["frame"]), **who(p["to_track"], p["to_frame"], "to_")}
+                for p in ps["passes"]]
+        log += [{**t, "kind": "won", "how": t["kind"], **who(t["track"], t["frame"]),
+                 **who(t["from_track"], t["frame"], "from_")} for t in tos["turnovers"]]
+        log += [{**r, "kind": "restart", "restart": r["kind"], **who(r["track"], r["frame"])} for r in rs["restarts"]
+                if r["kind"] != "free kick"]
+        log.sort(key=lambda e: e["frame"])
+        players: dict[str, dict] = {}
+
+        def add(e, pre, what):
+            n = e.get(f"{pre}player") if e.get(f"{pre}player") is not None else e.get(f"{pre}guess")
+            if n is not None:
+                row = players.setdefault(str(n), dict.fromkeys(("touches", "passes", "completed", "shots", "goals",
+                                                                  "won", "lost"), 0))
+                row[what] += 1
+
+        for t in tc["touches"]:
+            if t["team"] == 0:
+                add(who(t["track"], t["frame"]), "", "touches")
+        for e in log:
+            if e["kind"] == "pass" and e["team"] == 0:
+                add(e, "", "passes")
+                if e["outcome"] == "completed":
+                    add(e, "", "completed")
+            elif e["kind"] == "shot" and e["team"] == 0:
+                add(e, "", "shots")
+                if e["outcome"] == "goal":
+                    add(e, "", "goals")
+            elif e["kind"] == "won":
+                if e["team"] == 0:
+                    add(e, "", "won")
+                else:
+                    add(e, "from_", "lost")
+        g = st["stats"]["game"]
+        stats = {"possession": g.get("ours_share"), "shots": sh["stats"], "passes": ps["stats"],
+                 "won": tos["stats"], "restarts": rs["stats"],
+                 "score": [game.score_ours, game.score_theirs] if game.score_ours is not None else None}
+        return {"events": log, "stats": stats, "players": players}
 
     @app.get("/api/games/{game_id}/pitch/frames")
     def game_pitch_frames(game_id: str, start: int, end: int) -> Response:

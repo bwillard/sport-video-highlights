@@ -101,3 +101,16 @@ def test_passes_api_not_calibrated(settings):
     store, game = four_tracklets(settings)  # tracked, not calibrated
     got = TestClient(create_app(store)).get(f"/api/games/{game.id}/passes").json()
     assert "calibrated" in got["error"]
+
+
+def test_labels_say_pass_or_not():
+    n = 100
+    ball = line(n, [(0, 0), (10, 2), (99, 2)])  # carried 2 m: not far enough for a pass by itself
+    poss = np.zeros(n, np.int8)
+    tc = [touch(0, 1, 0), touch(10, 2, 0)]
+    assert ps.find(tc, ball, np.ones(n, bool), poss, FPS) == []
+    tc[0]["label"] = "pass"
+    assert ps.find(tc, ball, np.ones(n, bool), poss, FPS)[0]["outcome"] == "completed"
+    ball = line(n, [(0, 0), (10, 10), (99, 10)])
+    tc[0]["label"] = "touch"  # you said it was just a touch
+    assert ps.find(tc, ball, np.ones(n, bool), poss, FPS) == []

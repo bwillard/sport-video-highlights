@@ -44,6 +44,18 @@ def test_find_shots():
     assert got[0]["distance"] == 5.0 and got[0]["track"] == 1
 
 
+def test_labelled_shots():
+    ball = np.full((300, 2), np.nan)
+    tc = [touch(60, 1, 0, 25), touch(70, 9, 1, 29, keeper=2),  # a cross the goalie caught: you labelled it a pass
+          touch(150, 4, 0, 20), touch(155, 6, 1, 22)]  # you labelled a shot; a defender's next
+    tc[0]["label"], tc[2]["label"] = "pass", "shot"
+    ends = [{"frame": 70, "end": 1, "kind": "keeper"}]
+    got = sh.find(tc, ends, ball, HS, SIGNS, L, GOAL, FPS)
+    assert [(s["frame"], s["team"], s["outcome"]) for s in got] == [(150, 0, "blocked")]
+    ends.append({"frame": 170, "end": 1, "kind": "goal kick"})
+    assert sh.find(tc, ends, ball, HS, SIGNS, L, GOAL, FPS)[0]["outcome"] == "wide"  # where it got to wins
+
+
 def test_goals_and_scorer():
     assert sh.kickoff_scorer(0, 0) == 0 and sh.kickoff_scorer(0, 1) is None and sh.kickoff_scorer(None, 1) == 1
     shots = [{"frame": 90, "at": 100, "outcome": "goal"}]
@@ -53,6 +65,16 @@ def test_goals_and_scorer():
     got = sh.goals(shots, kos, clips, FPS)
     assert [(g["frame"], g["team"], g["by"], g["shot"]) for g in got] == [
         (100, 1, ["kickoff", "clip"], True), (2000, 0, ["clip"], False), (3900, None, ["kickoff"], False)]
+    # two goals before one kickoff (the first's kickoff missed): the last is that kickoff's, the first its own; a
+    # G label beside a clip of the same goal: one goal, the label deciding
+    clips = [{"t": 10.0, "team": "ours", "guessed": False, "by": "clip"},
+             {"t": 65.0, "team": "theirs", "guessed": False, "by": "clip"},
+             {"t": 66.0, "team": "ours", "guessed": False, "by": "label"},
+             {"t": 300.0, "team": "theirs", "guessed": True, "by": "clip"},
+             {"t": 310.0, "team": "ours", "guessed": False, "by": "label"}]
+    got2 = sh.goals([], [{"kick": 1000, "from": 980, "team": 1}], clips, FPS)
+    assert [(g["frame"], g["team"], g["by"]) for g in got2] == [
+        (100, 0, ["clip"]), (980, 0, ["kickoff", "clip", "label"]), (3000, 0, ["clip", "label"])]
     s = sh.team_stats([{"team": 0, "outcome": "saved"}, {"team": 0, "outcome": "goal"}], got, 0)
     assert s["shots"] == 2 and s["saved"] == 1 and s["goals"] == 1
 
@@ -104,3 +126,18 @@ def test_score_and_shots_api(settings):
     assert got["score_ours"] == 3 and store.load_game(game.id).score_theirs == 1
     assert client.patch(f"/api/games/{game.id}", json={"score_ours": -1}).status_code == 422
     assert "calibrated" in client.get(f"/api/games/{game.id}/shots").json()["error"]
+
+
+def test_log_api_and_label_from_the_log(settings):
+    from fastapi.testclient import TestClient
+    from test_gallery import four_tracklets
+
+    from soccer_clips.server.app import create_app
+
+    store, game = four_tracklets(settings)  # tracked, not calibrated
+    client = TestClient(create_app(store))
+    assert "calibrated" in client.get(f"/api/games/{game.id}/log").json()["error"]
+    # a label made from the game log: a moment and a tracklet, no click; pointed at the middle of its box
+    got = client.post(f"/api/games/{game.id}/events/labels", json={"frame": 100, "kind": "none", "track": 3}).json()
+    assert abs(got["event"]["x"] - 0.55) < 1e-4 and abs(got["event"]["y"] - 0.4) < 1e-4
+    assert [e["kind"] for e in got["nots"]] == ["none"] and got["events"] == []

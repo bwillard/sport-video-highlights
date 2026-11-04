@@ -61,3 +61,27 @@ def test_touches_api_not_calibrated(settings):
     store, game = four_tracklets(settings)  # tracked, not calibrated
     got = TestClient(create_app(store)).get(f"/api/games/{game.id}/touches").json()
     assert "calibrated" in got["error"]
+
+
+def test_correct_from_labels():
+    ball = np.column_stack([np.arange(100, dtype=float), np.zeros(100)])
+    found = [{"frame": 10, "x": 10.0, "y": 0.0, "track": 1, "team": 0, "keeper": 0, "margin": 0.1, "ambiguous": True,
+              "confidence": 0.05, "run": 0},
+             {"frame": 30, "x": 30.0, "y": 0.0, "track": 2, "team": 1, "keeper": 0, "margin": 2, "ambiguous": False,
+              "confidence": 1.0, "run": 1},
+             {"frame": 50, "x": 50.0, "y": 0.0, "track": 3, "team": 1, "keeper": 0, "margin": 2, "ambiguous": False,
+              "confidence": 1.0, "run": 2}]
+    def lab(f, kind, track, team):
+        return {"frame": f, "kind": kind, "track": track, "team": team, "keeper": 0, "player": None, "guess": None,
+                "at": [1.0, 2.0]}
+    labs = [lab(12, "pass", 7, 0),  # the other player of the two: fixed, and a pass
+            lab(31, "touch", 2, 1),  # the same player: its kind only
+            lab(80, "shot", 9, 1),  # none found near: added, on the ball
+            lab(90, "touch", None, None),  # on nobody: nothing
+            lab(70, "goal", 5, 0)]  # not a touch
+    got = tc.correct(found, labs, [lab(52, "none", None, None)], ball, FPS)
+    assert [(t["frame"], t["track"], t.get("label"), bool(t.get("fixed")), bool(t.get("added"))) for t in got] == [
+        (10, 7, "pass", True, False), (30, 2, "touch", False, False), (80, 9, "shot", False, True)]
+    assert got[2]["x"] == 80.0 and got[0]["team"] == 0 and [t["run"] for t in got] == [0, 1, 2]
+    assert found[0]["track"] == 1  # what was found is left as it was
+    assert tc.label_team({"keeper": 2, "team": 0}) == 1 and tc.label_team({"team": 2, "player": 7}) == 0

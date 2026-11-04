@@ -97,8 +97,9 @@ def stats(rs: list[dict]) -> dict:
     return out
 
 
-def get(store: Store, game: Game) -> dict | None:
-    """The game's restarts ({restarts, stats}), or None when the touches can't be found yet."""
+def get(store: Store, game: Game, found: bool = False) -> dict | None:
+    """The game's restarts ({restarts, stats}), or None when the touches can't be found yet. found: from the
+    touches as found, before your labels (for measuring against them)."""
     from soccer_clips.track import match, touches
 
     tc = touches.get(store, game)
@@ -106,7 +107,7 @@ def get(store: Store, game: Game) -> dict | None:
     if tc is None or mi is None:
         return None
     signs = [match.attack_sign(mi, h) for h in (1, 2)]
-    rs = listed(mi["restarts"], mi["out_of_play"], tc["touches"], signs, game.fps)
+    rs = listed(mi["restarts"], mi["out_of_play"], tc["found" if found else "touches"], signs, game.fps)
     return {"restarts": rs, "stats": stats(rs)}
 
 

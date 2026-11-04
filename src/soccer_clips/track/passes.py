@@ -11,6 +11,8 @@ Passes, bad passes and chains (Phase 6.4), from the touches (touches.py).
 - **Into danger:** completed, but the receiver's ball goes to the other team within DANGER_S (not by a pass of
   theirs, which is their own bad pass).
 - **Shots** (shots.py) aren't passes: a kick found as a shot is left out.
+- **Your labels** (on the touches, touches.correct): a touch labelled T, S, V or W isn't a pass; one labelled P
+  or K is, however far the ball went.
 - **Properties:** length (where kicked to where received, or the ball last seen), direction from the half's
   attacking direction (forward / back within 45°, else sideways), the third it starts and ends in, in the air
   (ball_state's airborne anywhere on the way).
@@ -40,11 +42,13 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 2  # 2: shots left out
+VERSION = 3  # 2: shots left out; 3: your labels
 PASS_M = 5.0  # the ball carried this far from the kick before someone else's touch: a pass
 RECV_S = 3.0  # the next touch later than this: receiver unknown
 DANGER_S = 2.0  # completed, but the ball to the other team within this of receiving it: into danger
 TEAMS = ("ours", "theirs")
+NOT_PASS = ("touch", "shot", "save", "won")  # a touch you labelled one of these isn't a pass
+ALWAYS_PASS = ("pass", "restart")  # ...and one of these is (when someone else touches it next)
 
 
 def path(store: Store, game: Game) -> Path:
@@ -85,12 +89,12 @@ def find(touches: list[dict], ball: np.ndarray, in_play: np.ndarray, poss: np.nd
     recv = round(RECV_S * fps)
     for i in range(len(touches) - 1):
         t, nx = touches[i], touches[i + 1]
-        if nx["track"] == t["track"]:
-            continue  # the same player again: a dribble
+        if nx["track"] == t["track"] or t.get("label") in NOT_PASS:
+            continue  # the same player again (a dribble), or you said it wasn't a pass
         f, g = t["frame"], nx["frame"]
         gone = np.flatnonzero(~in_play[f:g])
         end = f + int(gone[0]) if len(gone) else g  # the ball out of play: the pass ends there
-        if not travel(ball, f, end) >= PASS_M:
+        if t.get("label") not in ALWAYS_PASS and not travel(ball, f, end) >= PASS_M:
             continue
         p = {"frame": f, "to_frame": None, "track": t["track"], "team": t["team"], "keeper": t["keeper"],
              "to_track": None, "to_team": None, "outcome": "unknown", "danger": False, "next": i + 1}
@@ -202,7 +206,7 @@ def build(store: Store, game: Game, log=None) -> dict:
     """Find and save the game's passes; returns what's saved. ValueError when the touches can't be found yet."""
     import time
 
-    from soccer_clips.track import ball_state, match, shots, touches
+    from soccer_clips.track import shots, touches
 
     t0 = time.time()
     tc = touches.get(store, game)
@@ -210,17 +214,8 @@ def build(store: Store, game: Game, log=None) -> dict:
         touches.build(store, game)  # raises why
         tc = touches.load(store, game)
     sh = shots.get(store, game)
-    st = ball_state.load(store, game)
-    mi = match.get(store, game)
     k = key(store, game)
-    ball = st["xy"].astype(np.float64)
-    ps = find(tc["touches"], ball, st["in_play"], st["possession"], game.fps)
-    kicks = {s["frame"] for s in sh["shots"]} if sh else set()
-    shot_n = sum(p["frame"] in kicks for p in ps)
-    ps = [p for p in ps if p["frame"] not in kicks]  # a shot isn't a pass
-    describe(ps, ball, st["air"], match.halves(game), [match.attack_sign(mi, h) for h in (1, 2)],
-             (st.get("timeline") or {}).get("length"))
-    chs = chains(ps, tc["touches"], st["in_play"])
+    ps, chs, shot_n = work_out(store, game, tc["touches"], sh["shots"] if sh else [])
     stats = {name: team_stats(ps, chs, i) for i, name in enumerate(TEAMS)}
     stats["neither"] = sum(p["team"] < 0 for p in ps)
     stats["shots_left_out"] = shot_n
@@ -239,6 +234,23 @@ def build(store: Store, game: Game, log=None) -> dict:
         log(f"{game.id}: ours {line(stats['ours'])}; theirs {line(stats['theirs'])}; neither kit "
             f"{stats['neither']}; {stats['seconds']} s")
     return out
+
+
+def work_out(store: Store, game: Game, touch_list: list[dict], shot_list: list[dict]) -> tuple[list, list, int]:
+    """The passes and chains from these touches and shots (the corrected ones, or as found for measuring), and how
+    many kicks were left out as shots."""
+    from soccer_clips.track import ball_state, match
+
+    st = ball_state.load(store, game)
+    mi = match.get(store, game)
+    ball = st["xy"].astype(np.float64)
+    ps = find(touch_list, ball, st["in_play"], st["possession"], game.fps)
+    kicks = {s["frame"] for s in shot_list}
+    shot_n = sum(p["frame"] in kicks for p in ps)
+    ps = [p for p in ps if p["frame"] not in kicks]  # a shot isn't a pass
+    describe(ps, ball, st["air"], match.halves(game), [match.attack_sign(mi, h) for h in (1, 2)],
+             (st.get("timeline") or {}).get("length"))
+    return ps, chains(ps, touch_list, st["in_play"]), shot_n
 
 
 _cache: dict[str, tuple[str, dict]] = {}
@@ -323,8 +335,9 @@ def compare(passes: list[dict], evs: list[dict], windows: list[dict], in_play: n
 
 
 def evaluate(store: Store, game: Game) -> dict | None:
-    """Passes against the game's labelled full windows (compare); None if there are none or no passes."""
-    from soccer_clips.track import ball_state, events
+    """Passes as found (from the touches before your labels) against the game's labelled full windows (compare);
+    None if there are none or no passes."""
+    from soccer_clips.track import ball_state, events, shots, touches
 
     lab = events.resolved(store, game)
     if not lab["windows"]:
@@ -333,4 +346,7 @@ def evaluate(store: Store, game: Game) -> dict | None:
     st = ball_state.load(store, game)
     if got is None or st is None:
         return None
-    return compare(got["passes"], lab["events"], lab["windows"], st["in_play"], game.fps)
+    found = touches.load(store, game)["found"]
+    raw_shots, _ = shots.work_out(store, game, found, [])
+    raw, _, _ = work_out(store, game, found, raw_shots)
+    return compare(raw, lab["events"], lab["windows"], st["in_play"], game.fps)
