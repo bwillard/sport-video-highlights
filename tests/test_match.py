@@ -180,3 +180,15 @@ def test_kickoff_from_when_the_ball_went_in():
     assert [(o["from"], o["to"]) for o in got] == [(100, 331)]
     xy[130:160] = (15.0, 3.0)  # back in deep in the field: in play again, so the later crossing is the goal
     assert match.out_of_play(ko, f, xy, SIZES["length"], SIZES["width"], FPS, [0])[0]["from"] == 160
+
+
+def test_goal_in():
+    # a kickoff's stretch: the ball in the +x goal at its start (a goal), or over a touchline by halfway (not one)
+    f = np.arange(400)
+    xy = np.zeros((400, 2))
+    xy[100:130] = (31.5, 0.0)
+    assert match.goal_in({"from": 100, "to": 331}, f, xy, SIZES["length"], FPS)
+    xy[100:130] = (-3.0, 21.0)
+    xy[300:310] = (31.5, 0.0)  # later than GOAL_IN_S: another moment
+    assert not match.goal_in({"from": 100, "to": 331}, f, xy, SIZES["length"], FPS)
+    assert not match.goal_in(None, f, xy, SIZES["length"], FPS)

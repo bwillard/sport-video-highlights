@@ -18,7 +18,11 @@ field (positions.py) and the teams (people.roles_for).
 - **Kickoffs and direction:** at a kickoff every player is in their own half, so where our kit stands
   says which goal we defend. Goal clips you've rated vote too (😊 ours, 🙁 theirs: where the ball ends). A kickoff votes when the formation is clear (our boxes' mean side at least
   FORMATION, and theirs not as clearly on the same side); each votes for its half, and the second half
-  is the first reversed. Kickoffs away from the half starts are goals.
+  is the first reversed. Kickoffs away from the half starts are goals: one needs a clear formation, or the
+  ball over a goal line within GOAL_IN_S of its out-of-play stretch starting; else it's a free kick by the
+  centre spot (Elite Strikers' 6:36: the ball over a touchline, then still by the spot with the teams mixed;
+  across the games, every kickoff with neither had no goal clip or label but EBU's 33:47, whose clip is the
+  goal anyway).
 - **Goalies:** per half and end, tracklets that stay in that penalty area and either aren't in either
   team's kit (the goalie's own colours) or stand deep (median within KEEPER_DEEP_M of the goal line) and
   aren't in the attacking team's kit (a goalie's kit is often clustered in with a team's). At most one
@@ -46,7 +50,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 5
+VERSION = 6  # 6: a kickoff mid-half needs a clear formation or the ball in a goal
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
@@ -73,6 +77,7 @@ TEAM_CODES = {"ours": 1, "theirs": 2}  # keeper codes
 NOT_GOALIE = "none"  # a goalie mark's team: this tracklet isn't a goalie
 LOOKBACK_S = 30.0  # a restart on a line: when the ball went out, looked for this far back
 GOAL_LOOKBACK_S = 90.0  # a kickoff: when the goal went in
+GOAL_IN_S = 5.0  # a kickoff after a goal: the ball over a goal line this soon after its stretch starts (or a clear formation)
 OUT_NEAR_S = {"throw-in": 8.0, "corner": 8.0, "goal kick": 20.0}  # the ball out this soon before it stopped
 STOP_S = 3.0  # a stoppage with no crossing (free kick, penalty, a line restart unseen going out): still this long
 KICKOFF_SAME_S = 30.0  # kickoffs this close are one; a kickoff this close to a half's start time is that half's
@@ -356,6 +361,15 @@ def _into_net(last_out: int, lo: int, outside: np.ndarray, placed: np.ndarray, b
     return i
 
 
+def goal_in(o: dict | None, bframe: np.ndarray, bxy: np.ndarray, length: float, fps: float) -> bool:
+    """Whether the ball went over a goal line within GOAL_IN_S of the start of a kickoff's out-of-play stretch
+    (o: {from, to}, or None: none)."""
+    if o is None:
+        return False
+    a, b = np.searchsorted(bframe, [o["from"], min(o["from"] + GOAL_IN_S * fps, o["to"])])
+    return bool((np.abs(np.nan_to_num(bxy[a:b, 0])) > length / 2 + LINE_PAD_M).any())
+
+
 def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, length: float, width: float,
                 fps: float, half_starts: list[int]) -> list[dict]:
     """[{from, to, kind}]: the ball out of play before each restart (not the goalie's ball, which is in play):
@@ -483,8 +497,16 @@ def build(store: Store, game: Game, log=None) -> dict:
                          kit=t.box_team, marked=marked, not_goalie=not_goalie)
     starts = [a for a, _ in hs]
     goals = [r for r in kickoffs if not any(abs(r["kick"] - h) < KICKOFF_SAME_S * fps for h in starts)]
+    oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts)
+    ends = {o["to"]: o for o in oop}
+    for r in goals:  # after a goal: the teams lined up, or the ball in a goal; neither, a free kick by the centre spot
+        if not r.get("clear") and not goal_in(ends.get(r["kick"]), bf, bxy, sizes["length"], fps):
+            r["kind"] = "free kick"
+    if any(r["kind"] != "kickoff" for r in goals):
+        goals = [r for r in goals if r["kind"] == "kickoff"]
+        oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts)
     info.update({
-        "out_of_play": out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts),
+        "out_of_play": oop,
         "goals_by_kickoff": [r["kick"] for r in goals],
         "keepers": keeper_seen(keeper, t.frame, bf, bxy, sizes["length"], hs, -attack_sign(info, 1), fps)
         if d["attack_1h"] else [],
