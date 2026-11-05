@@ -42,7 +42,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 2  # 2: your labels
+VERSION = 3  # 2: your labels; 3: a G label dates its goal
 BACK_S = 3.0  # the shooter's touch: this long before the shot's end, or less
 SHOT_M = 30.0  # ...this close to the goal (centre of the goal line)
 APPROACH_S = 1.5  # the goalie's touch ends a shot: the ball came...
@@ -225,8 +225,9 @@ def goals(shots: list[dict], kickoffs: list[dict], marks: list[dict], fps: float
     ([{t, team ('ours' / 'theirs' / None), guessed, by ('clip': ball_state.goal_moments; 'label': a G)}]), the
     last marks within GOAL_NEAR_S before a kickoff being that goal (the surest decides the team: a label, then a rated
     clip, then the kickoff, then an unrated clip), marks with no kickoff within SAME_GOAL_S of each other one goal.
-    [{frame, team, by, guessed, shot}]: team 0 ours, 1 theirs, None not known; frame the ball going out
-    (kickoff) or the mark's moment."""
+    [{frame, team, by, guessed, shot}]: team 0 ours, 1 theirs, None not known; frame your G label's moment, else
+    the ball going out (kickoff; where the ball wasn't seen going in, that's only when it stopped for the
+    kickoff), else the mark's."""
     code = {"ours": 0, "theirs": 1}
     rank = lambda c: (c.get("by") != "label", c["guessed"], c["team"] is None)  # noqa: E731
 
@@ -246,7 +247,8 @@ def goals(shots: list[dict], kickoffs: list[dict], marks: list[dict], fps: float
         if b is not None and (team is None or not b["guessed"]):
             team = code[b["team"]]
         by = ["kickoff"] + sorted({c.get("by", "clip") for c in near})
-        out.append({"frame": int(k["from"]), "team": team, "by": by,
+        lab = next((c for c in near if c.get("by") == "label"), None)  # you said when
+        out.append({"frame": round(lab["t"] * fps) if lab else int(k["from"]), "team": team, "by": by,
                     "guessed": b is None or b["guessed"],  # not settled by a label or a rated clip
                     "shot": s is not None})
     while left:  # marks with no kickoff found: one goal per bunch

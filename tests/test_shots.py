@@ -66,7 +66,7 @@ def test_goals_and_scorer():
     assert [(g["frame"], g["team"], g["by"], g["shot"]) for g in got] == [
         (100, 1, ["kickoff", "clip"], True), (2000, 0, ["clip"], False), (3900, None, ["kickoff"], False)]
     # two goals before one kickoff (the first's kickoff missed): the last is that kickoff's, the first its own; a
-    # G label beside a clip of the same goal: one goal, the label deciding
+    # G label beside a clip of the same goal: one goal, the label deciding whose and when
     clips = [{"t": 10.0, "team": "ours", "guessed": False, "by": "clip"},
              {"t": 65.0, "team": "theirs", "guessed": False, "by": "clip"},
              {"t": 66.0, "team": "ours", "guessed": False, "by": "label"},
@@ -74,7 +74,7 @@ def test_goals_and_scorer():
              {"t": 310.0, "team": "ours", "guessed": False, "by": "label"}]
     got2 = sh.goals([], [{"kick": 1000, "from": 980, "team": 1}], clips, FPS)
     assert [(g["frame"], g["team"], g["by"]) for g in got2] == [
-        (100, 0, ["clip"]), (980, 0, ["kickoff", "clip", "label"]), (3000, 0, ["clip", "label"])]
+        (100, 0, ["clip"]), (660, 0, ["kickoff", "clip", "label"]), (3000, 0, ["clip", "label"])]
     s = sh.team_stats([{"team": 0, "outcome": "saved"}, {"team": 0, "outcome": "goal"}], got, 0)
     assert s["shots"] == 2 and s["saved"] == 1 and s["goals"] == 1
 

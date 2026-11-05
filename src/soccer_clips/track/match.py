@@ -6,7 +6,11 @@ field (positions.py) and the teams (people.roles_for).
 - **Restarts:** the ball still on the ground for STILL_S (within STILL_M), then kicked (KICK_M away within
   KICK_S). Unseen for up to STILL_GAP_S and seen again where it sat, it's still sitting there: a kicker standing
   over the ball at a kickoff hides it (Elite Strikers' 4:30 kickoff, after a goal, was missed with 1 s; 3 s finds
-  it and SAA's 18:18 one, and a few more throw-ins, corners and goal kicks, the rest the same). Where it sat says what it was: kickoff (the middle of the halfway line; SAA's calibration puts
+  it and SAA's 18:18 one, and a few more throw-ins, corners and goal kicks, the rest the same). Still on the
+  centre spot, then unseen up to KICK_GAP_S and seen next already away, it was kicked off unseen (Elite
+  Strikers' 0:37): kept only with the teams lined up either side of it (HIDDEN_SPLIT: that one, FC-1's 21:02 and
+  FCU's 18:29 and 1:10:10, each a goal clip before it; `clear` let through open play by the centre circle, and on
+  every spot it found many restarts that weren't). Where it sat says what it was: kickoff (the middle of the halfway line; SAA's calibration puts
   the centre spot 3-4 m off, so a box around it, and further along the length up to KICKOFF_NEAR_M when the
   teams stand split either side of the ball: FC-1's views put kickoffs up to 9 m off), corner, goal kick, penalty, throw-in (by a touchline), the goalie's ball
   (still in a penalty area: in their hands, or a free kick there), free kick (anywhere else). Kickoffs
@@ -42,15 +46,17 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 4
+VERSION = 5
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
 KICK_S = 1.0  # ...within this long: kicked
 STILL_GAP_S = 3.0  # the ball unseen this long (a player standing over it) and seen again where it sat: still still
+KICK_GAP_S = 5.0  # still on the centre spot, then unseen up to this long and seen again away: kicked off while hidden
 KICKOFF_BOX = (3.0, 5.0)  # |x|, |y| (metres) of a kickoff spot: the middle of the halfway line
 KICKOFF_NEAR_M = 10.0  # further along the length than KICKOFF_BOX, up to this, a kickoff needs a split formation
 SPLIT = (0.8, 0.6)  # ...our boxes' mean side relative to the ball at least the first, theirs opposite the second
+HIDDEN_SPLIT = (0.7, 0.25)  # a kickoff kicked unseen: our side at least the first, theirs opposite at least the second
 CORNER_M = 3.0  # within this of a corner (each way)
 THROW_M = 2.0  # within this of a touchline, or beyond it
 AREA_PAD_M = 1.5  # goal area, penalty area and spot, this much bigger
@@ -82,9 +88,12 @@ def path(store: Store, game: Game) -> Path:
 
 # ---- restarts ----
 
-def dead_balls(frame: np.ndarray, xy: np.ndarray, fps: float, gap_s: float = STILL_GAP_S) -> list[dict]:
+def dead_balls(frame: np.ndarray, xy: np.ndarray, fps: float, gap_s: float = STILL_GAP_S,
+               kick_gap_s: float = KICK_GAP_S) -> list[dict]:
     """The ball still for STILL_S then kicked: [{still (first still frame), kick (first frame it's moved
-    off), x, y (where it sat)}]. frame sorted; xy NaN where not placed (skipped)."""
+    off), x, y (where it sat), hidden (on the centre spot, kicked while unseen: seen next already away, within
+    kick_gap_s; build keeps it only as a kickoff with the teams lined up)}]. frame sorted; xy NaN where not placed
+    (skipped)."""
     ok = np.isfinite(xy[:, 0])
     f, p = frame[ok], xy[ok].astype(np.float64)
     n, hw, out, i = len(f), int(round(STILL_S * fps)), [], 0
@@ -97,10 +106,13 @@ def dead_balls(frame: np.ndarray, xy: np.ndarray, fps: float, gap_s: float = STI
             k = j
             while k < n and np.linalg.norm(p[k] - c) < STILL_M and f[k] - f[k - 1] < gap_s * fps:
                 k += 1
-            m = int(np.searchsorted(f, f[k - 1] + int(KICK_S * fps), "right"))
+            spot = abs(c[0]) < KICKOFF_BOX[0] and abs(c[1]) < KICKOFF_BOX[1]
+            hid = spot and k < n and KICK_S * fps < f[k] - f[k - 1] <= kick_gap_s * fps  # kicked off unseen
+            m = int(np.searchsorted(f, (f[k] if hid else f[k - 1]) + int(KICK_S * fps), "right"))
             gone = np.flatnonzero(np.linalg.norm(p[k:m] - c, axis=1) > KICK_M) if k < n else []
             if len(gone):
-                out.append({"still": int(f[i]), "kick": int(f[k]), "x": round(float(c[0]), 2), "y": round(float(c[1]), 2)})
+                out.append({"still": int(f[i]), "kick": int(f[k]), "x": round(float(c[0]), 2), "y": round(float(c[1]), 2),
+                            **({"hidden": True} if hid else {})})
             i = k
         else:
             i += 1
@@ -447,6 +459,9 @@ def build(store: Store, game: Game, log=None) -> dict:
             fm = formation(pos["xy"][lo:hi, 0][m], role[lo:hi][m], r["x"])
             if r["kind"] == "kickoff" or fm["split"]:
                 r.update(fm, kind="kickoff")
+            if r.pop("hidden", False) and not (abs(fm["ours"]) >= HIDDEN_SPLIT[0] and fm["ours"] * fm["theirs"] < 0
+                                               and abs(fm["theirs"]) >= HIDDEN_SPLIT[1]):
+                continue  # kicked while unseen: only a kickoff with the teams lined up either side
         restarts.append(r)
     for r in restarts:  # a second kickoff soon after one is the same kickoff (retaken, or stopped again)
         if r["kind"] == "kickoff" and any(q["kind"] == "kickoff" and 0 < r["kick"] - q["kick"] < KICKOFF_SAME_S * fps
