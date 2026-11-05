@@ -112,6 +112,9 @@
   #events .list li.log button { float: right; padding: 0 6px; margin-left: 4px; }
   #events .list li.lab { color: var(--muted); }
   #events .list li.now { background: #1d3550; box-shadow: inset 3px 0 0 var(--accent); }
+  #evNowLine { position: absolute; left: 0; right: 0; display: block; height: 0; padding: 0; border-top: 2px solid var(--accent);
+               pointer-events: none; }
+  #evNowLine::before { content: ""; position: absolute; left: 0; top: -6px; border: 5px solid transparent; border-left: 7px solid var(--accent); }
   #glFilters label { white-space: nowrap; }
   #evMore { margin-top: 6px; font-size: 12px; }
   #evMore summary { cursor: pointer; }
@@ -2791,7 +2794,7 @@ async function loadShots() {
   shotInfo = { gameId: id, ...got };
   renderShots();
 }
-function teamName(t) { return { 0: "ours", 1: "theirs" }[t] ?? "team not known"; }
+function teamName(t) { return { 0: "for us", 1: "for them" }[t] ?? "whose not known"; }
 function shotWho(x) {
   const n = x.player ?? x.guess;
   return n != null ? `#${n}${x.player == null ? "?" : ""}` : null;
@@ -2832,7 +2835,7 @@ function drawShots(ctx) {
     ...shotInfo.shots.filter((x) => x.frame != null && Math.abs(x.frame - f) <= span)
       .map((x) => ({ track: x.track, team: x.team, txt: `shot: ${SHOT_SAYS[x.outcome]}` })),
     ...shotInfo.restarts.filter((r) => r.track != null && Math.abs(r.frame - f) <= span)
-      .map((r) => ({ track: r.track, team: r.team, txt: `${r.kind}, ${teamName(r.team)}` })),
+      .map((r) => ({ track: r.track, team: r.team, txt: `${r.kind} ${teamName(r.team)}` })),
   ];
   if (!items.length) return;
   const at = boxesAt(Math.round(f));
@@ -2891,20 +2894,40 @@ function logShown() {
   });
   return rows.sort((a, b) => a.frame - b.frame);
 }
-function logWho(e, pre = "") {
+function logWho(e, pre = "", team = e.team) {
+  // short: ours by number where known (else "us"), theirs as "them"
   const n = e[pre + "player"] ?? e[pre + "guess"];
-  return n != null ? `#${n}${e[pre + "player"] == null ? "?" : ""}` : "";
+  if (n != null) return `#${n}${e[pre + "player"] == null ? "?" : ""}`;
+  return { 0: "us", 1: "them" }[team] ?? "someone";
 }
+const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+const WON_SAYS = { interception: "Intercepted", tackle: "Won", recovery: "Recovered" };
+const PASS_SAYS = { completed: "completed", lost: "lost", out: "out", unknown: "not known" };
+const LAB_SAYS = { touch: "Touch by", pass: "Pass by", shot: "Shot by", save: "Save by", goal: "Goal by", won: "Won by",
+                   restart: "Restart by", none: "Not a touch:" };
 function logText(e) {
-  const team = teamName(e.team), w = logWho(e);
-  if (e.kind === "goal") return `<b>goal</b>, ${team}${e.guessed ? "?" : ""} <span class="stat">(${e.by.join(" + ")})</span>`;
-  if (e.kind === "shot") return `shot, ${team}${w ? " " + w : ""}: ${SHOT_SAYS[e.outcome] || e.outcome}` +
-    (e.distance != null ? ` <span class="stat">${Math.round(e.distance)} m out</span>` : "");
-  if (e.kind === "pass") return `pass, ${team}${w ? " " + w : ""}${logWho(e, "to_") ? " → " + logWho(e, "to_") : ""}: ` +
-    `${e.danger ? "completed, into danger" : e.outcome}${e.length != null ? ` <span class="stat">${Math.round(e.length)} m ${e.direction || ""}</span>` : ""}`;
-  if (e.kind === "won") return `won by ${team}${w ? " " + w : ""}: ${e.how}${logWho(e, "from_") ? ` (lost by ${logWho(e, "from_")})` : ""}` +
-    (e.third != null ? ` <span class="stat">in ${["our defending", "the middle", "our attacking"][e.team === 0 ? e.third : 2 - e.third]} third</span>` : "");
-  return `${e.restart}, ${team}${w ? " " + w : ""}${e.disagree ? ` <span class="stat">(taker and rules disagree)</span>` : ""}`;
+  // one short line: "Won by #38", "Intercepted by them (lost by #15)", "Corner for us"; the rest in logTip
+  const w = logWho(e), side = { 0: "us", 1: "them" }[e.team];
+  const num = (pre) => (e[pre + "player"] ?? e[pre + "guess"]) != null;  // only a named player is worth adding
+  if (e.kind === "goal") return `<b>Goal${side ? ` for ${side}${e.guessed ? "?" : ""}` : ", whose not known"}</b>`;
+  if (e.kind === "shot") return `Shot by ${w}: ${SHOT_SAYS[e.outcome] || e.outcome}`;
+  if (e.kind === "pass") return `Pass by ${w}${num("to_") ? ` to ${logWho(e, "to_", e.to_team)}` : ""}: ` +
+    (e.danger ? "completed, into danger" : PASS_SAYS[e.outcome] || e.outcome);
+  if (e.kind === "won") return `${WON_SAYS[e.how] || "Won"} by ${w}` + (num("from_") ? ` (lost by ${logWho(e, "from_", 1 - e.team)})` : "");
+  return `${cap(e.restart)}${side ? ` for ${side}` : ", whose not known"}${side && num("") ? ` (${w})` : ""}`;
+}
+function logTip(e) {
+  // the details the short line leaves out: hover a row
+  const third = (t, team) => ["our defending", "the middle", "our attacking"][team === 0 ? t : 2 - t];
+  if (e.kind === "goal") return `found from: ${e.by.join(" + ")}`;
+  if (e.kind === "shot") return e.distance != null ? `${Math.round(e.distance)} m out` : "";
+  if (e.kind === "pass") return e.length != null ? `${Math.round(e.length)} m ${e.direction || ""}` : "";
+  if (e.kind === "won") return `${e.how}${e.third != null ? ` in ${third(e.third, e.team)} third` : ""}`;
+  return e.disagree ? "the taker's kit and the rules disagree on whose it is" : "";
+}
+function labText(ev) {
+  const who = evWho(ev).replace(/^ours$/, "us").replace(/^theirs$/, "them");
+  return /^no(t on a box| player)/.test(who) ? `${cap(EV_KINDS[ev.kind]?.[1] || ev.kind)} (${who})` : `${LAB_SAYS[ev.kind] || ev.kind} ${who}`;
 }
 function renderLog() {
   renderStats();
@@ -2925,12 +2948,12 @@ function renderLog() {
     const t = `<span class="t">${esc(label(e.frame / fps))}</span>`;
     if (e.kind === "label") {
       const ev = e.lab, [, name, colour] = EV_KINDS[ev.kind] || ["?", ev.kind, "#fff"];
-      return `<li class="log lab" data-i="${i}"><button class="x" data-del="${ev.id}" title="Remove this label">✕</button>` +
-        `${t} ✍️ <span style="color:${colour}">${esc(name)}</span> <span class="stat">${esc(evWho(ev))}</span></li>`;
+      return `<li class="log lab" data-i="${i}" title="your label: ${esc(name)}"><button class="x" data-del="${ev.id}" title="Remove this label">✕</button>` +
+        `${t} ✍️ <span style="color:${colour}">${esc(labText(ev))}</span></li>`;
     }
     const fix = LOG_FIX[e.kind] && e.track != null ? `<button class="x" data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : "";
-    return `<li class="log" data-i="${i}">${fix}${t} ${LOG_ICON[e.kind]} ${logText(e)}</li>`;
-  }).join("") : game && !note ? `<li class="empty">nothing of these yet: Shift+E to label events</li>` : "");
+    return `<li class="log" data-i="${i}" title="${esc(logTip(e))}">${fix}${t} ${LOG_ICON[e.kind]} ${logText(e)}</li>`;
+  }).join("") + `<li id="evNowLine" hidden></li>` : game && !note ? `<li class="empty">nothing of these yet: Shift+E to label events</li>` : "");
   drawTimeline();
 }
 function markNow() {
@@ -2955,6 +2978,12 @@ function markNow() {
   for (const li of list.querySelectorAll("li.now")) li.classList.remove("now");
   logNow = [j, i, at];
   for (let k = j; k <= i && i >= 0; k++) row(k)?.classList.add("now");
+  const line = $("evNowLine");  // between events: a line where the video is, above the next row
+  if (line) {
+    line.hidden = i >= 0;
+    const next = row(lo), prev = row(lo - 1);
+    if (i < 0) line.style.top = `${next ? next.offsetTop - 1 : prev ? prev.offsetTop + prev.offsetHeight + 1 : 0}px`;
+  }
   const first = row(at), last = row(Math.max(i, at));
   if (!first || list.matches(":hover")) return;
   const top = first.offsetTop, bottom = last.offsetTop + last.offsetHeight;
