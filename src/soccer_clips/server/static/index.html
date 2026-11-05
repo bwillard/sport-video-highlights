@@ -111,7 +111,14 @@
   #events .list li.log { display: flow-root; padding: 2px 4px; cursor: pointer; }  /* one line each; holds its ✗ */
   #events .list li.log button { float: right; padding: 0 6px; margin-left: 4px; }
   #events .list li.lab { color: var(--muted); }
-  #events .list li.now { background: #1d3550; box-shadow: inset 3px 0 0 var(--accent); }
+  #events .list li.now { background: #1d3550; box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1px var(--accent); }
+  /* the big moments by team: goal (solid), shot, completed pass (faint); green us, red them, as possession */
+  #events .list li.t-goal-us { background: #1e7a3c; color: #fff; }
+  #events .list li.t-shot-us { background: rgba(79, 196, 114, 0.32); }
+  #events .list li.t-pass-us { background: rgba(79, 196, 114, 0.12); }
+  #events .list li.t-goal-them { background: #a32828; color: #fff; }
+  #events .list li.t-shot-them { background: rgba(217, 63, 63, 0.34); }
+  #events .list li.t-pass-them { background: rgba(217, 63, 63, 0.13); }
   #evNowLine { position: absolute; left: 0; right: 0; display: block; height: 0; padding: 0; border-top: 2px solid var(--accent);
                pointer-events: none; }
   #evNowLine::before { content: ""; position: absolute; left: 0; top: -6px; border: 5px solid transparent; border-left: 7px solid var(--accent); }
@@ -285,7 +292,8 @@
           Label restarts with <kbd>K</kbd> (Shift+E) to measure them</li>
         <li><b>The Events list</b> (beside the video): every event found in time order (goals, shots, balls won, restarts,
           and passes if ticked) with your labels (✍️) among them, filtered by kind and whose (a team or one of ours), with
-          ticks on the timeline (the numbers are in the Analytics box). The row for what's on the video now is lit and the
+          ticks on the timeline (the numbers are in the Analytics box). Goals, shots and completed passes are coloured
+          by team (green us, red them): a goal solid, a shot lighter, a completed pass faint. The row for what's on the video now is lit and the
           list follows along as it plays (not while the mouse is over it). Click a row to jump there (2 s before a found
           event, to see the build-up). <b>✕</b> on a label removes it; <b>✗</b> on a found event labels
           what it isn't (a pass: just a touch; a shot: a pass; a ball won: not a touch) and what's found is worked out again;
@@ -2665,7 +2673,7 @@ $("tcBtn").addEventListener("click", (e) => {
 });
 function drawTouches(ctx) {
   // touches near the playhead: a ring under the toucher's feet (dashed when ambiguous) and who, fading out either side
-  if (!showTouches || touchInfo?.gameId !== game?.id || !touchInfo.touches) return;
+  if (!showTouches || !game || touchInfo?.gameId !== game?.id || !touchInfo.touches) return;
   const f = v.currentTime * fps, span = TOUCH_SPAN_S * fps, ts = touchInfo.touches;
   let lo = 0, hi = ts.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid].frame < f - span) lo = mid + 1; else hi = mid; }
@@ -2735,7 +2743,7 @@ $("psBtn").addEventListener("click", (e) => {
 });
 function drawPasses(ctx) {
   // passes in flight at the playhead (from TOUCH_SPAN_S before the kick to that after the ball gets there)
-  if (!showPasses || passInfo?.gameId !== game?.id || !passInfo.passes) return;
+  if (!showPasses || !game || passInfo?.gameId !== game?.id || !passInfo.passes) return;
   const f = v.currentTime * fps, span = TOUCH_SPAN_S * fps, ps = passInfo.passes;
   let hi = 0, n = ps.length;
   while (hi < n) { const mid = (hi + n) >> 1; if (ps[mid].frame <= f + span) hi = mid + 1; else n = mid; }
@@ -2829,7 +2837,7 @@ $("shBtn").addEventListener("click", (e) => {
 });
 function drawShots(ctx) {
   // over the shooter's or taker's head around the moment: "shot: saved", "corner, ours"
-  if (!showShots || shotInfo?.gameId !== game?.id || !shotInfo.shots) return;
+  if (!showShots || !game || shotInfo?.gameId !== game?.id || !shotInfo.shots) return;
   const f = v.currentTime * fps, span = SHOT_SPAN_S * fps;
   const items = [
     ...shotInfo.shots.filter((x) => x.frame != null && Math.abs(x.frame - f) <= span)
@@ -2916,6 +2924,14 @@ function logText(e) {
   if (e.kind === "won") return `${WON_SAYS[e.how] || "Won"} by ${w}` + (num("from_") ? ` (lost by ${logWho(e, "from_", 1 - e.team)})` : "");
   return `${cap(e.restart)}${side ? ` for ${side}` : ", whose not known"}${side && num("") ? ` (${w})` : ""}`;
 }
+function logTint(e) {
+  // a goal, a shot, a completed pass: the row in its team's colour, strongest for a goal
+  const side = { 0: "us", 1: "them" }[e.team];
+  if (!side) return "";
+  if (e.kind === "goal") return `t-goal-${side}`;
+  if (e.kind === "shot") return `t-shot-${side}`;
+  return e.kind === "pass" && e.outcome === "completed" ? `t-pass-${side}` : "";
+}
 function logTip(e) {
   // the details the short line leaves out: hover a row
   const third = (t, team) => ["our defending", "the middle", "our attacking"][team === 0 ? t : 2 - t];
@@ -2952,7 +2968,7 @@ function renderLog() {
         `${t} ✍️ <span style="color:${colour}">${esc(labText(ev))}</span></li>`;
     }
     const fix = LOG_FIX[e.kind] && e.track != null ? `<button class="x" data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : "";
-    return `<li class="log" data-i="${i}" title="${esc(logTip(e))}">${fix}${t} ${LOG_ICON[e.kind]} ${logText(e)}</li>`;
+    return `<li class="log ${logTint(e)}" data-i="${i}" title="${esc(logTip(e))}">${fix}${t} ${LOG_ICON[e.kind]} ${logText(e)}</li>`;
   }).join("") + `<li id="evNowLine" hidden></li>` : game && !note ? `<li class="empty">nothing of these yet: Shift+E to label events</li>` : "");
   drawTimeline();
 }
