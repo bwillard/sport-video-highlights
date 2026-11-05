@@ -4,7 +4,10 @@ Touches (Phase 6.3): who played the ball, and when.
 A touch is a moment a player is at the ball and the ball's motion changes: a kick, a trap, a turn. From the
 ball state (ball_state.py: the ball per frame in metres, in play or not) and the players on the field:
 - **At the ball:** the nearest on-field player of anyone (goalies, and players in a kit read as neither team:
-  leaving those out finds the toucher less often), and how far. A touch is a dip in that distance to within
+  leaving those out finds the toucher less often) but the referee, and how far. The referee: in a kit no team
+  wears (not a goalie) that is on the field at least REF_ON of the game with at most REF_EACH in it at a time on
+  average (a team's kit has several; Elite Strikers' 1:10 pass from #38 went to the referee behind her). On your
+  windows that changed nothing else; at 1.6 at a time it also took FC-1's linesmen-and-players kit, worse there. A touch is a dip in that distance to within
   TOUCH_M, the lowest in TOUCH_GAP_S either way.
 - **The ball's motion changes:** within KICK_WIN_S of the dip, the ball's velocity (over KICK_K frames each
   way, on the path smoothed over SMOOTH_HALF frames each way) changes by KICK_MS or more. A player running
@@ -39,7 +42,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 2  # 2: corrected by your labels
+VERSION = 3  # 2: corrected by your labels; 3: never the referee
 TOUCH_M = 2.0  # the nearest player within this of the ball...
 TOUCH_GAP_S = 0.5  # ...at the lowest in this long either way
 SMOOTH_HALF = 2  # frames each way the ball path is averaged over before its velocity is measured
@@ -50,6 +53,8 @@ AMBIG_M = 0.3  # the next nearest player this much further or less: ambiguous
 SURE_M = 2.0  # a margin this big or more: confidence 1
 DRIBBLE_S = 2.0  # the same tracklet's touches this close together: one run
 TOL_S = 0.75  # measuring against labels: a touch this close to a labelled one is it
+REF_ON = 0.5  # a kit no team wears, on the field this share of the game...
+REF_EACH = 1.3  # ...with at most this many in it at a time on average: the referee's, never the toucher
 
 
 def path(store: Store, game: Game) -> Path:
@@ -110,6 +115,22 @@ def nearest_two(frame: np.ndarray, xy: np.ndarray, ball: np.ndarray) -> tuple[np
     d1[f[first]], row[f[first]] = d[first], idx[first]
     d2[f[second]] = d[second]
     return d1, row, d2
+
+
+def referees(cluster: np.ndarray, roles: dict, frame: np.ndarray, on: np.ndarray, team: np.ndarray) -> np.ndarray:
+    """Per row, the referee (REF_ON, REF_EACH): in a kit cluster no team wears, on the field most of the game but
+    hardly ever more than one at a time, and not a goalie (team -1)."""
+    n = len(np.unique(frame[on]))
+    out = np.zeros(len(cluster), bool)
+    for c, r in roles.items():
+        m = (cluster == c) & on
+        if r != "other" or not m.any():
+            continue
+        per = np.bincount(frame[m])
+        per = per[per > 0]
+        if len(per) >= REF_ON * n and per.mean() <= REF_EACH:
+            out |= (cluster == c) & (team == -1)
+    return out
 
 
 def dips(d: np.ndarray, within: float, gap: int) -> np.ndarray:
@@ -220,15 +241,16 @@ def build(store: Store, game: Game, log=None) -> dict:
     k = key(store, game)
     pos = positions.get(store, game)
     t = people.tracks(store, game)
-    role = people.roles_for(store, game)[1]
+    roles, role = people.roles_for(store, game)
     keeper = match.get(store, game)["keeper"]
     fps = game.fps
     ball = st["xy"].astype(np.float64)
+    team = ball_state._row_teams(role, keeper)  # goalies with their team
     on = ~pos["off"] & np.isfinite(pos["xy"][:, 0])
-    rows = np.flatnonzero(on)
+    ref = referees(t.teams_of(0, len(t.track)), roles, t.frame, on, team)
+    rows = np.flatnonzero(on & ~ref)
     d1, r, d2 = nearest_two(t.frame[rows], pos["xy"][rows].astype(np.float64), ball)
     row = np.where(r >= 0, rows[np.maximum(r, 0)], -1)
-    team = ball_state._row_teams(role, keeper)  # goalies with their team
     frames = find(ball, st["in_play"], d1, fps)
     found = describe(frames, ball, d1, row, d2, t.track, team, keeper, fps)
     lab = events.resolved(store, game, guesses=False)

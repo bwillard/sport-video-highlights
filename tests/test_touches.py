@@ -85,3 +85,18 @@ def test_correct_from_labels():
     assert got[2]["x"] == 80.0 and got[0]["team"] == 0 and [t["run"] for t in got] == [0, 1, 2]
     assert found[0]["track"] == 1  # what was found is left as it was
     assert tc.label_team({"keeper": 2, "team": 0}) == 1 and tc.label_team({"team": 2, "player": 7}) == 0
+
+
+def test_referees():
+    # kit 2 (no team's): one at a time all game, the referee; kit 3: several at a time, players in other light; a
+    # goalie in kit 2 keeps their team
+    frame = np.repeat(np.arange(100), 6)
+    cluster = np.tile([0, 0, 1, 1, 2, 3], 100)
+    cluster[np.arange(100) * 6 + 5] = np.where(np.arange(100) < 40, 3, 0)  # kit 3 only part of the game...
+    cluster = np.r_[cluster, np.full(60, 3), [2]]  # ...but several at a time
+    frame = np.r_[frame, np.repeat(np.arange(20), 3), [5]]
+    team = np.r_[np.tile([0, 0, 1, 1, -1, -1], 100), np.full(60, -1), [1]]
+    on = np.ones(len(frame), bool)
+    roles = {0: "ours", 1: "opponents", 2: "other", 3: "other"}
+    got = tc.referees(cluster, roles, frame, on, team)
+    assert got[cluster == 2].sum() == 100 and not got[-1] and not got[cluster == 3].any()
