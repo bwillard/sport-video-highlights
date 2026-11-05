@@ -110,6 +110,7 @@
   #events .list { position: relative; height: calc(72vh - 150px); min-height: 220px; max-height: none; }
   #events .list li.log { display: flow-root; padding: 2px 4px; cursor: pointer; }  /* one line each; holds its ✗ */
   #events .list li.log button { float: right; padding: 0 6px; margin-left: 4px; }
+  #events .list li.log .t { display: inline-block; min-width: 6ch; font-variant-numeric: tabular-nums; }
   #events .list li.lab { color: var(--muted); }
   #events .list li.now { background: #1d3550; box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1px var(--accent); }
   /* the big moments by team: goal (solid), shot, completed pass (faint); green us, red them, as possession */
@@ -2963,7 +2964,8 @@ function renderLog() {
   const note = !game ? "" : logInfo?.gameId === game.id && logInfo.error ? `<li class="empty">found events: ${esc(logInfo.error)}</li>`
     : logInfo?.gameId !== game.id && busy ? `<li class="empty"><span class="spin"></span>working out what happened (the first time takes a few seconds)…</li>` : "";
   list.innerHTML = note + (logRows.length ? logRows.map((e, i) => {
-    const t = `<span class="t">${esc(label(e.frame / fps))}</span>`;
+    const at = e.frame / fps, mc = matchClock(at);  // the video's time, as the player shows it; the match clock on hover
+    const t = `<span class="t"${mc ? ` title="match clock ${esc(mc)}"` : ""}>${fmt(at)}</span>`;
     if (e.kind === "label") {
       const ev = e.lab, [, name, colour] = EV_KINDS[ev.kind] || ["?", ev.kind, "#fff"];
       return `<li class="log lab" data-i="${i}" title="your label: ${esc(name)}"><button class="x" data-del="${ev.id}" title="Remove this label">✕</button>` +
