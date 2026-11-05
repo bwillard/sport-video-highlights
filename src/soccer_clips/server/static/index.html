@@ -97,14 +97,25 @@
   #evBanner { position: absolute; bottom: 8px; left: 8px; max-width: 75%; padding: 6px 10px; border-radius: 5px; z-index: 2;
               background: rgba(0, 30, 40, 0.85); border: 2px solid #40e0ff; color: #fff; font-size: 13px; pointer-events: none; }
   #evBanner kbd { color: #40e0ff; }
-  #events .list { max-height: 30vh; }
-  #gameLog .list { max-height: 40vh; }
-  #gameLog .list li.log { display: flow-root; padding: 2px 4px; }  /* one line each; holds its ✗ */
-  #gameLog .list li.log button { float: right; padding: 0 5px; }
+  /* the Events box beside the video: a column of its own on a wide screen, else on top of the right-hand one */
+  #tagLayout { grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "main ev" "main side"; grid-template-rows: auto 1fr; }
+  #tagLayout > section { grid-area: main; min-width: 0; }
+  #tagLayout > #events { grid-area: ev; align-self: start; position: sticky; top: 8px; }
+  #tagLayout > aside { grid-area: side; }
+  @media (min-width: 1700px) {
+    #tagLayout { grid-template-columns: minmax(0, 1fr) 400px 380px; grid-template-areas: "main ev side"; grid-template-rows: auto; }
+  }
+  @media (max-width: 1000px) { #tagLayout { grid-template-columns: 1fr; grid-template-areas: "main" "ev" "side"; } }
+  #events .row { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; margin-bottom: 6px; }
+  #events .list { position: relative; height: calc(72vh - 150px); min-height: 220px; max-height: none; }
+  #events .list li.log { display: flow-root; padding: 2px 4px; cursor: pointer; }  /* one line each; holds its ✗ */
+  #events .list li.log button { float: right; padding: 0 6px; margin-left: 4px; }
+  #events .list li.lab { color: var(--muted); }
+  #events .list li.now { background: #1d3550; box-shadow: inset 3px 0 0 var(--accent); }
   #glFilters label { white-space: nowrap; }
-  #events .list li { grid-template-columns: 64px 54px 1fr auto; }
-  #events .list li.near { background: #1d3550; }
-  #events button.x { padding: 0 6px; }
+  #evMore { margin-top: 6px; font-size: 12px; }
+  #evMore summary { cursor: pointer; }
+  #evMore > div { margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -145,7 +156,7 @@
     <input type="range" id="autoMin" min="0.80" max="0.98" step="0.01"><b id="autoMinV"></b></label>
   <div class="hint">Player boxes need 👥 players on · <kbd>Shift</kbd>+<kbd>D</kbd> opponents + others</div>
 </div>
-<div class="layout">
+<div class="layout" id="tagLayout">
   <section>
     <div id="stage">
       <video id="v" preload="auto"></video>
@@ -233,7 +244,7 @@
         <li><b>Game stats</b>: both teams' goals, shots, passes completed, passes in a row (2+ and 3+ completed passes by one
           team without losing it, and the most), balls won and restarts, then our players' touches, passes, shots, goals and
           balls won and lost. Counted from what's found, so rough; your labels (Shift+E) correct it. Each event is in the
-          Game log (below the Events box)</li>
+          Events list (beside the video)</li>
       </ul></details>
       <details data-sec="events"><summary>Events</summary><ul>
         <li><kbd>Shift</kbd>+<kbd>E</kbd> (or ✍️ label events) label events, until <kbd>Esc</kbd>: pause where it happens, point at the
@@ -252,13 +263,13 @@
         <li><b>👟 found touches</b> (Events box): the touches worked out from the ball and the players: the nearest player gets to
           the ball and its path changes. Shown as a ring under that player's feet around the moment (green ours, red theirs, grey
           a kit read as neither; dashed when someone else is nearly as close) with who it is, and as ticks along the bottom of the
-          timeline. Next to the button: against your full windows, how many of your labelled touches it found, how many of the
+          timeline. Under the list (“how what's found compares”): against your full windows, how many of your labelled touches it found, how many of the
           ones it found you labelled (a dribble touch or a throw-in you didn't label counts against it), and how often it names
           the player you pointed at</li>
         <li><b>🎯 found passes</b> (Events box): from the found touches, a touch followed by someone else's with the ball carried
           5 m or more. While the ball travels, an arrow from the kicker to whoever got it, in the kicker's colour (dashed when not
           completed): ✓ completed, ⚠ completed but lost again within 2 s (into danger), ✗ lost to them, out, ? not known (a
-          kit read as neither, or nobody touched it for 3 s and who had it then isn't known). Next to the button: each team's
+          kit read as neither, or nobody touched it for 3 s and who had it then isn't known). Under the list: each team's
           passes and completion, chains of 3 or more passes, ours by player (completed of passes), and against your full
           windows. Only as good as the touches: a pass needs both the kicker and the receiver read right</li>
         <li><b>🥅 shots, goals &amp; restarts</b> (Events box): goals from the kickoffs after them (who scored: the end the ball went
@@ -267,11 +278,13 @@
           wide; a corner: saved or deflected), in the goalie's hands (saved); plus shots heading in that a defender blocked.
           Restarts (kickoffs, throw-ins, goal kicks, corners, penalties, free kicks) come with the team that took them, from
           the taker and the rules (a goal kick is the defenders', a corner the attackers', a throw-in the team that didn't touch
-          it last). On the video, a label over the shooter's or taker's head; all of them are in the Game log box.
+          it last). On the video, a label over the shooter's or taker's head; all of them are rows in the Events list.
           Label restarts with <kbd>K</kbd> (Shift+E) to measure them</li>
-        <li><b>Game log</b> (below the Events box; opens when you click it): every event found in time order (goals, shots,
-          balls won, restarts, and passes if ticked), filtered by kind and whose (a team or one of ours), with ticks on
-          the timeline (the numbers are in the Analytics box). Click a time to jump there. <b>✗</b> on a row labels
+        <li><b>The Events list</b> (beside the video): every event found in time order (goals, shots, balls won, restarts,
+          and passes if ticked) with your labels (✍️) among them, filtered by kind and whose (a team or one of ours), with
+          ticks on the timeline (the numbers are in the Analytics box). The row for what's on the video now is lit and the
+          list follows along as it plays (not while the mouse is over it). Click a row to jump there (2 s before a found
+          event, to see the build-up). <b>✕</b> on a label removes it; <b>✗</b> on a found event labels
           what it isn't (a pass: just a touch; a shot: a pass; a ball won: not a touch) and what's found is worked out again;
           for the wrong player, jump there and label it right with Shift+E. Your labels correct what's found everywhere</li>
       </ul></details>
@@ -321,6 +334,33 @@
       </ul></details>
     </div>
   </section>
+    <div class="box" id="events">
+      <div class="row"><b>Events</b> <span class="stat" id="glCount"></span>
+        <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass or kick (aimed or a clear; the next touch says how it went), S shot, V save, G goal, W won the ball, K restart (the kick or throw that restarts play, on the taker), X not a touch (one found there that isn't). Labels also correct what's found. A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
+      <div class="row stat" id="evTools">
+        <button id="tcBtn" title="Touches found from the ball's path and the players (who played the ball when): a ring under the player's feet around each one, solid in their team's colour (dashed: another player nearly as close), and ticks along the bottom of the timeline. How they compare with your full windows: under the list.">👟 touches</button>
+        <button id="psBtn" title="Passes found from the touches: a touch followed by someone else's, with the ball carried 5 m or more on the way. While the ball travels, an arrow from the kicker to whoever gets it, in the kicker's team colour (dashed: not completed), with how it went: ✓ completed, ⚠ completed into danger (lost again within 2 s), ✗ lost, out, ? not known. Each team's numbers and how they compare with your full windows: under the list.">🎯 passes</button>
+        <button id="shBtn" title="Shots, goals and restarts found: the big moments in the list. Shots are found back from where they ended (in the goal, over the goal line, in the goalie's hands) and blocked ones; goals from the kickoffs after them and your goal clips, checked against the score next to the game date; restarts (kickoffs, throw-ins, goal kicks, corners, penalties, free kicks) with who took them. On the video, a label on the shooter or the taker; each is in the list below.">🥅 shots</button>
+        <button id="evWindow" title="A full window is a stretch where you label every touch, so it can measure what's found and what's missed (elsewhere a label only says something happened). Start one, label every touch, then end it here. A few minutes at a time.">⏺ full window from here</button>
+      </div>
+      <div class="row stat" id="glFilters">
+        <label title="Goals"><input type="checkbox" data-kind="goal" checked> ⚽ goals</label>
+        <label title="Shots and how they ended"><input type="checkbox" data-kind="shot" checked> 🥅 shots</label>
+        <label title="Balls won (and lost, seen from the other side): interception, tackle, recovery"><input type="checkbox" data-kind="won" checked> ⇄ won</label>
+        <label title="Kickoffs, throw-ins, goal kicks, corners, penalties"><input type="checkbox" data-kind="restart" checked> ↺ restarts</label>
+        <label title="Passes (hundreds a game)"><input type="checkbox" data-kind="pass"> ➜ passes</label>
+        <label title="Your labels (Shift+E): what the finding is measured against, and corrects it"><input type="checkbox" data-kind="label" checked> ✍️ your labels</label>
+        <select id="glWho" aria-label="whose events" title="Whose events: a team, or one of ours (named or guessed)"><option value="">everyone</option><option value="0">ours</option><option value="1">theirs</option></select>
+      </div>
+      <ul id="evList" class="list"></ul>
+      <details id="evMore" class="stat"><summary>Your labels, and how what's found compares <span id="evCount"></span></summary>
+        <div>Wrong? <b>✗</b> on a row says what it isn't; for the wrong player, jump there and label it right (Shift+E): labels correct what's found.</div>
+        <div>Full windows (every touch labelled): <span id="evWindows">none yet</span></div>
+        <div id="tcStat"></div>
+        <div id="psStat"></div>
+        <div id="shStat"></div>
+      </details>
+    </div>
   <aside>
     <div class="box filters" title="Shown on the opening card of reels made from this game">
       <input type="date" id="playedOn" aria-label="game date" title="Date the game was played (shown on reel opening cards)">
@@ -363,31 +403,6 @@
       <div class="row stat" id="gtGoalies" title="How often each goalie is found when the ball is within 20 m of their goal. Where it's low, point at the goalie and press Shift+G (ours), or click them and pick 🧤: that tracklet is the goalie, and so is anyone in the same kit staying around that goal. Found goalies show GK on their box; click one that isn't and pick ✕ not a goalie."></div>
       <div class="row stat" id="gtKits" title="Kits you've named (click a player, then 👕 ours / theirs / neither): that player's kit colour is that team's for the whole game. ✕ takes one back."></div>
     </div>
-    <div class="box" id="events">
-      <div class="row"><b>Events</b> <span class="stat" id="evCount"></span>
-        <button id="evMode" title="Label events (Shift+E): with the video paused, point at the player and press T touch, P pass or kick (aimed or a clear; the next touch says how it went), S shot, V save, G goal, W won the ball, K restart (the kick or throw that restarts play, on the taker), X not a touch (one found there that isn't). Labels also correct what's found. A pass, shot or save is a touch too. Esc stops. These labels are what the event finding will be measured against.">✍️ label events</button></div>
-      <div class="row stat"><button id="evWindow" title="A full window is a stretch where you label every touch, so it can measure what's found and what's missed (elsewhere a label only says something happened). Start one, label every touch, then end it here. A few minutes at a time.">⏺ full window from here</button>
-        <span id="evWindows"></span></div>
-      <div class="row stat"><button id="tcBtn" title="Touches found from the ball's path and the players (who played the ball when): a ring under the player's feet around each one, solid in their team's colour (dashed: another player nearly as close), and ticks along the bottom of the timeline. Next to it, how they compare with your full windows.">👟 found touches</button>
-        <span id="tcStat"></span></div>
-      <div class="row stat"><button id="psBtn" title="Passes found from the touches: a touch followed by someone else's, with the ball carried 5 m or more on the way. While the ball travels, an arrow from the kicker to whoever gets it, in the kicker's team colour (dashed: not completed), with how it went: ✓ completed, ⚠ completed into danger (lost again within 2 s), ✗ lost, out, ? not known. Next to it, each team's numbers, ours by player, and how they compare with your full windows.">🎯 found passes</button>
-        <span id="psStat"></span></div>
-      <div class="row stat"><button id="shBtn" title="Shots, goals and restarts found: the game log's big moments. Shots are found back from where they ended (in the goal, over the goal line, in the goalie's hands) and blocked ones; goals from the kickoffs after them and your goal clips, checked against the score next to the game date; restarts (kickoffs, throw-ins, goal kicks, corners, penalties, free kicks) with who took them. On the video, a label on the shooter or the taker; the list is in the Game log box.">🥅 shots, goals &amp; restarts</button>
-        <span id="shStat"></span></div>
-      <ul id="evList" class="list"></ul>
-    </div>
-    <details class="box" id="gameLog"><summary><b>Game log</b> <span class="stat" id="glCount"></span></summary>
-      <div class="row stat" id="glFilters">
-        <label title="Goals"><input type="checkbox" data-kind="goal" checked> ⚽ goals</label>
-        <label title="Shots and how they ended"><input type="checkbox" data-kind="shot" checked> 🥅 shots</label>
-        <label title="Balls won (and lost, seen from the other side): interception, tackle, recovery"><input type="checkbox" data-kind="won" checked> ⇄ won</label>
-        <label title="Kickoffs, throw-ins, goal kicks, corners, penalties"><input type="checkbox" data-kind="restart" checked> ↺ restarts</label>
-        <label title="Passes (hundreds a game)"><input type="checkbox" data-kind="pass"> ➜ passes</label>
-        <select id="glWho" aria-label="whose events" title="Whose events: a team, or one of ours (named or guessed)"><option value="">everyone</option><option value="0">ours</option><option value="1">theirs</option></select>
-      </div>
-      <div class="stat">Wrong? <b>✗</b> on a row says what it isn't; for the wrong player, jump there and label it right (Shift+E): labels correct what's found.</div>
-      <ul id="glList" class="list"></ul>
-    </details>
     <div class="box" id="detail"></div>
   </aside>
 </div>
@@ -626,7 +641,7 @@ async function loadMatch() {
   const id = game?.id;
   matchInfo = null;
   renderAttack();
-  possLoading = !!id;  // possession (and the game log after it) waits for this: the boxes say it's coming
+  possLoading = !!id;  // possession (and the events list after it) waits for this: the boxes say it's coming
   renderPossession();
   renderLog();
   if (!id) return;
@@ -1252,8 +1267,8 @@ function drawTimeline() {
       ctx.fillRect(x(ev.frame / fps), 14, 1, 7);
     }
   }
-  if (logOpen()) {  // the game log's events shown: ticks above the touches'
-    for (const e of logShown()) {
+  for (const e of logRows) {  // the events list's found events: ticks above the touches'
+    if (e.kind !== "label") {
       ctx.fillStyle = e.kind === "goal" ? "#ffffff" : TOUCH_COLOR[e.team ?? -1];
       ctx.fillRect(x(e.frame / fps), h - 19, e.kind === "goal" ? 3 : 1, 5);
     }
@@ -1312,6 +1327,7 @@ function frame() {
   drawMap();
   drawLoupe();
   drawAnalytics();
+  markNow();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -2487,7 +2503,7 @@ function refreshFound() {
     if (showTouches) loadTouches();
     if (showPasses) loadPasses();
     if (showShots) loadShots();
-    if (logWanted()) loadLog();
+    loadLog();
   }, 2500);
 }
 function toggleEventMode(on = !evMode) {
@@ -2533,25 +2549,16 @@ async function undoEvent() {
   flash("took back the last event");
 }
 function renderEvents() {
-  const el = $("evList");
-  if (!evLabels || evLabels.gameId !== game?.id) { el.innerHTML = ""; $("evCount").textContent = ""; return; }
+  // your labels' counts and full windows (under the list); the labels themselves are rows in the list (renderLog)
+  renderLog();
+  if (!evLabels || evLabels.gameId !== game?.id) { $("evCount").textContent = ""; return; }
   const { events: evs, windows, counts } = evLabels;
-  $("evCount").textContent = evs.length ? Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(" · ") : "none yet";
-  const f = Math.round(v.currentTime * fps);
-  el.innerHTML = evs.length ? evs.map((ev) => {
-    const [, name, colour] = EV_KINDS[ev.kind] || ["?", ev.kind, "#fff"];
-    const near = Math.abs(ev.frame - f) <= fps / 2;
-    return `<li data-ev="${ev.id}" data-t="${ev.frame / fps}" class="${near ? "near" : ""}">
-      <span class="t">${esc(label(ev.frame / fps))}</span>
-      <span style="color:${colour}">${esc(name)}</span>
-      <span class="tags" title="${ev.at ? `at ${ev.at[0]}, ${ev.at[1]} m on the field` : "not placed on the field"}">${esc(evWho(ev))}</span>
-      <button class="x" data-del="${ev.id}" title="Remove this label">✕</button></li>`;
-  }).join("") : `<li class="empty">Shift+E to label events</li>`;
-  $("evWindows").innerHTML = windows.map((w) => {
+  $("evCount").textContent = evs.length ? `(${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(" · ")})` : "(none yet)";
+  $("evWindows").innerHTML = windows.length ? windows.map((w) => {
     const n = evs.filter((ev) => ev.frame >= w.start && ev.frame < w.end).length;
     return `<span title="A full window: ${n} events labelled in it"><a href="#" data-t="${w.start / fps}">${esc(label(w.start / fps))}–${esc(label(w.end / fps))}</a>
       <button class="x" data-delwin="${w.id}" title="Remove this window (its labels stay)">✕</button></span>`;
-  }).join(" ");
+  }).join(" ") : "none yet";
   $("evWindow").textContent = evWindowStart?.gameId === game.id ? `⏹ end the window here (from ${label(evWindowStart.frame / fps)})`
     : "⏺ full window from here";
 }
@@ -2571,9 +2578,19 @@ $("evWindow").addEventListener("click", async (e) => {
   flash(`full window kept: ${label(Math.min(start, f) / fps)}–${label(Math.max(start, f) / fps)}`);
 });
 $("events").addEventListener("click", async (e) => {
-  const del = e.target.dataset?.del, delwin = e.target.dataset?.delwin;
+  const del = e.target.dataset?.del, delwin = e.target.dataset?.delwin, fix = e.target.dataset?.fix;
   if (del) { e.target.blur(); setEvents(await api("DELETE", `${gameUrl()}/events/labels/${del}`)); evDone = evDone.filter((x) => x !== del); return; }
   if (delwin) { e.target.blur(); setEvents(await api("DELETE", `${gameUrl()}/events/windows/${delwin}`)); return; }
+  if (fix != null) { e.target.blur(); fixLogged(logRows[Number(fix)]); return; }
+  const row = e.target.closest("li[data-i]");
+  if (row) {  // a found event from 2 s before (the build-up); a label right there. It stays lit until then
+    const r = logRows[Number(row.dataset.i)];
+    if (!r) return;
+    logPin = r;
+    v.pause();
+    seekTo(Math.max(0, r.frame / fps - (r.kind === "label" ? 0 : 2)));
+    return;
+  }
   const t = e.target.closest("[data-t]")?.dataset.t;
   if (t != null) { e.preventDefault(); v.pause(); seekTo(+t); }
 });
@@ -2834,19 +2851,22 @@ function drawShots(ctx) {
   ctx.restore();
 }
 
-// ---------- game log (Phase 6.7) ----------
-// Every event found, in time order (GET log): goals, shots, balls won, restarts and (if asked) passes, filtered by
-// kind and whose; click a time to jump there. ✗ on a row labels what it isn't (a pass: just a touch; a shot: a
-// pass; a ball won: not a touch), which corrects what's found. The stats (renderStats) go in the Analytics box.
+// ---------- the events list (Phase 6.7) ----------
+// In the Events box, beside the video: every event found, in time order (GET log): goals, shots, balls won,
+// restarts and (if ticked) passes, with your labels among them, filtered by kind and whose. The row for what's on
+// the video now is lit, and the list follows it. Click a row to jump there. ✗ on a found event labels what it
+// isn't (a pass: just a touch; a shot: a pass; a ball won: not a touch), which corrects what's found; ✕ on a label
+// removes it. The stats (renderStats) go in the Analytics box.
 let logInfo = null;  // {gameId, events, stats, players} or {gameId, error}
 let logLoads = 0;  // fetches of it under way
+let logRows = [];  // the rows shown, in time order: found events, and {kind: "label", frame, lab} for your labels
+let logNow = null, logPin = null;  // the rows lit and the one kept in view ([first, last, at]); a row clicked, lit until the video gets to it
+const NOW_S = 4;  // a row stays lit this long after its moment, until the next
 const LOG_ICON = { goal: "⚽", shot: "🥅", pass: "➜", won: "⇄", restart: "↺" };
 const LOG_FIX = { pass: ["touch", "not a pass: a touch"], shot: ["pass", "not a shot: a pass or a cross"], won: ["none", "not a touch"] };
-function logOpen() { return $("gameLog").open; }
-function logWanted() { return logOpen() || $("analytics").open; }  // the list, or the stats in Analytics
 async function loadLog() {
   const id = game?.id;
-  if (!id || !logWanted()) return;
+  if (!id) return;
   if (logInfo?.gameId !== id) logInfo = null;
   logLoads++;
   renderLog();
@@ -2855,20 +2875,21 @@ async function loadLog() {
   if (game?.id !== id) return;
   if (got && !got.pending) logInfo = { gameId: id, ...got };
   renderLog();
-  drawTimeline();
 }
 function logShown() {
-  // the events the filters let through
-  if (logInfo?.gameId !== game?.id || !logInfo?.events) return [];
+  // the found events and labels the filters let through, in time order
   const kinds = new Set([...$("glFilters").querySelectorAll("input:checked")].map((c) => c.dataset.kind));
   const w = $("glWho").value;
-  return logInfo.events.filter((e) => {
-    if (!kinds.has(e.kind)) return false;
+  const found = logInfo?.gameId === game?.id && logInfo?.events ? logInfo.events : [];
+  const labs = kinds.has("label") && evLabels?.gameId === game?.id
+    ? evLabels.events.map((ev) => ({ kind: "label", frame: ev.frame, team: ev.team, player: ev.player, guess: ev.guess, lab: ev })) : [];
+  const n = (x, pre = "") => x[pre + "player"] ?? x[pre + "guess"];
+  const rows = [...found.filter((e) => kinds.has(e.kind)), ...labs].filter((e) => {
     if (w === "") return true;
-    if (w === "0" || w === "1") return e.team === Number(w) || (e.kind === "won" && kinds.has("won") && e.team === 1 - Number(w));
-    const n = (x, pre = "") => x[pre + "player"] ?? x[pre + "guess"];
+    if (w === "0" || w === "1") return e.team === Number(w) || (e.kind === "won" && e.team === 1 - Number(w));
     return String(n(e)) === w || String(n(e, "to_")) === w || (e.kind === "won" && String(n(e, "from_")) === w);
   });
+  return rows.sort((a, b) => a.frame - b.frame);
 }
 function logWho(e, pre = "") {
   const n = e[pre + "player"] ?? e[pre + "guess"];
@@ -2887,27 +2908,62 @@ function logText(e) {
 }
 function renderLog() {
   renderStats();
-  const list = $("glList"), busy = logLoads > 0 || possLoading ? `<span class="spin"></span>updating…` : "";
-  if (!game || logInfo?.gameId !== game.id) {
-    list.innerHTML = logOpen() && busy ? `<li class="empty"><span class="spin"></span>working it out (the first time takes a few seconds)…</li>` : "";
-    $("glCount").innerHTML = busy;
-    return;
+  const list = $("evList"), busy = logLoads > 0 || possLoading;
+  logRows = game ? logShown() : [];
+  logNow = null;  // lit again at the next frame
+  if (logInfo?.gameId === game?.id && logInfo?.players) {
+    const sel = $("glWho"), keep = sel.value;
+    const nums = Object.keys(logInfo.players).sort((a, b) => a - b);
+    sel.innerHTML = `<option value="">everyone</option><option value="0">ours</option><option value="1">theirs</option>` +
+      nums.map((n) => `<option value="${n}">#${n}</option>`).join("");
+    sel.value = keep;
   }
-  if (logInfo.error) { list.innerHTML = `<li class="empty">${esc(logInfo.error)}</li>`; $("glCount").innerHTML = busy; return; }
-  const sel = $("glWho"), keep = sel.value;
-  const nums = Object.keys(logInfo.players).sort((a, b) => a - b);
-  sel.innerHTML = `<option value="">everyone</option><option value="0">ours</option><option value="1">theirs</option>` +
-    nums.map((n) => `<option value="${n}">#${n}</option>`).join("");
-  sel.value = keep;
-  const shown = logShown();
-  $("glCount").innerHTML = busy || `${shown.length} shown`;
-  list.innerHTML = shown.length ? shown.map((e, i) => `<li class="log">` +  // the ✗ first, so it floats on the first line
-    `${LOG_FIX[e.kind] && e.track != null ? `<button data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : ""}` +
-    `<a href="#" data-t="${e.frame / fps}">${esc(label(e.frame / fps))}</a> ${LOG_ICON[e.kind]} ${logText(e)}</li>`).join("")
-    : `<li class="empty">nothing found of these</li>`;
+  $("glCount").innerHTML = busy ? `<span class="spin"></span>updating…` : game ? `${logRows.length} shown` : "";
+  const note = !game ? "" : logInfo?.gameId === game.id && logInfo.error ? `<li class="empty">found events: ${esc(logInfo.error)}</li>`
+    : logInfo?.gameId !== game.id && busy ? `<li class="empty"><span class="spin"></span>working out what happened (the first time takes a few seconds)…</li>` : "";
+  list.innerHTML = note + (logRows.length ? logRows.map((e, i) => {
+    const t = `<span class="t">${esc(label(e.frame / fps))}</span>`;
+    if (e.kind === "label") {
+      const ev = e.lab, [, name, colour] = EV_KINDS[ev.kind] || ["?", ev.kind, "#fff"];
+      return `<li class="log lab" data-i="${i}"><button class="x" data-del="${ev.id}" title="Remove this label">✕</button>` +
+        `${t} ✍️ <span style="color:${colour}">${esc(name)}</span> <span class="stat">${esc(evWho(ev))}</span></li>`;
+    }
+    const fix = LOG_FIX[e.kind] && e.track != null ? `<button class="x" data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : "";
+    return `<li class="log" data-i="${i}">${fix}${t} ${LOG_ICON[e.kind]} ${logText(e)}</li>`;
+  }).join("") : game && !note ? `<li class="empty">nothing of these yet: Shift+E to label events</li>` : "");
+  drawTimeline();
+}
+function markNow() {
+  // light the rows at the playhead: the last moment at or just before it (up to NOW_S back), or a row clicked
+  // until the video gets there. The list follows the video (to the next row when none is lit), unless the mouse
+  // is over it
+  if (!logRows.length) return;
+  const f = v.currentTime * fps;
+  let lo = 0, hi = logRows.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (logRows[mid].frame <= f + 0.3 * fps) lo = mid + 1; else hi = mid; }
+  let i = logPin ? logRows.indexOf(logPin) : -1;
+  if (i < 0 || f < logPin.frame - 2.5 * fps || f > logPin.frame + NOW_S * fps) {
+    logPin = null;
+    i = lo - 1;
+    if (i >= 0 && f - logRows[i].frame > NOW_S * fps) i = -1;
+  }
+  let j = i;  // and the rows at the same moment
+  while (j > 0 && logRows[i].frame - logRows[j - 1].frame <= fps / 2) j--;
+  const at = i >= 0 ? j : Math.min(lo, logRows.length - 1);  // the row to keep in view
+  if (logNow && logNow[0] === j && logNow[1] === i && logNow[2] === at) return;
+  const list = $("evList"), row = (k) => list.querySelector(`li[data-i="${k}"]`);
+  for (const li of list.querySelectorAll("li.now")) li.classList.remove("now");
+  logNow = [j, i, at];
+  for (let k = j; k <= i && i >= 0; k++) row(k)?.classList.add("now");
+  const first = row(at), last = row(Math.max(i, at));
+  if (!first || list.matches(":hover")) return;
+  const top = first.offsetTop, bottom = last.offsetTop + last.offsetHeight;
+  if (top < list.scrollTop || bottom > list.scrollTop + list.clientHeight) {
+    list.scrollTo({ top: Math.max(0, top - list.clientHeight / 3), behavior: v.paused ? "auto" : "smooth" });
+  }
 }
 function renderStats() {
-  // the Analytics box: both teams' numbers, then our players', from the game log
+  // the Analytics box: both teams' numbers, then our players', from the events list's GET log
   const el = $("anStats");
   if (!game || logInfo?.gameId !== game.id) {
     el.innerHTML = logLoads > 0 || possLoading ? `<h4>Game stats</h4><div class="stat"><span class="spin"></span>working out passes, shots and balls won (the first time takes a few seconds)…</div>` : "";
@@ -2934,25 +2990,10 @@ function renderStats() {
     (rs ? ["corner", "goal kick", "throw-in"].map((k) => row(k + "s", rs[k].ours, rs[k].theirs)).join("") : "") + `</table>` +
     (nums.length ? `<h4>Our players</h4><table><tr><th></th><th title="touches">touches</th><th title="passes completed / passes">passes</th><th>shots</th><th>goals</th><th title="balls won">won</th><th title="balls lost">lost</th></tr>` +
       nums.map((n) => { const p = logInfo.players[n]; return `<tr><td>#${n}</td><td>${p.touches}</td><td>${p.completed}/${p.passes}</td><td>${p.shots}</td><td>${p.goals}</td><td>${p.won}</td><td>${p.lost}</td></tr>`; }).join("") + `</table>` : "") +
-    `<div class="stat" style="font-size:12px">Counted from what's found, so rough (the Events box's 👟 🎯 🥅 say how each compares with your labels); a player's numbers count named and guessed (#n?) players. Every event is in the Game log.</div>`;
+    `<div class="stat" style="font-size:12px">Counted from what's found, so rough (the Events box's 👟 🎯 🥅 say how each compares with your labels); a player's numbers count named and guessed (#n?) players. Every event is in the Events list.</div>`;
 }
-$("gameLog").addEventListener("toggle", () => {
-  try { localStorage.setItem("gameLogOpen", logOpen() ? "1" : "0"); } catch {}
-  if (logOpen() && logInfo?.gameId !== game?.id && !logLoads) loadLog();
-  renderLog();
-  drawTimeline();
-});
-$("analytics").addEventListener("toggle", () => {
-  if ($("analytics").open && logInfo?.gameId !== game?.id && !logLoads) loadLog();
-});
-try { if (localStorage.getItem("gameLogOpen") === "1") $("gameLog").open = true; } catch {}
-$("glFilters").addEventListener("change", () => { renderLog(); drawTimeline(); });
-$("glList").addEventListener("click", async (e) => {
-  const a = e.target.closest("a[data-t]"), b = e.target.closest("button[data-fix]");
-  if (a) { e.preventDefault(); v.pause(); seekTo(Math.max(0, Number(a.dataset.t) - 2)); return; }
-  if (!b) return;
-  const ev = logShown()[Number(b.dataset.fix)];
-  if (!ev) return;
+async function fixLogged(ev) {
+  if (!ev || !LOG_FIX[ev.kind]) return;
   const [kind, what] = LOG_FIX[ev.kind];
   const id = game.id;
   const got = await api("POST", `${gameUrl()}/events/labels`, { frame: ev.frame, kind, track: ev.track });
@@ -2960,7 +3001,8 @@ $("glList").addEventListener("click", async (e) => {
   evDone.push(got.event.id);
   setEvents(got, id);
   flash(`labelled ${what} at ${label(ev.frame / fps)}: updating what's found…`);
-});
+}
+$("glFilters").addEventListener("change", () => renderLog());
 
 // ---------- field map and calibration (Phase 5) ----------
 // The calibration ties the video to the field: per frame, a homography from pitch metres to frame
