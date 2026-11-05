@@ -289,7 +289,9 @@
           Restarts (kickoffs, throw-ins, goal kicks, corners, penalties, free kicks) come with the team that took them, from
           the taker and the rules (a goal kick is the defenders', a corner the attackers', a throw-in the team that didn't touch
           it last). On the video, a label over the shooter's or taker's head; all of them are rows in the Events list.
-          Label restarts with <kbd>K</kbd> (Shift+E) to measure them</li>
+          Label restarts with <kbd>K</kbd> (Shift+E) to measure them. <b>Punts</b> are among the restarts: the goalie
+          putting the ball back in play from their hands (held at hand height, then sent 10 m or more; at U11, mostly
+          put down and kicked). Rough: it misses some, more at the far end of the field</li>
         <li><b>The Events list</b> (beside the video): every event found in time order (goals, shots, balls won, restarts,
           and passes if ticked) with your labels (✍️) among them, filtered by kind and whose (a team or one of ours), with
           ticks on the timeline (the numbers are in the Analytics box). Goals, shots and completed passes are coloured
@@ -358,7 +360,7 @@
         <label title="Goals"><input type="checkbox" data-kind="goal" checked> ⚽ goals</label>
         <label title="Shots and how they ended"><input type="checkbox" data-kind="shot" checked> 🥅 shots</label>
         <label title="Balls won (and lost, seen from the other side): interception, tackle, recovery"><input type="checkbox" data-kind="won" checked> ⇄ won</label>
-        <label title="Kickoffs, throw-ins, goal kicks, corners, penalties"><input type="checkbox" data-kind="restart" checked> ↺ restarts</label>
+        <label title="Kickoffs, throw-ins, goal kicks, corners, penalties, and punts (the goalie putting the ball back in play from their hands)"><input type="checkbox" data-kind="restart" checked> ↺ restarts</label>
         <label title="Passes (hundreds a game)"><input type="checkbox" data-kind="pass"> ➜ passes</label>
         <label title="Your labels (Shift+E): what the finding is measured against, and corrects it"><input type="checkbox" data-kind="label" checked> ✍️ your labels</label>
         <select id="glWho" aria-label="whose events" title="Whose events: a team, or one of ours (named or guessed)"><option value="">everyone</option><option value="0">ours</option><option value="1">theirs</option></select>
@@ -3032,7 +3034,7 @@ function renderStats() {
     row("most passes in a row", ps.ours.chains.longest, ps.theirs.chains.longest) +
     (wn ? row("balls won (in their half)", `${wn.ours.won} (${wn.ours.won_their_half})`, `${wn.theirs.won} (${wn.theirs.won_their_half})`) +
       row("lost in own third", wn.ours.lost_own_third, wn.theirs.lost_own_third) : "") +
-    (rs ? ["corner", "goal kick", "throw-in"].map((k) => row(k + "s", rs[k].ours, rs[k].theirs)).join("") : "") + `</table>` +
+    (rs ? ["corner", "goal kick", "throw-in", "punt"].map((k) => row(k + "s", rs[k]?.ours ?? 0, rs[k]?.theirs ?? 0)).join("") : "") + `</table>` +
     (nums.length ? `<h4>Our players</h4><table><tr><th></th><th title="touches">touches</th><th title="passes completed / passes">passes</th><th>shots</th><th>goals</th><th title="balls won">won</th><th title="balls lost">lost</th></tr>` +
       nums.map((n) => { const p = logInfo.players[n]; return `<tr><td>#${n}</td><td>${p.touches}</td><td>${p.completed}/${p.passes}</td><td>${p.shots}</td><td>${p.goals}</td><td>${p.won}</td><td>${p.lost}</td></tr>`; }).join("") + `</table>` : "") +
     `<div class="stat" style="font-size:12px">Counted from what's found, so rough (the Events box's 👟 🎯 🥅 say how each compares with your labels); a player's numbers count named and guessed (#n?) players. Every event is in the Events list.</div>`;

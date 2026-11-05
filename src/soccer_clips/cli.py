@@ -400,7 +400,7 @@ def _event_stats(store: Store, game) -> None:
             ("balls won (their half)", *(f"{tos['stats'][t]['won']} ({tos['stats'][t]['won_their_half']})"
                                          for t in ("ours", "theirs"))),
             ("lost in own third", *(tos["stats"][t]["lost_own_third"] for t in ("ours", "theirs")))]
-    rows += [(k + "s", rs["stats"][k]["ours"], rs["stats"][k]["theirs"]) for k in ("corner", "goal kick", "throw-in")]
+    rows += [(k + "s", rs["stats"][k]["ours"], rs["stats"][k]["theirs"]) for k in ("corner", "goal kick", "throw-in", "punt")]
     print(f"  {'':24} {'ours':>14} {'theirs':>14}")
     for name, a, b in rows:
         print(f"  {name:24} {a!s:>14} {b!s:>14}")

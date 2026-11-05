@@ -23,6 +23,8 @@ def test_find_and_stats():
     s = tv.team_stats(got, 0)
     assert s["won"] == 1 and s["lost"] == 2 and s["won_their_half"] == 1 and s["lost_by"]["tackle"] == 1
     assert s["lost_own_third"] == 0 and tv.team_stats(got, 1)["lost_own_third"] == 1
+    # the touch at 40 a shot: their block at 45 ends the attack, not a ball lost
+    assert [t["frame"] for t in tv.find(tc, {0}, in_play, [(0, 100)], [1], 60.0, FPS, {40})] == [20, 40]
 
 
 def test_compare():

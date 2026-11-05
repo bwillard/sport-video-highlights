@@ -7,7 +7,8 @@ team touching it next won it, by:
 - **interception:** the other team's pass (passes.py) ended with us: a bad pass, a long ball they collected;
 - **tackle:** taken off them within TACKLE_S of their touch, not from a pass;
 - **recovery:** anything else: a loose ball after a shot, a deflection or a 50-50.
-Lost is the same seen from the other side. Where: the third, from the winner's attacking direction (0 their
+Not after a shot: the other team's next touch (a block, the goalie, a clearance after it) ends the attack, not
+a ball lost. Lost is the same seen from the other side. Where: the third, from the winner's attacking direction (0 their
 own, 1 middle, 2 attacking), and whether it was in the winner's attacking half.
 
 Against your full windows (2026-11-04, 54 changes of team between your labels, matched within TOL_S): 50% found,
@@ -33,13 +34,14 @@ TEAMS = ("ours", "theirs")
 
 
 def find(touches: list[dict], pass_frames: set, in_play: np.ndarray, hs: list[tuple[int, int]],
-         signs: list[int], length: float | None, fps: float) -> list[dict]:
+         signs: list[int], length: float | None, fps: float, shot_frames: set = frozenset()) -> list[dict]:
     """The changes of team: [{frame (the winner's touch), team (who won it: 0 / 1), track, from_track (who lost
-    it), kind, x, y, third (from the winner's attacking direction, or None), their_half}]."""
+    it), kind, x, y, third (from the winner's attacking direction, or None), their_half}]; none from a shot (the
+    touches at shot_frames)."""
     tk = [t for t in touches if t["team"] >= 0]
     out = []
     for a, b in zip(tk, tk[1:]):
-        if a["team"] == b["team"] or not in_play[a["frame"]:b["frame"]].all():
+        if a["team"] == b["team"] or not in_play[a["frame"]:b["frame"]].all() or a["frame"] in shot_frames:
             continue
         kind = ("interception" if a["frame"] in pass_frames
                 else "tackle" if b["frame"] - a["frame"] <= TACKLE_S * fps else "recovery")
@@ -67,23 +69,24 @@ def team_stats(tos: list[dict], team: int) -> dict:
             "lost_own_third": sum(t["third"] == 2 for t in lost)}  # the winner's attacking third is our own
 
 
-def work_out(store: Store, game: Game, touch_list: list[dict], pass_list: list[dict]) -> list[dict]:
+def work_out(store: Store, game: Game, touch_list: list[dict], pass_list: list[dict], shot_list: list[dict]) -> list[dict]:
     from soccer_clips.track import ball_state, match
 
     st = ball_state.load(store, game)
     mi = match.load(store, game)
     return find(touch_list, {p["frame"] for p in pass_list}, st["in_play"], match.halves(game),
-                [match.attack_sign(mi, h) for h in (1, 2)], (st.get("timeline") or {}).get("length"), game.fps)
+                [match.attack_sign(mi, h) for h in (1, 2)], (st.get("timeline") or {}).get("length"), game.fps,
+                {x["frame"] for x in shot_list if x["frame"] is not None})
 
 
 def get(store: Store, game: Game) -> dict | None:
     """The game's balls won and lost ({turnovers, stats}), or None when the passes can't be found yet."""
-    from soccer_clips.track import passes, touches
+    from soccer_clips.track import passes, shots, touches
 
-    tc, ps = touches.get(store, game), passes.get(store, game)
-    if tc is None or ps is None:
+    tc, ps, sh = touches.get(store, game), passes.get(store, game), shots.get(store, game)
+    if tc is None or ps is None or sh is None:
         return None
-    tos = work_out(store, game, tc["touches"], ps["passes"])
+    tos = work_out(store, game, tc["touches"], ps["passes"], sh["shots"])
     return {"turnovers": tos, "stats": {n: team_stats(tos, i) for i, n in enumerate(TEAMS)}}
 
 
@@ -134,5 +137,5 @@ def evaluate(store: Store, game: Game) -> dict | None:
     found = tc["found"]
     raw_shots, _ = shots.work_out(store, game, found, [])
     raw_passes, _, _ = passes.work_out(store, game, found, raw_shots)
-    tos = work_out(store, game, found, raw_passes)
+    tos = work_out(store, game, found, raw_passes, raw_shots)
     return compare(tos, lab["events"], lab["windows"], ball_state.load(store, game)["in_play"], game.fps)

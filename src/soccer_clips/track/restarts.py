@@ -14,6 +14,11 @@ moment (the ball placed, then kicked), the last kick is the restart.
   Kickoffs and free kicks have none here (who kicks off after a goal is shots.py's check on the scorer).
 Both known and the same, or one known: that team. Both known and different: not known (`disagree`).
 
+**Punts:** the goalie putting the ball back in play from their hands. A goalie's touch (touches.py) with the
+ball held at hand height in their box (the top HELD_TOP of it, on the video) for HELD_MIN frames in the HELD_S
+before, then sent PUNT_M or more within PUNT_S: kicked out of the hands, or (at U11, where they can't punt, what
+the videos show) put down and kicked, or thrown. One per PUNT_SAME_S; the goalie's team.
+
 Worked out when asked (well under a second), not saved.
 """
 from __future__ import annotations
@@ -25,9 +30,15 @@ from soccer_clips.store import Store
 
 TAKER_S = 0.7  # the taker: a touch this close to the kick
 LAST_S = 10.0  # a throw-in: the last touch before the ball went out, this long before at most
-KINDS = ("kickoff", "throw-in", "goal kick", "corner", "penalty", "free kick")  # for the log; not "goalie"
+KINDS = ("kickoff", "throw-in", "goal kick", "corner", "penalty", "free kick", "punt")  # for the log; not "goalie"
 ALWAYS = ("kickoff", "penalty")  # listed even without an out-of-play stretch before them
 TOL_S = 1.0  # measuring against labels: a restart this close to a labelled one is it
+HELD_S = 3.0  # a punt: the ball in the goalie's hands within this before their touch...
+HELD_MIN = 5  # ...for at least this many frames...
+HELD_TOP = 0.7  # ...in the top this share of their box (hands, not feet)...
+PUNT_M = 10.0  # ...then this far from where it was played...
+PUNT_S = 3.0  # ...within this long
+PUNT_SAME_S = 5.0  # punts this close together are one (the longest)
 
 
 def stoppages(restarts: list[dict], out: list[dict]) -> list[dict]:
@@ -86,6 +97,41 @@ def listed(restarts: list[dict], out: list[dict], touches: list[dict], signs: li
     return out_
 
 
+def punts(touches: list[dict], frame: np.ndarray, bx: np.ndarray, by: np.ndarray, xy: np.ndarray, t, fps: float) -> list[dict]:
+    """The goalies' punts (HELD_*, PUNT_*), as restarts [{frame, kind "punt", x, y, team, track, by_taker, by_rule
+    None, disagree False}]. frame, bx, by: the ball on the video (fractions of the frame, sorted by frame); xy:
+    the ball on the field per frame; t: the tracklets (people.Tracks)."""
+    got = []
+    for x in touches:
+        if not x["keeper"]:
+            continue
+        f = x["frame"]
+        a, b = np.searchsorted(frame, [f - HELD_S * fps, f + 1])
+        held = 0
+        for i in range(a, b):
+            lo, hi = t.window(int(frame[i]), int(frame[i]) + 1)
+            k = next((j for j in range(lo, hi) if t.track[j] == x["track"]), None)
+            if k is None:
+                continue
+            x1, y1, x2, y2 = t.box[k]
+            pad = 0.3 * (x2 - x1)
+            held += x1 - pad <= bx[i] <= x2 + pad and y1 <= by[i] <= y1 + HELD_TOP * (y2 - y1)
+        seg = xy[f:f + int(PUNT_S * fps)]
+        seg = seg[np.isfinite(seg[:, 0])]
+        far = float(np.linalg.norm(seg - seg[0], axis=1).max()) if len(seg) > 1 else 0.0
+        if held >= HELD_MIN and far >= PUNT_M:
+            got.append(({"frame": f, "kind": "punt", "x": x["x"], "y": x["y"], "team": x["keeper"] - 1,
+                         "track": x["track"], "by_taker": x["keeper"] - 1, "by_rule": None, "disagree": False}, far))
+    out = []
+    for r, far in got:  # one per hold: the longest
+        if out and r["frame"] - out[-1][0]["frame"] <= PUNT_SAME_S * fps:
+            if far > out[-1][1]:
+                out[-1] = (r, far)
+            continue
+        out.append((r, far))
+    return [r for r, _ in out]
+
+
 def stats(rs: list[dict]) -> dict:
     """Per kind: ours, theirs, not known; and how often the two signals agree where both are known."""
     out = {k: {"ours": 0, "theirs": 0, "unknown": 0} for k in KINDS}
@@ -100,14 +146,18 @@ def stats(rs: list[dict]) -> dict:
 def get(store: Store, game: Game, found: bool = False) -> dict | None:
     """The game's restarts ({restarts, stats}), or None when the touches can't be found yet. found: from the
     touches as found, before your labels (for measuring against them)."""
-    from soccer_clips.track import match, touches
+    from soccer_clips.track import ball_game, ball_state, match, people, touches
 
     tc = touches.get(store, game)
     mi = match.load(store, game)
     if tc is None or mi is None:
         return None
     signs = [match.attack_sign(mi, h) for h in (1, 2)]
-    rs = listed(mi["restarts"], mi["out_of_play"], tc["found" if found else "touches"], signs, game.fps)
+    tl = tc["found" if found else "touches"]
+    rs = listed(mi["restarts"], mi["out_of_play"], tl, signs, game.fps)
+    bp, st, t = ball_game.load_path(store, game), ball_state.load(store, game), people.tracks(store, game)
+    if bp is not None and st is not None and t is not None:
+        rs = sorted(rs + punts(tl, bp["frame"], bp["x"], bp["y"], st["xy"], t, game.fps), key=lambda r: r["frame"])
     return {"restarts": rs, "stats": stats(rs)}
 
 

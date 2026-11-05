@@ -141,3 +141,26 @@ def test_log_api_and_label_from_the_log(settings):
     got = client.post(f"/api/games/{game.id}/events/labels", json={"frame": 100, "kind": "none", "track": 3}).json()
     assert abs(got["event"]["x"] - 0.55) < 1e-4 and abs(got["event"]["y"] - 0.4) < 1e-4
     assert [e["kind"] for e in got["nots"]] == ["none"] and got["events"] == []
+
+
+def test_punts():
+    class Tracks:  # people.Tracks: rows sorted by frame
+        def __init__(self, frame, track, box):
+            self.frame, self.track, self.box = frame, track, box
+
+        def window(self, a, b):
+            return np.searchsorted(self.frame, [a, b])
+
+    frames = np.arange(100)
+    t = Tracks(frames, np.full(100, 9), np.tile([0.4, 0.4, 0.5, 0.6], (100, 1)))  # their goalie, all along
+    by = np.full(100, 0.59)  # the ball at their feet...
+    by[20:30] = 0.45  # ...in their hands for a second
+    bx = np.full(100, 0.45)
+    xy = np.full((100, 2), np.nan)
+    xy[35:50] = np.column_stack([np.linspace(25, 10, 15), np.zeros(15)])  # then sent 15 m
+    xy[75:90] = xy[35:50]
+    tc = [touch(35, 9, 1, 25, keeper=2), touch(37, 9, 1, 24, keeper=2),  # the punt; a second touch of the same hold
+          touch(75, 9, 1, 25, keeper=2),  # sent as far, but not from the hands
+          touch(40, 4, 0, 20)]  # not the goalie
+    got = rs.punts(tc, frames, bx, by, xy, t, FPS)
+    assert [(r["frame"], r["kind"], r["team"], r["track"]) for r in got] == [(35, "punt", 1, 9)]
