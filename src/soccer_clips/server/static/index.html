@@ -2875,6 +2875,7 @@ function drawShots(ctx) {
 let logInfo = null;  // {gameId, events, stats, players} or {gameId, error}
 let logLoads = 0;  // fetches of it under way
 let logRows = [];  // the rows shown, in time order: found events, and {kind: "label", frame, lab} for your labels
+let logWhoKept = "";  // whose events to show (glWho), kept across reloads: a player stays chosen in games without them
 let logNow = null, logPin = null;  // the rows lit and the one kept in view ([first, last, at]); a row clicked, lit until the video gets to it
 const NOW_S = 4;  // a row stays lit this long after its moment, until the next
 const PAIR_S = 1;  // a label this close to a found event of its kind is the same event
@@ -2970,15 +2971,16 @@ function labText(ev) {
 function renderLog() {
   renderStats();
   const list = $("evList"), busy = logLoads > 0 || possLoading;
-  logRows = game ? logShown() : [];
-  logNow = null;  // lit again at the next frame
-  if (logInfo?.gameId === game?.id && logInfo?.players) {
-    const sel = $("glWho"), keep = sel.value;
+  if (logInfo?.gameId === game?.id && logInfo?.players) {  // this game's players; the one kept if they're in it
+    const sel = $("glWho");
     const nums = Object.keys(logInfo.players).sort((a, b) => a - b);
     sel.innerHTML = `<option value="">everyone</option><option value="0">ours</option><option value="1">theirs</option>` +
       nums.map((n) => `<option value="${n}">#${n}</option>`).join("");
-    sel.value = keep;
+    sel.value = logWhoKept;
+    if (sel.value !== logWhoKept) sel.value = "";
   }
+  logRows = game ? logShown() : [];
+  logNow = null;  // lit again at the next frame
   $("glCount").innerHTML = busy ? `<span class="spin"></span>updating…` : game ? `${logRows.length} shown` : "";
   const note = !game ? "" : logInfo?.gameId === game.id && logInfo.error ? `<li class="empty">found events: ${esc(logInfo.error)}</li>`
     : logInfo?.gameId !== game.id && busy ? `<li class="empty"><span class="spin"></span>working out what happened (the first time takes a few seconds)…</li>` : "";
@@ -3073,7 +3075,20 @@ async function fixLogged(ev) {
   setEvents(got, id);
   flash(`labelled ${what} at ${label(ev.frame / fps)}: updating what's found…`);
 }
-$("glFilters").addEventListener("change", () => renderLog());
+// what the list shows (the kinds ticked, whose) is kept across reloads
+try {
+  const kinds = JSON.parse(localStorage.getItem("logKinds") || "{}");
+  for (const c of $("glFilters").querySelectorAll("input[data-kind]")) c.checked = kinds[c.dataset.kind] ?? c.checked;
+  logWhoKept = localStorage.getItem("logWho") || "";
+  $("glWho").value = logWhoKept;
+  if ($("glWho").value !== logWhoKept) $("glWho").value = "";  // a player: once the game's players are in
+} catch {}
+$("glFilters").addEventListener("change", () => {
+  logWhoKept = $("glWho").value;
+  const kinds = Object.fromEntries([...$("glFilters").querySelectorAll("input[data-kind]")].map((c) => [c.dataset.kind, c.checked]));
+  try { localStorage.setItem("logKinds", JSON.stringify(kinds)); localStorage.setItem("logWho", logWhoKept); } catch {}
+  renderLog();
+});
 
 // ---------- field map and calibration (Phase 5) ----------
 // The calibration ties the video to the field: per frame, a homography from pitch metres to frame
