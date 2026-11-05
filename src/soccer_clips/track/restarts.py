@@ -12,7 +12,9 @@ moment (the ball placed, then kicked), the last kick is the restart.
 - **the rules:** a goal kick is the defending team's (whose goal line it's on), a corner and a penalty the
   attacking team's, a throw-in the team that didn't touch the ball last before it went out (within LAST_S).
   Kickoffs and free kicks have none here (who kicks off after a goal is shots.py's check on the scorer).
-Both known and the same, or one known: that team. Both known and different: not known (`disagree`).
+Both known and the same, or one known: that team. Both known and different: for a goal kick or a corner the
+rules (SIDED: which end it's at is plain, and the touch at the kick is often whoever got it, or a kit misread),
+else not known (`disagree` either way).
 
 **Punts:** the goalie putting the ball back in play from their hands. A goalie's touch (touches.py) with the
 ball held at hand height in their box (the top HELD_TOP of it, on the video) for HELD_MIN frames in the HELD_S
@@ -31,6 +33,7 @@ from soccer_clips.store import Store
 TAKER_S = 0.7  # the taker: a touch this close to the kick
 LAST_S = 10.0  # a throw-in: the last touch before the ball went out, this long before at most
 KINDS = ("kickoff", "throw-in", "goal kick", "corner", "penalty", "free kick", "punt")  # for the log; not "goalie"
+SIDED = ("goal kick", "corner")  # the rules decide these when the two disagree
 ALWAYS = ("kickoff", "penalty")  # listed even without an out-of-play stretch before them
 TOL_S = 1.0  # measuring against labels: a restart this close to a labelled one is it
 HELD_S = 3.0  # a punt: the ball in the goalie's hands within this before their touch...
@@ -90,7 +93,7 @@ def listed(restarts: list[dict], out: list[dict], touches: list[dict], signs: li
         t = taker(r, touches, frames, fps)
         a = t["team"] if t is not None and t["team"] >= 0 else None
         b = by_rule(r, touches, frames, sign, fps)
-        team = a if b is None else b if a is None else a if a == b else None
+        team = a if b is None else b if a is None or a == b or r["kind"] in SIDED else None
         out_.append({"frame": int(r["kick"]), "kind": r["kind"], "x": r["x"], "y": r["y"], "team": team,
                      "track": t["track"] if t is not None else None, "by_taker": a, "by_rule": b,
                      "disagree": a is not None and b is not None and a != b})

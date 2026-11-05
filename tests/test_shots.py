@@ -99,16 +99,16 @@ def test_restarts():
            {"from": 80, "to": 100, "kind": "goal kick"},
            {"from": 130, "to": 150, "kind": "corner"}, {"from": 180, "to": 200, "kind": "throw-in"},
            {"from": 290, "to": 300, "kind": "goalie"}]
-    # their goal kick (at the end we attack): theirs; a corner taken by them (the rules say ours)
+    # their goal kick (at the end we attack): theirs; a corner taken by them (the rules say ours, and decide)
     tc = [touch(100, 1, 1, 29), touch(150, 2, 1, 30),
           touch(175, 3, 1, 5), touch(200, 4, 0, 5),  # they touched it last: our throw-in
           touch(260, 5, 0, 0)]
     got = rs.listed(restarts, out, tc, SIGNS, FPS)
     assert [(r["frame"], r["kind"], r["team"], r["disagree"]) for r in got] == [
-        (100, "goal kick", 1, False), (150, "corner", None, True), (200, "throw-in", 0, False),
+        (100, "goal kick", 1, False), (150, "corner", 0, True), (200, "throw-in", 0, False),
         (260, "kickoff", 0, False)]
     st = rs.stats(got)
-    assert st["corner"]["unknown"] == 1 and st["agree"] == 0.667 and st["agree_n"] == 3
+    assert st["corner"]["ours"] == 1 and st["agree"] == 0.667 and st["agree_n"] == 3
     evs = [{"frame": 101, "kind": "restart", "team": 1, "keeper": 0},
            {"frame": 500, "kind": "restart", "team": 0, "keeper": 0}]
     assert rs.compare(got, evs, FPS) == {"labelled_n": 2, "found": 0.5, "team": 1.0, "team_n": 1}
