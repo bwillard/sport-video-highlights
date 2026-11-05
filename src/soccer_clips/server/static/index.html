@@ -61,6 +61,13 @@
   .an-bar span.nk { color: var(--text); }
   #anTimeline { display: block; width: 100%; height: 254px; cursor: pointer; margin-top: 2px; }
   #anHover { min-height: 1.4em; font-size: 12px; }
+  #anStats table { border-collapse: collapse; margin: 4px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #anStats td, #anStats th { padding: 1px 8px; text-align: right; }
+  #anStats th:first-child, #anStats td:first-child { text-align: left; }
+  /* still loading: a turning ring before the words */
+  .spin { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px; border: 2px solid var(--muted);
+          border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   /* help: one collapsible section per topic; closed ones share a line, an open one takes the full width */
   .help-secs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin-top: 6px; line-height: 1.7; }
   .help-secs details[open] { flex-basis: 100%; }
@@ -92,11 +99,8 @@
   #evBanner kbd { color: #40e0ff; }
   #events .list { max-height: 30vh; }
   #gameLog .list { max-height: 40vh; }
-  #gameLog .list li.log { display: block; padding: 2px 4px; }  /* one line each */
+  #gameLog .list li.log { display: flow-root; padding: 2px 4px; }  /* one line each; holds its ✗ */
   #gameLog .list li.log button { float: right; padding: 0 5px; }
-  #gameLog table { border-collapse: collapse; margin: 4px 0; }
-  #gameLog td, #gameLog th { padding: 1px 6px; text-align: right; }
-  #gameLog th:first-child, #gameLog td:first-child { text-align: left; }
   #glFilters label { white-space: nowrap; }
   #events .list li { grid-template-columns: 64px 54px 1fr auto; }
   #events .list li.near { background: #1d3550; }
@@ -162,6 +166,7 @@
     <details id="analytics" class="box" open hidden>
       <summary>Analytics</summary>
       <div id="anPossession"></div>
+      <div id="anStats"></div>
     </details>
     <div class="help help-secs" id="help">
       <span class="help-title">Keys &amp; help:</span>
@@ -225,6 +230,10 @@
           which way we attack is sure. The same colours are the thin strip on the video timeline and the label on the field map</li>
         <li>Rough: worked out from the nearest players to the ball, so teams need their kits right (👕), and a ball the tracking
           loses for a while is not known. About 75–80% right against your labelled windows</li>
+        <li><b>Game stats</b>: both teams' goals, shots, passes completed, passes in a row (2+ and 3+ completed passes by one
+          team without losing it, and the most), balls won and restarts, then our players' touches, passes, shots, goals and
+          balls won and lost. Counted from what's found, so rough; your labels (Shift+E) correct it. Each event is in the
+          Game log (below the Events box)</li>
       </ul></details>
       <details data-sec="events"><summary>Events</summary><ul>
         <li><kbd>Shift</kbd>+<kbd>E</kbd> (or ✍️ label events) label events, until <kbd>Esc</kbd>: pause where it happens, point at the
@@ -261,8 +270,8 @@
           it last). On the video, a label over the shooter's or taker's head; all of them are in the Game log box.
           Label restarts with <kbd>K</kbd> (Shift+E) to measure them</li>
         <li><b>Game log</b> (below the Events box; opens when you click it): every event found in time order (goals, shots,
-          balls won, restarts, and passes if ticked), filtered by kind and whose (a team or one of ours), with the stats for
-          both teams and our players on top, and ticks on the timeline. Click a time to jump there. <b>✗</b> on a row labels
+          balls won, restarts, and passes if ticked), filtered by kind and whose (a team or one of ours), with ticks on
+          the timeline (the numbers are in the Analytics box). Click a time to jump there. <b>✗</b> on a row labels
           what it isn't (a pass: just a touch; a shot: a pass; a ball won: not a touch) and what's found is worked out again;
           for the wrong player, jump there and label it right with Shift+E. Your labels correct what's found everywhere</li>
       </ul></details>
@@ -368,7 +377,6 @@
       <ul id="evList" class="list"></ul>
     </div>
     <details class="box" id="gameLog"><summary><b>Game log</b> <span class="stat" id="glCount"></span></summary>
-      <div id="glStats" class="stat"></div>
       <div class="row stat" id="glFilters">
         <label title="Goals"><input type="checkbox" data-kind="goal" checked> ⚽ goals</label>
         <label title="Shots and how they ended"><input type="checkbox" data-kind="shot" checked> 🥅 shots</label>
@@ -618,6 +626,9 @@ async function loadMatch() {
   const id = game?.id;
   matchInfo = null;
   renderAttack();
+  possLoading = !!id;  // possession (and the game log after it) waits for this: the boxes say it's coming
+  renderPossession();
+  renderLog();
   if (!id) return;
   const got = await getJson(`${gameUrl()}/match`).catch(() => null);
   if (game?.id !== id) return;
@@ -628,13 +639,17 @@ async function loadMatch() {
 }
 // who had the ball (ball_state.py): runs of one team's possession, and the time per team, half and third
 let possInfo = null;  // {gameId, runs: [{team (a phase: 1-4), from, to}], stats, timeline} or {gameId, error}
+let possLoading = false;  // the match or possession still being worked out
 async function loadPossession() {
   const id = game?.id;
   possInfo = null;
+  possLoading = !!id && !!matchInfo && !matchInfo.error;
   renderPossession();
-  if (!id || matchInfo?.error) return;
+  if (!possLoading) { renderLog(); return; }
   const got = await getJson(`${gameUrl()}/possession`).catch(() => null);
-  if (game?.id !== id || !got || got.pending) return;
+  if (game?.id !== id) return;
+  possLoading = false;
+  if (!got || got.pending) { renderPossession(); renderLog(); return; }
   possInfo = { gameId: id, ...got };
   renderPossession();
   drawTimeline();
@@ -660,9 +675,9 @@ function renderPossession() {
   // the Analytics box: a bar per game and half (ours | contested | loose | not known | theirs), and the timeline
   const box = $("analytics"), el = $("anPossession");
   const st = possInfo?.gameId === game?.id ? possInfo.stats : null;
-  box.hidden = !possInfo?.error && !st;
+  box.hidden = !possInfo?.error && !st && !possLoading;
   if (possInfo?.error) { el.innerHTML = `<div class="stat">possession: ${esc(possInfo.error)}</div>`; return; }
-  if (!st) { el.innerHTML = ""; return; }
+  if (!st) { el.innerHTML = possLoading ? `<div class="stat"><span class="spin"></span>working out possession (the first time takes a while)…</div>` : ""; return; }
   const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
   const order = [[1, "ours_s"], [3, "contested_s"], [4, "loose_s"], [5, "unknown_s"], [2, "theirs_s"]];
   const bar = (b) => {
@@ -2472,7 +2487,7 @@ function refreshFound() {
     if (showTouches) loadTouches();
     if (showPasses) loadPasses();
     if (showShots) loadShots();
-    if (logOpen()) loadLog();
+    if (logWanted()) loadLog();
   }, 2500);
 }
 function toggleEventMode(on = !evMode) {
@@ -2822,18 +2837,23 @@ function drawShots(ctx) {
 // ---------- game log (Phase 6.7) ----------
 // Every event found, in time order (GET log): goals, shots, balls won, restarts and (if asked) passes, filtered by
 // kind and whose; click a time to jump there. ✗ on a row labels what it isn't (a pass: just a touch; a shot: a
-// pass; a ball won: not a touch), which corrects what's found. The stats for both teams and our players on top.
+// pass; a ball won: not a touch), which corrects what's found. The stats (renderStats) go in the Analytics box.
 let logInfo = null;  // {gameId, events, stats, players} or {gameId, error}
+let logLoads = 0;  // fetches of it under way
 const LOG_ICON = { goal: "⚽", shot: "🥅", pass: "➜", won: "⇄", restart: "↺" };
 const LOG_FIX = { pass: ["touch", "not a pass: a touch"], shot: ["pass", "not a shot: a pass or a cross"], won: ["none", "not a touch"] };
 function logOpen() { return $("gameLog").open; }
+function logWanted() { return logOpen() || $("analytics").open; }  // the list, or the stats in Analytics
 async function loadLog() {
   const id = game?.id;
-  if (!id || !logOpen()) return;
-  if (logInfo?.gameId !== id) { logInfo = null; renderLog(); }
-  const got = await getJson(`${gameUrl()}/log`).catch(() => null);
-  if (game?.id !== id || !got || got.pending) return;
-  logInfo = { gameId: id, ...got };
+  if (!id || !logWanted()) return;
+  if (logInfo?.gameId !== id) logInfo = null;
+  logLoads++;
+  renderLog();
+  let got = null;
+  try { got = await getJson(`${gameUrl()}/log`); } catch {} finally { logLoads--; }
+  if (game?.id !== id) return;
+  if (got && !got.pending) logInfo = { gameId: id, ...got };
   renderLog();
   drawTimeline();
 }
@@ -2866,41 +2886,64 @@ function logText(e) {
   return `${e.restart}, ${team}${w ? " " + w : ""}${e.disagree ? ` <span class="stat">(taker and rules disagree)</span>` : ""}`;
 }
 function renderLog() {
-  const list = $("glList"), stats = $("glStats");
-  if (!game || logInfo?.gameId !== game.id) { list.innerHTML = logOpen() ? `<li class="empty">working it out (the first time takes a few seconds)…</li>` : ""; stats.innerHTML = ""; $("glCount").textContent = ""; return; }
-  if (logInfo.error) { list.innerHTML = `<li class="empty">${esc(logInfo.error)}</li>`; stats.innerHTML = ""; return; }
+  renderStats();
+  const list = $("glList"), busy = logLoads > 0 || possLoading ? `<span class="spin"></span>updating…` : "";
+  if (!game || logInfo?.gameId !== game.id) {
+    list.innerHTML = logOpen() && busy ? `<li class="empty"><span class="spin"></span>working it out (the first time takes a few seconds)…</li>` : "";
+    $("glCount").innerHTML = busy;
+    return;
+  }
+  if (logInfo.error) { list.innerHTML = `<li class="empty">${esc(logInfo.error)}</li>`; $("glCount").innerHTML = busy; return; }
   const sel = $("glWho"), keep = sel.value;
   const nums = Object.keys(logInfo.players).sort((a, b) => a - b);
   sel.innerHTML = `<option value="">everyone</option><option value="0">ours</option><option value="1">theirs</option>` +
     nums.map((n) => `<option value="${n}">#${n}</option>`).join("");
   sel.value = keep;
   const shown = logShown();
-  $("glCount").textContent = `${shown.length} shown`;
-  list.innerHTML = shown.length ? shown.map((e, i) => `<li class="log"><a href="#" data-t="${e.frame / fps}">${esc(label(e.frame / fps))}</a> ` +
-    `${LOG_ICON[e.kind]} ${logText(e)}${LOG_FIX[e.kind] && e.track != null ? ` <button data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : ""}</li>`).join("")
+  $("glCount").innerHTML = busy || `${shown.length} shown`;
+  list.innerHTML = shown.length ? shown.map((e, i) => `<li class="log">` +  // the ✗ first, so it floats on the first line
+    `${LOG_FIX[e.kind] && e.track != null ? `<button data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : ""}` +
+    `<a href="#" data-t="${e.frame / fps}">${esc(label(e.frame / fps))}</a> ${LOG_ICON[e.kind]} ${logText(e)}</li>`).join("")
     : `<li class="empty">nothing found of these</li>`;
+}
+function renderStats() {
+  // the Analytics box: both teams' numbers, then our players', from the game log
+  const el = $("anStats");
+  if (!game || logInfo?.gameId !== game.id) {
+    el.innerHTML = logLoads > 0 || possLoading ? `<h4>Game stats</h4><div class="stat"><span class="spin"></span>working out passes, shots and balls won (the first time takes a few seconds)…</div>` : "";
+    return;
+  }
+  if (logInfo.error) { el.innerHTML = `<h4>Game stats</h4><div class="stat">${esc(logInfo.error)}</div>`; return; }
   const st = logInfo.stats, pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
   const sh = st.shots, ps = st.passes, wn = st.won, rs = st.restarts, sc = st.score;
-  const row = (name, a, b) => `<tr><td>${name}</td><td>${a}</td><td>${b}</td></tr>`;
+  const row = (name, a, b, tip = "") => `<tr${tip ? ` title="${tip}"` : ""}><td>${name}</td><td>${a}</td><td>${b}</td></tr>`;
   const on = (t) => t.goal + t.saved;
-  stats.innerHTML = `<table><tr><th></th><th>ours</th><th>theirs</th></tr>` +
+  const runs = (c, from) => (from <= 2 ? c["2"] : 0) + c["3"] + c["4+"];
+  const nums = Object.keys(logInfo.players).sort((a, b) => a - b);
+  el.innerHTML = `<h4>Game stats${logLoads > 0 ? ` <span class="stat"><span class="spin"></span>updating…</span>` : ""}</h4>` +
+    `<table><tr><th></th><th>ours</th><th>theirs</th></tr>` +
     row("goals found", sh.ours.goals, sh.theirs.goals) + (sc ? row("score (entered)", sc[0], sc[1]) : "") +
     row("possession", pct(st.possession), st.possession == null ? "–" : pct(1 - st.possession)) +
     row("shots (on target)", `${sh.ours.shots} (${on(sh.ours)})`, `${sh.theirs.shots} (${on(sh.theirs)})`) +
     row("passes completed", `${pct(ps.ours.completion)} of ${ps.ours.passes}`, `${pct(ps.theirs.completion)} of ${ps.theirs.passes}`) +
-    row("chains of 3+ passes", ps.ours.chains["3"] + ps.ours.chains["4+"], ps.theirs.chains["3"] + ps.theirs.chains["4+"]) +
+    row("2+ passes in a row", runs(ps.ours.chains, 2), runs(ps.theirs.chains, 2), "Times the team strung 2 or more completed passes together") +
+    row("3+ passes in a row", runs(ps.ours.chains, 3), runs(ps.theirs.chains, 3)) +
+    row("most passes in a row", ps.ours.chains.longest, ps.theirs.chains.longest) +
     (wn ? row("balls won (in their half)", `${wn.ours.won} (${wn.ours.won_their_half})`, `${wn.theirs.won} (${wn.theirs.won_their_half})`) +
       row("lost in own third", wn.ours.lost_own_third, wn.theirs.lost_own_third) : "") +
     (rs ? ["corner", "goal kick", "throw-in"].map((k) => row(k + "s", rs[k].ours, rs[k].theirs)).join("") : "") + `</table>` +
-    (nums.length ? `<table><tr><th>ours</th><th title="touches">touch</th><th title="passes completed / passes">pass</th><th>shots</th><th>goals</th><th title="balls won">won</th><th title="balls lost">lost</th></tr>` +
+    (nums.length ? `<h4>Our players</h4><table><tr><th></th><th title="touches">touches</th><th title="passes completed / passes">passes</th><th>shots</th><th>goals</th><th title="balls won">won</th><th title="balls lost">lost</th></tr>` +
       nums.map((n) => { const p = logInfo.players[n]; return `<tr><td>#${n}</td><td>${p.touches}</td><td>${p.completed}/${p.passes}</td><td>${p.shots}</td><td>${p.goals}</td><td>${p.won}</td><td>${p.lost}</td></tr>`; }).join("") + `</table>` : "") +
-    `<div>Counted from what's found: rough (see 👟 🎯 🥅 for how each compares with your labels); a player's numbers count named and guessed (#n?) players.</div>`;
+    `<div class="stat" style="font-size:12px">Counted from what's found, so rough (the Events box's 👟 🎯 🥅 say how each compares with your labels); a player's numbers count named and guessed (#n?) players. Every event is in the Game log.</div>`;
 }
 $("gameLog").addEventListener("toggle", () => {
   try { localStorage.setItem("gameLogOpen", logOpen() ? "1" : "0"); } catch {}
-  if (logOpen() && logInfo?.gameId !== game?.id) loadLog();
+  if (logOpen() && logInfo?.gameId !== game?.id && !logLoads) loadLog();
   renderLog();
   drawTimeline();
+});
+$("analytics").addEventListener("toggle", () => {
+  if ($("analytics").open && logInfo?.gameId !== game?.id && !logLoads) loadLog();
 });
 try { if (localStorage.getItem("gameLogOpen") === "1") $("gameLog").open = true; } catch {}
 $("glFilters").addEventListener("change", () => { renderLog(); drawTimeline(); });

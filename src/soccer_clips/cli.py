@@ -374,7 +374,7 @@ def cmd_events(store: Store, args: argparse.Namespace) -> None:
 
 
 def _event_stats(store: Store, game) -> None:
-    """events stats: the game's numbers per team and for our players, as in the tagger's Game log box."""
+    """events stats: the game's numbers per team and for our players, as in the tagger's Analytics box."""
     from soccer_clips.track import ball_state, events, passes, restarts, shots, touches, turnovers
 
     st, tc, sh, ps = (m.get(store, game) for m in (ball_state, touches, shots, passes))
@@ -392,8 +392,11 @@ def _event_stats(store: Store, game) -> None:
                                     for t in ("ours", "theirs"))),
             ("passes completed", *(f"{pct(ps['stats'][t]['completion'])} of {ps['stats'][t]['passes']}"
                                    for t in ("ours", "theirs"))),
-            ("chains of 3+", *(ps["stats"][t]["chains"]["3"] + ps["stats"][t]["chains"]["4+"]
-                               for t in ("ours", "theirs"))),
+            ("2+ passes in a row", *(sum(ps["stats"][t]["chains"][k] for k in ("2", "3", "4+"))
+                                     for t in ("ours", "theirs"))),
+            ("3+ passes in a row", *(ps["stats"][t]["chains"]["3"] + ps["stats"][t]["chains"]["4+"]
+                                     for t in ("ours", "theirs"))),
+            ("most passes in a row", *(ps["stats"][t]["chains"]["longest"] for t in ("ours", "theirs"))),
             ("balls won (their half)", *(f"{tos['stats'][t]['won']} ({tos['stats'][t]['won_their_half']})"
                                          for t in ("ours", "theirs"))),
             ("lost in own third", *(tos["stats"][t]["lost_own_third"] for t in ("ours", "theirs")))]
