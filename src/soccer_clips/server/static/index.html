@@ -2867,7 +2867,8 @@ function drawShots(ctx) {
 
 // ---------- the events list (Phase 6.7) ----------
 // In the Events box, beside the video: every event found, in time order (GET log): goals, shots, balls won,
-// restarts and (if ticked) passes, with your labels among them, filtered by kind and whose. The row for what's on
+// restarts and (if ticked) passes, with your labels among them (one row, ✍️, where a label is a found event too),
+// filtered by kind and whose. The row for what's on
 // the video now is lit, and the list follows it. Click a row to jump there. ✗ on a found event labels what it
 // isn't (a pass: just a touch; a shot: a pass; a ball won: not a touch), which corrects what's found; ✕ on a label
 // removes it. The stats (renderStats) go in the Analytics box.
@@ -2876,6 +2877,7 @@ let logLoads = 0;  // fetches of it under way
 let logRows = [];  // the rows shown, in time order: found events, and {kind: "label", frame, lab} for your labels
 let logNow = null, logPin = null;  // the rows lit and the one kept in view ([first, last, at]); a row clicked, lit until the video gets to it
 const NOW_S = 4;  // a row stays lit this long after its moment, until the next
+const PAIR_S = 1;  // a label this close to a found event of its kind is the same event
 const LOG_ICON = { goal: "⚽", shot: "🥅", pass: "➜", won: "⇄", restart: "↺" };
 const LOG_FIX = { pass: ["touch", "not a pass: a touch"], shot: ["pass", "not a shot: a pass or a cross"], won: ["none", "not a touch"] };
 async function loadLog() {
@@ -2898,12 +2900,29 @@ function logShown() {
   const labs = kinds.has("label") && evLabels?.gameId === game?.id
     ? evLabels.events.map((ev) => ({ kind: "label", frame: ev.frame, team: ev.team, player: ev.player, guess: ev.guess, lab: ev })) : [];
   const n = (x, pre = "") => x[pre + "player"] ?? x[pre + "guess"];
-  const rows = [...found.filter((e) => kinds.has(e.kind)), ...labs].filter((e) => {
+  const shown = found.filter((e) => kinds.has(e.kind)).map((e) => ({ ...e }));
+  const rows = [...shown, ...logPair(shown, labs)].filter((e) => {
     if (w === "") return true;
     if (w === "0" || w === "1") return e.team === Number(w) || (e.kind === "won" && e.team === 1 - Number(w));
     return String(n(e)) === w || String(n(e, "to_")) === w || (e.kind === "won" && String(n(e, "from_")) === w);
   });
   return rows.sort((a, b) => a.frame - b.frame);
+}
+function logPair(found, labs) {
+  // a label and a found event of the same kind within PAIR_S (teams not at odds): one row, the found one with the
+  // label on it (e.lab); nearest first, one each. The labels left over
+  const pairs = [];
+  labs.forEach((l, i) => found.forEach((e, j) => {
+    const d = Math.abs(e.frame - l.frame);
+    if (e.kind === l.lab.kind && d <= PAIR_S * fps && (l.team == null || e.team == null || l.team === e.team)) pairs.push([d, i, j]);
+  }));
+  const used = new Set();
+  for (const [, i, j] of pairs.sort((a, b) => a[0] - b[0])) {
+    if (used.has(i) || found[j].lab) continue;
+    found[j].lab = labs[i].lab;
+    used.add(i);
+  }
+  return labs.filter((_, i) => !used.has(i));
 }
 function logWho(e, pre = "", team = e.team) {
   // short: ours by number where known (else "us"), theirs as "them"
@@ -2971,8 +2990,11 @@ function renderLog() {
       return `<li class="log lab" data-i="${i}" title="your label: ${esc(name)}"><button class="x" data-del="${ev.id}" title="Remove this label">✕</button>` +
         `${t} ✍️ <span style="color:${colour}">${esc(labText(ev))}</span></li>`;
     }
-    const fix = LOG_FIX[e.kind] && e.track != null ? `<button class="x" data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : "";
-    return `<li class="log ${logTint(e)}" data-i="${i}" title="${esc(logTip(e))}">${fix}${t} ${LOG_ICON[e.kind]} ${logText(e)}</li>`;
+    // labelled: ✍️ and the label's ✕; else ✗ to label what it isn't
+    const fix = e.lab ? `<button class="x" data-del="${e.lab.id}" title="Remove your label">✕</button>`
+      : LOG_FIX[e.kind] && e.track != null ? `<button class="x" data-fix="${i}" title="${LOG_FIX[e.kind][1]} (a label)">✗</button>` : "";
+    const tip = [logTip(e), e.lab && `your label: ${labText(e.lab)}`].filter(Boolean).join(" · ");
+    return `<li class="log ${logTint(e)}" data-i="${i}" title="${esc(tip)}">${fix}${t} ${LOG_ICON[e.kind]} ${logText(e)}${e.lab ? " ✍️" : ""}</li>`;
   }).join("") + `<li id="evNowLine" hidden></li>` : game && !note ? `<li class="empty">nothing of these yet: Shift+E to label events</li>` : "");
   drawTimeline();
 }
