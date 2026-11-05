@@ -247,9 +247,9 @@
           The share on the right is ours of the time either team has it. Hover a bar for minutes</li>
         <li>The <b>timeline</b>: the whole game left to right (1H, then 2H), and where the ball is up the field (up = toward the goal
           we attack), coloured by who has it; the strip along the bottom is who has it even where the ball isn't seen. Hover for
-          the moment, click to jump there. Goals come from your clips tagged <b>goal</b>: rate one 😊 (<kbd>+</kbd>) for ours or 🙁
-          (<kbd>-</kbd>) for theirs; one not rated is put down to whoever attacks the end the ball got to (a hollow dot), once
-          which way we attack is sure. The same colours are the thin strip on the video timeline and the label on the field map</li>
+          the moment, click to jump there. Goals are the ones in the events list: the kickoffs after a goal, your clips tagged
+          <b>goal</b> and your <kbd>G</kbd> labels. Rate a goal clip 😊 (<kbd>+</kbd>) for ours or 🙁 (<kbd>-</kbd>) for theirs; one not
+          rated is put down to whoever attacks the end the ball got to (a hollow dot), once which way we attack is sure. The same colours are the thin strip on the video timeline and the label on the field map</li>
         <li>Rough: worked out from the nearest players to the ball, so teams need their kits right (👕), and a ball the tracking
           loses for a while is not known. About 75–80% right against your labelled windows</li>
         <li><b>Game stats</b>: both teams' goals, shots, passes completed, passes in a row (2+ and 3+ completed passes by one
@@ -837,7 +837,7 @@ function buildAnalyticsChart(cv) {
   const goals = [];
   let us = 0, them = 0;
   const lastRight = { top: -1e9, bottom: -1e9 };
-  for (const g of possInfo.goals || []) {
+  for (const g of chartGoals()) {
     if (g.team === "ours") us++; else if (g.team === "theirs") them++;
     const px = gx(g.t);
     if (px == null) continue;
@@ -861,6 +861,13 @@ function buildAnalyticsChart(cv) {
     goals.push({ px, t: g.t, team: g.team, guessed: g.guessed, score: `${us}–${them}` });
   }
   return { w, h, dpr, img, cols, goals, top, bottom: stripY + AN.strip, L, yOf };
+}
+function chartGoals() {
+  // the goals in the events list (kickoffs, your goal clips and G labels: GET log) once it's in, so the two agree;
+  // till then your goal clips (GET possession)
+  if (logInfo?.gameId !== game?.id || !logInfo?.events) return (possInfo?.gameId === game?.id && possInfo.goals) || [];
+  return logInfo.events.filter((e) => e.kind === "goal")
+    .map((e) => ({ t: e.frame / fps, team: { 0: "ours", 1: "theirs" }[e.team] ?? null, guessed: e.guessed }));
 }
 function drawAnalytics() {
   const cv = $("anTimeline");
@@ -892,8 +899,8 @@ function drawAnalytics() {
   }
   const goal = anHoverX != null ? anChart.goals.find((g) => Math.abs(g.px - anHoverX) <= 4) : null;
   const third = (x) => (x == null ? "ball not seen" : x > anChart.L / 6 ? "ball in our attacking third" : x < -anChart.L / 6 ? "ball in our defending third" : "ball in the middle third");
-  const txt = goal ? `⚽ ${label(goal.t)} ${goal.team === "ours" ? "our goal" : goal.team === "theirs" ? "their goal" : "a goal (rate the clip 😊 / 🙁 to say whose)"}` +
-      (goal.team ? `: ${goal.score}` : "") + (goal.guessed ? " (from the end it went in: rate the clip 😊 / 🙁 to be sure)" : "") + " · click to see it"
+  const txt = goal ? `⚽ ${label(goal.t)} ${goal.team === "ours" ? "our goal" : goal.team === "theirs" ? "their goal" : "a goal, whose not known (rate its clip 😊 / 🙁 or label it G to say)"}` +
+      (goal.team ? `: ${goal.score}` : "") + (goal.guessed ? " (from the end it went in: rate its clip 😊 / 🙁 to be sure)" : "") + " · click to see it"
     : hv ? `${label(hv.t0)} · ${POSS_HAS[hv.phase]} · ${third(hv.x)}` : "hover the timeline for a moment; click to jump there";
   const el = $("anHover");
   if (el && el.textContent !== txt) el.textContent = txt;
@@ -1282,11 +1289,13 @@ function drawTimeline() {
     }
   }
   for (const e of logRows) {  // the events list's found events: ticks above the touches'
-    if (e.kind !== "label") {
-      ctx.fillStyle = e.kind === "goal" ? "#ffffff" : TOUCH_COLOR[e.team ?? -1];
-      ctx.fillRect(x(e.frame / fps), h - 19, e.kind === "goal" ? 3 : 1, 5);
+    if (e.kind !== "label" && e.kind !== "goal") {
+      ctx.fillStyle = TOUCH_COLOR[e.team ?? -1];
+      ctx.fillRect(x(e.frame / fps), h - 19, 1, 5);
     }
   }
+  ctx.fillStyle = "#ffffff";  // every goal, whatever the list shows: taller, as on the Analytics timeline
+  for (const g of chartGoals()) ctx.fillRect(x(g.t) - 1, h - 24, 3, 10);
   if (showTouches && touchInfo?.gameId === game.id && touchInfo.touches) {  // found touches: ticks near the bottom
     for (const t of touchInfo.touches) {
       ctx.fillStyle = TOUCH_COLOR[t.team];
@@ -2891,6 +2900,7 @@ async function loadLog() {
   try { got = await getJson(`${gameUrl()}/log`); } catch {} finally { logLoads--; }
   if (game?.id !== id) return;
   if (got && !got.pending) logInfo = { gameId: id, ...got };
+  anChart = null;  // its goals are these
   renderLog();
 }
 function logShown() {
