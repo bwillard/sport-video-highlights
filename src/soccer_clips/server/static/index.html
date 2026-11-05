@@ -100,7 +100,7 @@
   /* the Events box beside the video: a column of its own on a wide screen, else on top of the right-hand one */
   #tagLayout { grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "main ev" "main side"; grid-template-rows: auto 1fr; }
   #tagLayout > section { grid-area: main; min-width: 0; }
-  #tagLayout > #events { grid-area: ev; align-self: start; position: sticky; top: 8px; }
+  #tagLayout > #events { grid-area: ev; align-self: start; }
   #tagLayout > aside { grid-area: side; }
   @media (min-width: 1700px) {
     #tagLayout { grid-template-columns: minmax(0, 1fr) 400px 380px; grid-template-areas: "main ev side"; grid-template-rows: auto; }
