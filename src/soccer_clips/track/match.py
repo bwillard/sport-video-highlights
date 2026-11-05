@@ -4,7 +4,9 @@ ball is out of play. What the game's events (Phase 6) are read against. Built fr
 field (positions.py) and the teams (people.roles_for).
 
 - **Restarts:** the ball still on the ground for STILL_S (within STILL_M), then kicked (KICK_M away within
-  KICK_S). Where it sat says what it was: kickoff (the middle of the halfway line; SAA's calibration puts
+  KICK_S). Unseen for up to STILL_GAP_S and seen again where it sat, it's still sitting there: a kicker standing
+  over the ball at a kickoff hides it (Elite Strikers' 4:30 kickoff, after a goal, was missed with 1 s; 3 s finds
+  it and SAA's 18:18 one, and a few more throw-ins, corners and goal kicks, the rest the same). Where it sat says what it was: kickoff (the middle of the halfway line; SAA's calibration puts
   the centre spot 3-4 m off, so a box around it, and further along the length up to KICKOFF_NEAR_M when the
   teams stand split either side of the ball: FC-1's views put kickoffs up to 9 m off), corner, goal kick, penalty, throw-in (by a touchline), the goalie's ball
   (still in a penalty area: in their hands, or a free kick there), free kick (anywhere else). Kickoffs
@@ -40,11 +42,12 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 3
+VERSION = 4
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
 KICK_S = 1.0  # ...within this long: kicked
+STILL_GAP_S = 3.0  # the ball unseen this long (a player standing over it) and seen again where it sat: still still
 KICKOFF_BOX = (3.0, 5.0)  # |x|, |y| (metres) of a kickoff spot: the middle of the halfway line
 KICKOFF_NEAR_M = 10.0  # further along the length than KICKOFF_BOX, up to this, a kickoff needs a split formation
 SPLIT = (0.8, 0.6)  # ...our boxes' mean side relative to the ball at least the first, theirs opposite the second
@@ -68,6 +71,7 @@ OUT_NEAR_S = {"throw-in": 8.0, "corner": 8.0, "goal kick": 20.0}  # the ball out
 STOP_S = 3.0  # a stoppage with no crossing (free kick, penalty, a line restart unseen going out): still this long
 KICKOFF_SAME_S = 30.0  # kickoffs this close are one; a kickoff this close to a half's start time is that half's
 LINE_PAD_M = 0.5  # the ball beyond a line by this much is out
+NET_M = 8.0  # after a goal: the ball back in the field no further than this from that goal line is still being fetched
 
 
 def path(store: Store, game: Game) -> Path:
@@ -78,7 +82,7 @@ def path(store: Store, game: Game) -> Path:
 
 # ---- restarts ----
 
-def dead_balls(frame: np.ndarray, xy: np.ndarray, fps: float) -> list[dict]:
+def dead_balls(frame: np.ndarray, xy: np.ndarray, fps: float, gap_s: float = STILL_GAP_S) -> list[dict]:
     """The ball still for STILL_S then kicked: [{still (first still frame), kick (first frame it's moved
     off), x, y (where it sat)}]. frame sorted; xy NaN where not placed (skipped)."""
     ok = np.isfinite(xy[:, 0])
@@ -91,7 +95,7 @@ def dead_balls(frame: np.ndarray, xy: np.ndarray, fps: float) -> list[dict]:
         c = np.median(p[i:j], axis=0)
         if j - i >= 0.6 * hw and (np.linalg.norm(p[i:j] - c, axis=1) < STILL_M).all():
             k = j
-            while k < n and np.linalg.norm(p[k] - c) < STILL_M and f[k] - f[k - 1] < fps:
+            while k < n and np.linalg.norm(p[k] - c) < STILL_M and f[k] - f[k - 1] < gap_s * fps:
                 k += 1
             m = int(np.searchsorted(f, f[k - 1] + int(KICK_S * fps), "right"))
             gone = np.flatnonzero(np.linalg.norm(p[k:m] - c, axis=1) > KICK_M) if k < n else []
@@ -312,11 +316,41 @@ def goalie_marks(store: Store, game: Game, t) -> list[dict]:
 
 # ---- out of play ----
 
+def _into_net(last_out: int, lo: int, outside: np.ndarray, placed: np.ndarray, bxy: np.ndarray, length: float) -> int:
+    """A kickoff's crossing: from the last one (an index), back to the first of a run over the same goal line
+    with the ball no further than NET_M into the field in between. A crossing is over a goal line if any of it
+    is (the ball fetched out of the net and kicked away can read as over a touchline as it goes)."""
+    goal = np.abs(np.nan_to_num(bxy[:, 0])) > length / 2 + LINE_PAD_M
+
+    def crossing(i: int) -> tuple[int | None, float]:
+        # the crossing ending at i: the last sample in the field before it (None if none), and the goal line's end
+        ins = np.flatnonzero(~outside[lo:i] & placed[lo:i])
+        a = lo + ins[-1] if len(ins) else None
+        g = np.flatnonzero(goal[(lo if a is None else a + 1):i + 1])
+        return a, float(np.sign(bxy[(lo if a is None else a + 1) + g[0], 0])) if len(g) else 0.0
+
+    k, end = crossing(last_out)
+    i = last_out
+    while end and k is not None:
+        o = np.flatnonzero(outside[lo:k] & placed[lo:k])
+        if not len(o):
+            break
+        p = lo + o[-1]  # the crossing before
+        between = bxy[p + 1:k + 1][placed[p + 1:k + 1]]
+        k2, e2 = crossing(p)
+        if e2 != end or (np.sign(between[:, 0]) != end).any() or (np.abs(between[:, 0]) < length / 2 - NET_M).any():
+            break
+        i, k = p, k2
+    return i
+
+
 def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, length: float, width: float,
                 fps: float, half_starts: list[int]) -> list[dict]:
     """[{from, to, kind}]: the ball out of play before each restart (not the goalie's ball, which is in play):
     from when it last went over a line (for a restart on a line, or a kickoff after a goal; looking back no
-    further than the half's start), else from when it stopped, to the kick. A stoppage with no crossing
+    further than the half's start; for a kickoff, back over earlier crossings of the same goal line with the ball
+    only near it in between, NET_M: fetched out of the net, it goes over again), else from when it stopped, to
+    the kick. A stoppage with no crossing
     (none for a free kick; none within OUT_NEAR_S of the ball stopping, on a line) shorter than STOP_S isn't
     one: the ball was in play."""
     outside = (np.abs(bxy[:, 0]) > length / 2 + LINE_PAD_M) | (np.abs(bxy[:, 1]) > width / 2 + LINE_PAD_M)
@@ -335,6 +369,8 @@ def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, lengt
             near = OUT_NEAR_S.get(r["kind"])
             if last_out is not None and near and r["still"] - bframe[last_out] > near * fps:
                 last_out = None  # the ball came back in long before: not this restart's crossing
+            if last_out is not None and r["kind"] == "kickoff":
+                last_out = _into_net(last_out, lo, outside, placed, bxy, length)
             if last_out is not None:
                 inside = np.flatnonzero(~outside[lo:last_out] & placed[lo:last_out])
                 start = int(bframe[lo + inside[-1] + 1]) if len(inside) else int(bframe[lo + o[0]])

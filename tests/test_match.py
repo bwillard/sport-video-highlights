@@ -19,6 +19,14 @@ def test_dead_balls():
     assert len(got) == 1
     r = got[0]
     assert 55 <= r["still"] <= 62 and r["kick"] == 122 and (r["x"], r["y"]) == (10.0, 5.0)
+    # a kickoff: still for a second, then unseen for 2 s right up to the kick (the kicker over it), seen again where
+    # it sat: the same restart; unseen longer than STILL_GAP_S, the stop ends at the gap and the kick isn't seen
+    gap = xy.copy()
+    gap[90:118] = np.nan
+    assert [r["kick"] for r in match.dead_balls(f, gap, FPS)] == [122]
+    gap[60:118] = np.nan
+    gap[30:60] = gap[60 - 1] = (10.0, 5.0)
+    assert match.dead_balls(f, gap, FPS, gap_s=1.0) == []
 
 
 def test_restart_kind():
@@ -154,3 +162,21 @@ def test_goalie_marks(settings):
     match.remove_goalie(store, game, match.load_goalies(store, game)[-1]["id"])
     assert match.remove_goalie(store, game, m["id"]) and not match.remove_goalie(store, game, m["id"])
     assert len(match.load_goalies(store, game)) == 1
+
+
+def test_kickoff_from_when_the_ball_went_in():
+    # in at the +x goal (100), fetched out and over the line again (160; the last of it reads as over the touchline),
+    # carried to the middle and kicked off: the goal is from the first crossing
+    f = np.arange(400)
+    xy = np.zeros((400, 2))
+    xy[:100, 0] = np.linspace(20, 29, 100)
+    xy[100:130] = (31.5, 0.0)
+    xy[130:160] = (27.0, 3.0)  # back in the field by the goal: being fetched
+    xy[160:170] = (31.0, 5.0)
+    xy[170:175] = (25.0, 21.0)
+    xy[175:260, 0] = np.linspace(25, 0, 85)
+    ko = [{"kind": "kickoff", "still": 260, "kick": 331}]
+    got = match.out_of_play(ko, f, xy, SIZES["length"], SIZES["width"], FPS, [0])
+    assert [(o["from"], o["to"]) for o in got] == [(100, 331)]
+    xy[130:160] = (15.0, 3.0)  # back in deep in the field: in play again, so the later crossing is the goal
+    assert match.out_of_play(ko, f, xy, SIZES["length"], SIZES["width"], FPS, [0])[0]["from"] == 160
