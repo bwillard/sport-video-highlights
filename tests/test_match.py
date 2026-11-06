@@ -188,6 +188,8 @@ def test_goal_in():
     xy = np.zeros((400, 2))
     xy[100:130] = (31.5, 0.0)
     assert match.goal_in({"from": 100, "to": 331}, f, xy, SIZES["length"], FPS)
+    xy[100:128] = (25.0, 0.0)  # over the line for 2 frames: a ball in the air
+    assert not match.goal_in({"from": 100, "to": 331}, f, xy, SIZES["length"], FPS)
     xy[100:130] = (-3.0, 21.0)
     xy[300:310] = (31.5, 0.0)  # later than GOAL_IN_S: another moment
     assert not match.goal_in({"from": 100, "to": 331}, f, xy, SIZES["length"], FPS)
