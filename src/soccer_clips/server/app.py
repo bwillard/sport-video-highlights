@@ -1061,7 +1061,7 @@ def create_app(store: Store | None = None) -> FastAPI:
             p, g = name(track, f) if track is not None else (None, None)
             return {f"{pre}player": p, f"{pre}guess": g}
 
-        log = [{**g, "kind": "goal", "track": None, **who(None, 0)} for g in sh["goals"]]
+        log = [{**g, "kind": "goal", **who(g.get("track"), g.get("track_frame"))} for g in sh["goals"]]
         log += [{**x, "kind": "shot", "frame": x["frame"] if x["frame"] is not None else x["at"],
                  **who(x["track"], x["frame"] if x["frame"] is not None else x["at"])} for x in sh["shots"]]
         log += [{**p, "kind": "pass", **who(p["track"], p["frame"]), **who(p["to_track"], p["to_frame"], "to_")}
@@ -1090,8 +1090,8 @@ def create_app(store: Store | None = None) -> FastAPI:
                     add(e, "", "completed")
             elif e["kind"] == "shot" and e["team"] == 0:
                 add(e, "", "shots")
-                if e["outcome"] == "goal":
-                    add(e, "", "goals")
+            elif e["kind"] == "goal" and e["team"] == 0:  # the scorer: your G label on them, or the shot that went in
+                add(e, "", "goals")
             elif e["kind"] == "won":
                 if e["team"] == 0:
                     add(e, "", "won")

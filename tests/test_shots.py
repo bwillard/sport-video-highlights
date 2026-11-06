@@ -75,6 +75,14 @@ def test_goals_and_scorer():
     got2 = sh.goals([], [{"kick": 1000, "from": 980, "team": 1}], clips, FPS)
     assert [(g["frame"], g["team"], g["by"]) for g in got2] == [
         (100, 0, ["clip"]), (660, 0, ["kickoff", "clip", "label"]), (3000, 0, ["clip", "label"])]
+    # the scorer: a G label on them, else the shot that went in; a kickoff whose two signals agree settles whose
+    shots = [{"frame": 90, "at": 100, "outcome": "goal", "track": 7}]
+    kos = [{"kick": 400, "from": 100, "team": 0, "sure": True}, {"kick": 4000, "from": 3900, "team": 1}]
+    marks = [{"t": 395.0, "team": "theirs", "guessed": False, "by": "label", "track": 9, "frame": 3950}]
+    got3 = sh.goals(shots, kos, marks, FPS)
+    assert [(g["team"], g["guessed"], g["track"], g["track_frame"]) for g in got3] == [
+        (0, False, 7, 90), (1, False, 9, 3950)]
+    assert sh.goals(shots, [{**kos[0], "sure": False}], [], FPS)[0]["guessed"]
     s = sh.team_stats([{"team": 0, "outcome": "saved"}, {"team": 0, "outcome": "goal"}], got, 0)
     assert s["shots"] == 2 and s["saved"] == 1 and s["goals"] == 1
 

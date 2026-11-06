@@ -248,8 +248,8 @@
         <li>The <b>timeline</b>: the whole game left to right (1H, then 2H), and where the ball is up the field (up = toward the goal
           we attack), coloured by who has it; the strip along the bottom is who has it even where the ball isn't seen. Hover for
           the moment, click to jump there. Goals are the ones in the events list: the kickoffs after a goal, your clips tagged
-          <b>goal</b> and your <kbd>G</kbd> labels. Rate a goal clip 😊 (<kbd>+</kbd>) for ours or 🙁 (<kbd>-</kbd>) for theirs; one not
-          rated is put down to whoever attacks the end the ball got to (a hollow dot), once which way we attack is sure. The same colours are the thin strip on the video timeline and the label on the field map</li>
+          <b>goal</b> and your <kbd>G</kbd> labels. Whose: your G label or a goal clip rated 😊 (<kbd>+</kbd>) ours or 🙁 (<kbd>-</kbd>) theirs, else the
+          end the ball went in at and the team kicking off; where those don't both say, a hollow dot (and a ? in the list). The same colours are the thin strip on the video timeline and the label on the field map</li>
         <li>Rough: worked out from the nearest players to the ball, so teams need their kits right (👕), and a ball the tracking
           loses for a while is not known. About 75–80% right against your labelled windows</li>
         <li><b>Game stats</b>: both teams' goals, shots, passes completed, passes in a row (2+ and 3+ completed passes by one
@@ -831,8 +831,8 @@ function buildAnalyticsChart(cv) {
     }
   }
   // goals: a line down the chart in the scorer's colour, and the score after it at the end it went in (ours along
-  // the top, at their goal; theirs along the bottom, at ours; not known whose: the top). A hollow dot: unrated, whose
-  // worked out from the end the ball went in
+  // the top, at their goal; theirs along the bottom, at ours; not known whose: the top). A hollow dot: whose not
+  // sure (no G label or rated clip, and the end it went in at and the team kicking off don't both say)
   const gx = (t) => { const c = cols.find((c) => t >= c.t0 && t < c.t1); return c ? c.px + c.pw / 2 : null; };
   const goals = [];
   let us = 0, them = 0;
@@ -900,7 +900,7 @@ function drawAnalytics() {
   const goal = anHoverX != null ? anChart.goals.find((g) => Math.abs(g.px - anHoverX) <= 4) : null;
   const third = (x) => (x == null ? "ball not seen" : x > anChart.L / 6 ? "ball in our attacking third" : x < -anChart.L / 6 ? "ball in our defending third" : "ball in the middle third");
   const txt = goal ? `⚽ ${label(goal.t)} ${goal.team === "ours" ? "our goal" : goal.team === "theirs" ? "their goal" : "a goal, whose not known (rate its clip 😊 / 🙁 or label it G to say)"}` +
-      (goal.team ? `: ${goal.score}` : "") + (goal.guessed ? " (from the end it went in: rate its clip 😊 / 🙁 to be sure)" : "") + " · click to see it"
+      (goal.team ? `: ${goal.score}` : "") + (goal.guessed ? " (whose not sure: rate its clip 😊 / 🙁 or label it G)" : "") + " · click to see it"
     : hv ? `${label(hv.t0)} · ${POSS_HAS[hv.phase]} · ${third(hv.x)}` : "hover the timeline for a moment; click to jump there";
   const el = $("anHover");
   if (el && el.textContent !== txt) el.textContent = txt;
@@ -2950,7 +2950,9 @@ function logText(e) {
   // one short line: "Won by #38", "Intercepted by them (lost by #15)", "Corner for us"; the rest in logTip
   const w = logWho(e), side = { 0: "us", 1: "them" }[e.team];
   const num = (pre) => (e[pre + "player"] ?? e[pre + "guess"]) != null;  // only a named player is worth adding
-  if (e.kind === "goal") return `<b>Goal${side ? ` for ${side}${e.guessed ? "?" : ""}` : ", whose not known"}</b>`;
+  // ours by the scorer where known ("Goal by #14"); "?" after whose: not sure whose
+  if (e.kind === "goal") return `<b>${e.team === 0 && num("") ? `Goal by ${w}${e.guessed ? " (ours?)" : ""}`
+    : `Goal${side ? ` for ${side}${e.guessed ? "?" : ""}` : ", whose not known"}`}</b>`;
   if (e.kind === "shot") return `Shot by ${w}: ${SHOT_SAYS[e.outcome] || e.outcome}`;
   if (e.kind === "pass") return `Pass by ${w}${num("to_") ? ` to ${logWho(e, "to_", e.to_team)}` : ""}: ` +
     (e.danger ? "completed, into danger" : PASS_SAYS[e.outcome] || e.outcome);
@@ -2968,7 +2970,7 @@ function logTint(e) {
 function logTip(e) {
   // the details the short line leaves out: hover a row
   const third = (t, team) => ["our defending", "the middle", "our attacking"][team === 0 ? t : 2 - t];
-  if (e.kind === "goal") return `found from: ${e.by.join(" + ")}`;
+  if (e.kind === "goal") return `found from: ${e.by.join(" + ")}` + (e.guessed ? " · whose not sure: rate its clip 😊 / 🙁 or label it G" : "");
   if (e.kind === "shot") return e.distance != null ? `${Math.round(e.distance)} m out` : "";
   if (e.kind === "pass") return e.length != null ? `${Math.round(e.length)} m ${e.direction || ""}` : "";
   if (e.kind === "won") return `${e.how}${e.third != null ? ` in ${third(e.third, e.team)} third` : ""}`;
