@@ -23,6 +23,13 @@ TRACKS = {
     12: (200, 300, (-14, 0), (-14, 0), 0),
     13: (120, 180, (-19, 0), (-15, 0), 2),
     14: (120, 180, (-18, 0), (-16, 0), 1),
+    15: (0, 100, (100, 0), (100, 0), 0),  # 15 -> 16, whose kit is misread all along (into the haze by a goal)
+    16: (130, 300, (100.5, 0), (105, 0), 2),
+    17: (0, 100, (200, 0), (200, 0), 0),  # 17 -> 18 ours, though 19 (misread) starts beside 18: kit says which
+    18: (110, 300, (200.5, 0), (202, 0), 0),
+    19: (110, 300, (201, 0), (206, 0), 2),
+    20: (0, 100, (300, 0), (300, 0), 0),  # 21 is marked as not on our team: never followed onto
+    21: (110, 300, (300.5, 0), (302, 0), 2),
 }
 
 
@@ -42,6 +49,7 @@ def fake(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "_unseen", unseen)
     monkeypatch.setattr(people, "_picks_path", lambda store, game: tmp_path / "none.json")
     monkeypatch.setattr(bridge, "_track_looks", lambda store, game: {})
+    monkeypatch.setattr(bridge, "_not_ours", lambda store, game: {21})
     for c in (bridge._links_cache, bridge._unseen_memo):
         c.clear()
     yield
@@ -56,6 +64,9 @@ def test_links(fake):
     assert L["next"][6] == 7 and L["next"][7] == 8  # 8 is 6 again later, not a rival to 7
     assert 9 not in L["next"]  # 4 m in 3 s fits, but not unseen in plain view
     assert L["next"][11] == 12
+    assert L["next"][15] == 16 and L["cost"][(15, 16)] > L["cost"][(1, 2)]  # a misread kit costs a little more
+    assert L["next"][17] == 18 and 19 not in L["prev"]
+    assert 20 not in L["next"] and 21 not in L["prev"]
 
 
 def seg(track, player, start=None, end=None):
@@ -73,6 +84,8 @@ def test_extend(fake):
     assert claims(out, 7) == {2}
     assert claims(out, 9) == {7, 8}
     assert claims(out, 5) == {11, 13}  # backward from 12; the misread kit fills the gap, the opponent doesn't
+    out = bridge.extend(None, GAME, [seg(15, 3), seg(17, 4), seg(20, 6)], {}, looks=looks)
+    assert claims(out, 3) == {16} and claims(out, 4) == {18} and not claims(out, 6)
     assert all(c["by"] == "place" for cs in out.values() for c in cs)
     # backward from 2 to 1, as a guess
     assert claims(bridge.extend(None, GAME, [], {7: [seg(2, 7)]}, looks=looks), 7) == {1}

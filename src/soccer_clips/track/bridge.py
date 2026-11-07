@@ -16,6 +16,12 @@ Links are taken greedily, most plausible first, and only when clear: no other wa
 way in to c, among the ends and starts not linked yet, is within RATIO of it, except ways that could be
 the same player again later (k -> c, then c -> c2: c2 doesn't compete with c). Linking the plainest
 first lets a player's scraps (short tracklets while she's half hidden) join up before the next stretch.
+A tracklet whose kit was misread (other or unknown: in shade, or in the haze looking into the sun) can be
+linked too, at KIT_COST more, but only after every link between our-kit tracklets is made as if it weren't
+there, and only when nothing of any kit rivals it: FC-1's #28 came out from behind a defender after
+scoring with every box read as another kit, and following stopped. Opponents, and tracklets you marked as
+not on our team, never are. Across the games (2026-11-07) these links claim ~100 s, mostly scraps; the
+longest four were all right (a red kit in shade, a close-up).
 
 Labels (each time they change): from every stretch where a player is labelled or guessed that runs to
 its tracklet's end, the links are followed forward, and from one that runs from its start, backward. Each
@@ -49,6 +55,7 @@ GRID = 15  # frames between the checks along a gap that the player could be hidd
 FREE_S = 0.7  # this much of a gap in plain view goes free (a missed detection or two)
 UNSEEN_COST = 0.25  # added per half second beyond it
 HIDE_PAD = (0.5, 0.25)  # a point counts as behind a box within this share of its width / height around it
+KIT_COST = 0.25  # added to a link to or from a tracklet whose kit wasn't read as ours (other, or unknown)
 VETO = 0.05  # a tracklet that looks this much more like another labelled teammate (cosine) isn't followed into
 VETO_CROPS = 3  # appearance crops a tracklet needs before its look counts (~3 s)
 
@@ -177,8 +184,9 @@ def _unseen(store: Store, game: Game, E: dict, ei: np.ndarray, si: np.ndarray, f
 
 
 def links(store: Store, game: Game) -> dict | None:
-    """The game's links between our-team tracklets: {next: {track: track}, prev: {track: track}, cost: {(a, b): c}},
-    plus the ends table (tracklet_ends) and each tracklet's team. None without a calibrated field."""
+    """The game's links between our-team tracklets (and misread kits): {next: {track: track}, prev: {track: track},
+    cost: {(a, b): c}}, plus the ends table (tracklet_ends), each tracklet's team and whether it's marked not
+    ours. None without a calibrated field."""
     from soccer_clips.track import people
 
     ends = tracklet_ends(store, game)
@@ -191,10 +199,11 @@ def links(store: Store, game: Game) -> dict | None:
         return hit[1]
     fps = game.fps_num / game.fps_den
     role = _roles(store, game, ends["track"])
-    ours = np.flatnonzero(role == 0)
-    ei, si, cost = _costs(ends["end"][ours], ends["last"][ours], ends["start"][ours], ends["first"][ours], fps)
+    marked = np.isin(ends["track"], list(_not_ours(store, game)))
+    nodes = np.flatnonzero(np.isin(role, FILL_ROLES) & ~marked)
+    ei, si, cost = _costs(ends["end"][nodes], ends["last"][nodes], ends["start"][nodes], ends["first"][nodes], fps)
     ok = ei != si
-    ei, si, cost = ours[ei[ok]], ours[si[ok]], cost[ok]
+    ei, si, cost = nodes[ei[ok]], nodes[si[ok]], cost[ok]
     # the unseen time doesn't change with the labels (only which tracklets are ours): kept per game
     memo = _unseen_memo.setdefault(game.id, {})
     if memo.get("ends") is not ends:
@@ -209,23 +218,40 @@ def links(store: Store, game: Game) -> dict | None:
         unseen[new] = _unseen(store, game, ends, ei[new], si[new], fps)
         memo.update(zip(pairs[new].tolist(), unseen[new].tolist()))
     cost = cost + UNSEEN_COST * np.maximum(unseen - FREE_S, 0) / (GRID / fps)
+    misread = (role[ei] != 0) | (role[si] != 0)
+    cost = cost + KIT_COST * misread
     keep = cost < RATIO
-    ei, si, cost = ei[keep], si[keep], cost[keep]
+    ei, si, cost, misread = ei[keep], si[keep], cost[keep], misread[keep]
+    used_end, used_start = set(), set()
+    nxt, prv, costs = {}, {}, {}
+    tr = ends["track"]
+    # ours to ours first, as if nothing else were there; then through a misread kit, where nothing of any kit rivals it
+    for among, take in ((~misread, ~misread), (np.ones(len(ei), bool), misread)):
+        for e, s, c in _clear(ei[among], si[among], cost[among], take[among], used_end, used_start):
+            a, b = int(tr[e]), int(tr[s])
+            nxt[a], prv[b], costs[(a, b)] = b, a, round(float(c), 3)
+    out = {"next": nxt, "prev": prv, "cost": costs, "ends": ends, "role": role, "marked": marked,
+           "row": {int(k): i for i, k in enumerate(tr.tolist())}}
+    _links_cache[game.id] = (key, out)
+    return out
+
+
+def _clear(ei: np.ndarray, si: np.ndarray, cost: np.ndarray, take: np.ndarray, used_end: set, used_start: set):
+    """The links (end row, start row, cost) to make, most plausible first, from candidates ei -> si where `take`:
+    under 1, and clear among these candidates (no other way on from the end, or in to the start, within RATIO,
+    but ways that could be the same player again later). Marks the ends and starts it uses."""
     plausible = set(zip(ei[cost < 1].tolist(), si[cost < 1].tolist()))  # (a, b): b could be a again, later
-    again = lambda a, b: (a, b) in plausible or (b, a) in plausible
+    again = lambda a, b: (a, b) in plausible or (b, a) in plausible  # noqa: E731
     by_end: dict[int, list] = {}
     by_start: dict[int, list] = {}
     for e, s, c in zip(ei.tolist(), si.tolist(), cost.tolist()):
         by_end.setdefault(e, []).append((c, s))
         by_start.setdefault(s, []).append((c, e))
-    used_end, used_start = set(), set()
-    nxt, prv, costs = {}, {}, {}
-    tr = ends["track"]
     for j in np.argsort(cost, kind="stable").tolist():
         c, e, s = cost[j], int(ei[j]), int(si[j])
         if c >= 1:
             break
-        if e in used_end or s in used_start:
+        if not take[j] or e in used_end or s in used_start:
             continue
         rival = min([x for x, s2 in by_end[e] if s2 != s and s2 not in used_start and not again(s, s2)]
                     + [x for x, e2 in by_start[s] if e2 != e and e2 not in used_end and not again(e2, e)],
@@ -234,12 +260,17 @@ def links(store: Store, game: Game) -> dict | None:
             continue
         used_end.add(e)
         used_start.add(s)
-        a, b = int(tr[e]), int(tr[s])
-        nxt[a], prv[b], costs[(a, b)] = b, a, round(float(c), 3)
-    out = {"next": nxt, "prev": prv, "cost": costs, "ends": ends, "role": role,
-           "row": {int(k): i for i, k in enumerate(tr.tolist())}}
-    _links_cache[game.id] = (key, out)
-    return out
+        yield e, s, c
+
+
+def _not_ours(store: Store, game: Game) -> set[int]:
+    """Tracklets with a stretch marked as not anyone on our team: never followed onto."""
+    from soccer_clips.track import people
+
+    picks = people.load_picks(store, game)
+    if not any(p["player"] == people.NOT_OURS for p in picks):
+        return set()
+    return {x["track"] for x in people.not_ours(people.tracks(store, game), picks)}
 
 
 def _fillers(L: dict, a: int, b: int, fps: float, taken: set[int]) -> list[int]:
@@ -248,7 +279,8 @@ def _fillers(L: dict, a: int, b: int, fps: float, taken: set[int]) -> list[int]:
     t0, t1 = E["last"][ia], E["first"][ib]
     if t1 - t0 <= 1:
         return []
-    m = ((E["first"] >= t0 - OVERLAP_S * fps) & (E["last"] <= t1 + OVERLAP_S * fps) & np.isin(L["role"], FILL_ROLES))
+    m = ((E["first"] >= t0 - OVERLAP_S * fps) & (E["last"] <= t1 + OVERLAP_S * fps) & np.isin(L["role"], FILL_ROLES)
+         & ~L["marked"])
     out, busy = [], []
     for i in sorted(np.flatnonzero(m).tolist(), key=lambda i: -E["n"][i]):
         k = int(E["track"][i])
