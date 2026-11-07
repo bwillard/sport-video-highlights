@@ -24,6 +24,10 @@ their ends, and the shooter is the attacking team's last touch before:
   conceded, when they agree; kickoff_scorer),
   with your goal clips (ball_state.goal_moments): a clip within GOAL_NEAR_S before a kickoff is that goal;
   clips with no kickoff found and kickoffs with no clip are goals too, marked by what found them.
+- **Who scored:** your G label's tracklet there, else the shot that went in. A G label put down as the ball goes
+  in is often on a scrap of tracklet in a crowd that nobody's labelled (Elite Strikers' 0:10, #29 in the goal
+  mouth, labelled 0.2 s later on the next tracklet): then the one labelled tracklet carrying on from it, or that
+  it carries on from, within CARRY_S and CARRY_M (carried_label). Only labelled ones: your click says it's ours.
 
 Against your labels (2026-11-04): see `compare` and the plan's Findings. Labelled shots are few (22, 13 in
 full windows), so the numbers are rough.
@@ -42,7 +46,8 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store, atomic_write_text
 
-VERSION = 4  # 2: your labels; 3: a G label dates its goal; 4: the scorer, and a kickoff's two signals agreeing settle whose
+VERSION = 5  # 2: your labels; 3: a G label dates its goal; 4: the scorer, and a kickoff's two signals agreeing settle whose;
+# 5: a G label on an unlabelled scrap takes the labelled tracklet carrying on from it
 BACK_S = 3.0  # the shooter's touch: this long before the shot's end, or less
 SHOT_M = 30.0  # ...this close to the goal (centre of the goal line)
 APPROACH_S = 1.5  # the goalie's touch ends a shot: the ball came...
@@ -62,6 +67,8 @@ ENDS = {"kickoff": "goal", "corner": "corner", "goal kick": "wide", "keeper": "s
 OUTCOMES = ("goal", "saved", "corner", "wide", "blocked", "missed")  # missed: a labelled shot, nothing found after
 STRENGTH = ("kickoff", "corner", "goal kick", "keeper")  # one end per moment: the first of these
 TEAMS = ("ours", "theirs")
+CARRY_S = 0.5  # a G label's tracklet, labelled by nobody: a labelled one starting (or ending) this soon after (before) it...
+CARRY_M = 2.0  # ...this close to where it ended (started), is the scorer
 
 
 def path(store: Store, game: Game) -> Path:
@@ -220,6 +227,37 @@ def kickoff_scorer(by_end: int | None, by_taker: int | None) -> int | None:
     return by_end if by_end is not None else by_taker
 
 
+def carried_label(track: int, frame: int, segs: list[dict], ends: dict | None, fps: float) -> tuple[int, int] | None:
+    """For a G label on `track` at `frame` where nobody's labelled: (tracklet, frame) of the labelled stretch that
+    carries on from it, or that it carries on from: the tracklet starts within CARRY_S after it ends (ends before
+    it starts), CARRY_M or nearer on the field, labelled from its start (to its end). Only when every such stretch
+    is one player's (the nearest in time); else None. segs: people.segments; ends: bridge.tracklet_ends."""
+    if ends is None:
+        return None
+    row = {int(k): i for i, k in enumerate(ends["track"].tolist())}
+    if track not in row or any(x["track"] == track and x["start"] <= frame < x["end"] for x in segs):
+        return None
+    i, tol = row[track], CARRY_S * fps
+    found = []
+    for x in segs:
+        j = row.get(x["track"])
+        if j is None or x["track"] == track:
+            continue
+        after = ends["first"][j] - ends["last"][i]  # it starts after this one ends
+        before = ends["first"][i] - ends["last"][j]  # it ends before this one starts
+        with np.errstate(invalid="ignore"):
+            if 0 < after <= tol and x["start"] <= ends["first"][j] + tol and \
+                    np.linalg.norm(ends["start"][j] - ends["end"][i]) <= CARRY_M:
+                found.append((after, x["player"], x["track"], x["start"]))
+            elif 0 < before <= tol and x["end"] >= ends["last"][j] + 1 - tol and \
+                    np.linalg.norm(ends["start"][i] - ends["end"][j]) <= CARRY_M:
+                found.append((before, x["player"], x["track"], x["end"] - 1))
+    if not found or len({f[1] for f in found}) > 1:
+        return None
+    _, _, k, f = min(found)
+    return int(k), int(f)
+
+
 def scorer(marks: list[dict], shot: dict | None) -> dict:
     """Who scored: {track, track_frame}, from a G label on them, else the shot that went in; None if neither."""
     lab = next((c for c in marks if c.get("by") == "label" and c.get("track") is not None), None)
@@ -299,6 +337,15 @@ def build(store: Store, game: Game, log=None) -> dict:
     marks = [{"t": e["frame"] / game.fps, "team": {1: "ours", 2: "theirs"}.get(ball_state.label_team(e)),
               "guessed": False, "by": "label", "track": e["track"], "frame": e["frame"]}
              for e in lab["events"] if e["kind"] == "goal"]
+    if any(m["track"] is not None for m in marks):  # a G label on a scrap nobody's labelled: who carries on from it
+        from soccer_clips.track import bridge, people
+
+        segs = people.segments(people.tracks(store, game), people.load_picks(store, game))
+        ends = bridge.tracklet_ends(store, game)
+        for m in marks:
+            got = carried_label(m["track"], m["frame"], segs, ends, game.fps) if m["track"] is not None else None
+            if got is not None:
+                m["track"], m["frame"] = got
     shots, gs = work_out(store, game, tc["touches"], marks)
     stats = {name: team_stats(shots, gs, i) for i, name in enumerate(TEAMS)}
     stats["goals_not_known"] = sum(g["team"] is None for g in gs)

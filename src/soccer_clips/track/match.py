@@ -51,8 +51,8 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 8  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S;
-# 8: not by a corner flag (beside)
+VERSION = 9  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S;
+# 8: not by a corner flag (beside); 9: a goal isn't a ball run along the byline (WIDE_M, BACK_IN_S)
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
@@ -86,6 +86,10 @@ STOP_S = 3.0  # a stoppage with no crossing (free kick, penalty, a line restart 
 KICKOFF_SAME_S = 30.0  # kickoffs this close are one; a kickoff this close to a half's start time is that half's
 LINE_PAD_M = 0.5  # the ball beyond a line by this much is out
 NET_M = 8.0  # after a goal: the ball back in the field no further than this from that goal line is still being fetched
+WIDE_M = 2.0  # a goal's crossing this far wide of a post, with the ball then back in play...
+BACK_IN_S = 1.0  # ...this soon (fetched from a net takes longer)...
+IN_M = 1.5  # ...and this far into the field when it's lost again, wasn't it: a misread ball on the byline
+SEEN_GAP_S = 0.5  # the ball back in play: until it's next unseen this long, or over a line again
 
 
 def path(store: Store, game: Game) -> Path:
@@ -389,13 +393,38 @@ def goal_in(o: dict | None, bframe: np.ndarray, bxy: np.ndarray, length: float, 
     return int(((np.abs(x) > length / 2 + LINE_PAD_M) & ~beside(y, width, pa_width)).sum()) >= GOAL_IN_MIN_S * fps
 
 
+def went_in_later(start: int, hi: int, bframe: np.ndarray, bxy: np.ndarray, outside: np.ndarray, placed: np.ndarray,
+                  length: float, goal: float, fps: float) -> int:
+    """A kickoff's out-of-play start (frame `start`), or later where the crossing it starts from wasn't the goal:
+    WIDE_M or more wide of a post, then the ball back in play within BACK_IN_S and IN_M into the field when lost
+    again (a ball run along the byline, read just over it for a moment: Elite Strikers' 42:34, where #26 then
+    scored with the ball hidden among players). Then the frame after the ball was last seen in play. A real goal's
+    ball, back as soon, stays by the line (in the net, or fetched): 11 of them in the games, all within 0.5 m
+    (2026-11-07). Rows up to hi."""
+    a = int(np.searchsorted(bframe, start))
+    o = a + np.flatnonzero(outside[a:hi] & placed[a:hi])
+    if not len(o) or abs(bxy[o[0], 1]) <= goal / 2 + WIDE_M:
+        return start
+    seen = o[0] + 1 + np.flatnonzero(placed[o[0] + 1:hi])
+    back = np.flatnonzero(~outside[seen])  # over the line for a moment, then...
+    if not len(back):
+        return start
+    seen = seen[back[0]:]
+    if bframe[seen[0]] - bframe[o[0]] > BACK_IN_S * fps:
+        return start
+    stop = np.flatnonzero((np.diff(bframe[seen]) > SEEN_GAP_S * fps) | outside[seen[1:]])
+    last = seen[stop[0] if len(stop) else -1]
+    return int(bframe[last]) + 1 if length / 2 - abs(bxy[last, 0]) >= IN_M else start
+
+
 def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, length: float, width: float,
-                fps: float, half_starts: list[int], pa_width: float = np.inf) -> list[dict]:
+                fps: float, half_starts: list[int], pa_width: float = np.inf, goal: float = np.inf) -> list[dict]:
     """[{from, to, kind}]: the ball out of play before each restart (not the goalie's ball, which is in play):
     from when it last went over a line (for a restart on a line, or a kickoff after a goal; looking back no
     further than the half's start; for a kickoff, back over earlier crossings of the same goal line with the ball
     only near it in between, NET_M: fetched out of the net, it goes over again; not back past one beside the goal,
-    pa_width), else from when it stopped, to
+    pa_width; and not from a crossing wide of the goal with play going on after it: went_in_later), else from when
+    it stopped, to
     the kick. A stoppage with no crossing
     (none for a free kick; none within OUT_NEAR_S of the ball stopping, on a line) shorter than STOP_S isn't
     one: the ball was in play."""
@@ -420,6 +449,8 @@ def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, lengt
             if last_out is not None:
                 inside = np.flatnonzero(~outside[lo:last_out] & placed[lo:last_out])
                 start = int(bframe[lo + inside[-1] + 1]) if len(inside) else int(bframe[lo + o[0]])
+                if r["kind"] == "kickoff":
+                    start = went_in_later(start, hi, bframe, bxy, outside, placed, length, goal, fps)
         if start == r["still"] and r["kick"] - r["still"] < STOP_S * fps:
             continue  # no crossing, and too short a stop for a free kick: in play
         out.append({"from": int(start), "to": r["kick"], "kind": r["kind"]})
@@ -517,7 +548,8 @@ def build(store: Store, game: Game, log=None) -> dict:
                          kit=t.box_team, marked=marked, not_goalie=not_goalie)
     starts = [a for a, _ in hs]
     goals = [r for r in kickoffs if not any(abs(r["kick"] - h) < KICKOFF_SAME_S * fps for h in starts)]
-    oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts, sizes["pa_width"])
+    oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts, sizes["pa_width"],
+                      sizes["goal"])
     ends = {o["to"]: o for o in oop}
     for r in goals:  # after a goal: the teams lined up, or the ball in a goal; neither, a free kick by the centre spot
         if not r.get("clear") and not goal_in(ends.get(r["kick"]), bf, bxy, sizes["length"], fps, sizes["width"],
@@ -525,7 +557,8 @@ def build(store: Store, game: Game, log=None) -> dict:
             r["kind"] = "free kick"
     if any(r["kind"] != "kickoff" for r in goals):
         goals = [r for r in goals if r["kind"] == "kickoff"]
-        oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts, sizes["pa_width"])
+        oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts, sizes["pa_width"],
+                      sizes["goal"])
     info.update({
         "out_of_play": oop,
         "goals_by_kickoff": [r["kick"] for r in goals],

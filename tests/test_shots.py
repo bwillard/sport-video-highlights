@@ -87,6 +87,27 @@ def test_goals_and_scorer():
     assert s["shots"] == 2 and s["saved"] == 1 and s["goals"] == 1
 
 
+def test_g_label_on_a_scrap_takes_the_labelled_tracklet_carrying_on():
+    # tracklet 2 (two frames, in a crowd) is where the G label is; 3 starts 4 frames later 1 m on, labelled #29;
+    # 4 is a teammate as near but nobody's labelled, so it doesn't count
+    ends = {"track": np.array([1, 2, 3, 4]), "first": np.array([0, 300, 306, 290]), "last": np.array([250, 301, 330, 310]),
+            "start": np.array([[0, 0], [10, 0], [11, 0], [9, 0]], float),
+            "end": np.array([[5, 0], [10, 0], [11, 0], [10, 1]], float)}
+    segs = [{"track": 3, "start": 306, "end": 331, "player": 29}, {"track": 1, "start": 0, "end": 251, "player": 29}]
+    assert sh.carried_label(2, 300, segs, ends, 30.0) == (3, 306)
+    assert sh.carried_label(3, 310, segs, ends, 30.0) is None  # labelled there already
+    # a different player carrying on from the other side: can't tell
+    segs2 = segs + [{"track": 5, "start": 280, "end": 299, "player": 7}]
+    ends2 = {"track": np.r_[ends["track"], 5], "first": np.r_[ends["first"], 280], "last": np.r_[ends["last"], 298],
+             "start": np.r_[ends["start"], [[9.5, 0]]], "end": np.r_[ends["end"], [[10, 0.5]]]}
+    assert sh.carried_label(2, 300, segs2, ends2, 30.0) is None
+    # too far on the field, or too late
+    far = {**ends, "start": ends["start"] + [[0, 0], [0, 0], [3, 0], [0, 0]]}
+    assert sh.carried_label(2, 300, segs, far, 30.0) is None
+    late = {**ends, "first": ends["first"] + [0, 0, 20, 0]}
+    assert sh.carried_label(2, 300, segs, late, 30.0) is None
+
+
 def test_shots_compare():
     shots = [{"frame": 50, "at": 60, "outcome": "saved"}, {"frame": None, "at": 300, "outcome": "goal"}]
     evs = [{"frame": 51, "kind": "shot"}, {"frame": 280, "kind": "shot"}, {"frame": 500, "kind": "shot"},

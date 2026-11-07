@@ -123,6 +123,30 @@ def test_out_of_play():
     assert later == [{"from": 120, "to": 160, "kind": "throw-in"}]  # not back past the half's start
 
 
+def test_goal_after_a_ball_run_along_the_byline():
+    # length 60: goal lines at +-30 (out past 30.5). A dribble along the byline reads just over it 10 m wide of
+    # the goal at 100-104, play goes on (back in, 2 m into the field), the ball's lost at 140 among players and
+    # goes in unseen; it's fetched out and the kickoff is at 400
+    f = np.arange(0, 500)
+    xy = np.column_stack([np.full(500, 29.0), np.full(500, 10.0)])
+    xy[100:105, 0] = 30.8
+    xy[105:140] = np.column_stack([np.linspace(30.0, 28.0, 35), np.linspace(10.0, 3.0, 35)])
+    xy[140:300] = np.nan
+    xy[300:400] = [0.0, 0.0]
+    kick = [{"still": 380, "kick": 400, "kind": "kickoff"}]
+    got = match.out_of_play(kick, f, xy, 60.0, 40.0, FPS, half_starts=[0], goal=5.0)
+    assert got == [{"from": 140, "to": 400, "kind": "kickoff"}]  # from when the ball was last seen in play
+    assert match.out_of_play(kick, f, xy, 60.0, 40.0, FPS, half_starts=[0])[0]["from"] == 100  # as before
+    # a real goal's ball, back as soon, stays by the line (fetched, or a net read just inside): it was the goal
+    near = xy.copy()
+    near[105:140] = [29.8, 3.0]
+    assert match.out_of_play(kick, f, near, 60.0, 40.0, FPS, half_starts=[0], goal=5.0)[0]["from"] == 100
+    # so is one between the posts
+    mouth = xy.copy()
+    mouth[100:105, 1] = 2.0
+    assert match.out_of_play(kick, f, mouth, 60.0, 40.0, FPS, half_starts=[0], goal=5.0)[0]["from"] == 100
+
+
 def test_keepers_marked_and_their_kit():
     # we defend +x. Our goalie wears a kit (cluster 7) that reads as ours (role 0), so neither rule finds her:
     # not other kit, and not deep enough (8 m out). Marking tracklet 1 makes it ours, and her kit finds tracklet
