@@ -51,7 +51,8 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 7  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S
+VERSION = 8  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S;
+# 8: not by a corner flag (beside)
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
@@ -335,20 +336,32 @@ def goalie_marks(store: Store, game: Game, t) -> list[dict]:
 
 # ---- out of play ----
 
-def _into_net(last_out: int, lo: int, outside: np.ndarray, placed: np.ndarray, bxy: np.ndarray, length: float) -> int:
+def beside(y, width: float, pa_width: float):
+    """Over a goal line by a corner flag, not the goal: beside the penalty area, inside the touchlines (further out,
+    a ball in the air). FC-1 28:59: the ball kept in by the corner flag read as just over the line."""
+    a = np.abs(y)
+    return (a > pa_width / 2) & (a <= width / 2 + LINE_PAD_M)
+
+
+def _into_net(last_out: int, lo: int, outside: np.ndarray, placed: np.ndarray, bxy: np.ndarray, length: float,
+              width: float, pa_width: float) -> int:
     """A kickoff's crossing: from the last one (an index), back to the first of a run over the same goal line
-    with the ball no further than NET_M into the field in between. A crossing is over a goal line if any of it
-    is (the ball fetched out of the net and kicked away can read as over a touchline as it goes)."""
+    with the ball no further than NET_M into the field in between, none of them beside the goal (beside: its
+    median). A crossing is over a goal line if any of it is (the ball fetched out of the net and kicked away can
+    read as over a touchline as it goes)."""
     goal = np.abs(np.nan_to_num(bxy[:, 0])) > length / 2 + LINE_PAD_M
 
-    def crossing(i: int) -> tuple[int | None, float]:
-        # the crossing ending at i: the last sample in the field before it (None if none), and the goal line's end
+    def crossing(i: int) -> tuple[int | None, float, bool]:
+        # the crossing ending at i: the last sample in the field before it (None if none), the goal line's end, and
+        # whether it's beside the goal
         ins = np.flatnonzero(~outside[lo:i] & placed[lo:i])
         a = lo + ins[-1] if len(ins) else None
-        g = np.flatnonzero(goal[(lo if a is None else a + 1):i + 1])
-        return a, float(np.sign(bxy[(lo if a is None else a + 1) + g[0], 0])) if len(g) else 0.0
+        g = (lo if a is None else a + 1) + np.flatnonzero(goal[(lo if a is None else a + 1):i + 1])
+        if not len(g):
+            return a, 0.0, False
+        return a, float(np.sign(bxy[g[0], 0])), bool(beside(np.median(bxy[g, 1]), width, pa_width))
 
-    k, end = crossing(last_out)
+    k, end, _ = crossing(last_out)
     i = last_out
     while end and k is not None:
         o = np.flatnonzero(outside[lo:k] & placed[lo:k])
@@ -356,29 +369,33 @@ def _into_net(last_out: int, lo: int, outside: np.ndarray, placed: np.ndarray, b
             break
         p = lo + o[-1]  # the crossing before
         between = bxy[p + 1:k + 1][placed[p + 1:k + 1]]
-        k2, e2 = crossing(p)
-        if e2 != end or (np.sign(between[:, 0]) != end).any() or (np.abs(between[:, 0]) < length / 2 - NET_M).any():
+        k2, e2, by_flag = crossing(p)
+        if (e2 != end or by_flag or (np.sign(between[:, 0]) != end).any()
+                or (np.abs(between[:, 0]) < length / 2 - NET_M).any()):
             break
         i, k = p, k2
     return i
 
 
-def goal_in(o: dict | None, bframe: np.ndarray, bxy: np.ndarray, length: float, fps: float) -> bool:
+def goal_in(o: dict | None, bframe: np.ndarray, bxy: np.ndarray, length: float, fps: float,
+            width: float = np.inf, pa_width: float = np.inf) -> bool:
     """Whether the ball was in a goal within GOAL_IN_S of the start of a kickoff's out-of-play stretch (o: {from,
-    to}, or None: none): over a goal line for GOAL_IN_MIN_S. A ball in the air (a punt) reads metres off on the field
-    and can seem to cross for a moment."""
+    to}, or None: none): over a goal line, not beside the goal, for GOAL_IN_MIN_S. A ball in the air (a punt) reads
+    metres off on the field and can seem to cross for a moment."""
     if o is None:
         return False
     a, b = np.searchsorted(bframe, [o["from"], min(o["from"] + GOAL_IN_S * fps, o["to"])])
-    return int((np.abs(np.nan_to_num(bxy[a:b, 0])) > length / 2 + LINE_PAD_M).sum()) >= GOAL_IN_MIN_S * fps
+    x, y = np.nan_to_num(bxy[a:b, 0]), bxy[a:b, 1]
+    return int(((np.abs(x) > length / 2 + LINE_PAD_M) & ~beside(y, width, pa_width)).sum()) >= GOAL_IN_MIN_S * fps
 
 
 def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, length: float, width: float,
-                fps: float, half_starts: list[int]) -> list[dict]:
+                fps: float, half_starts: list[int], pa_width: float = np.inf) -> list[dict]:
     """[{from, to, kind}]: the ball out of play before each restart (not the goalie's ball, which is in play):
     from when it last went over a line (for a restart on a line, or a kickoff after a goal; looking back no
     further than the half's start; for a kickoff, back over earlier crossings of the same goal line with the ball
-    only near it in between, NET_M: fetched out of the net, it goes over again), else from when it stopped, to
+    only near it in between, NET_M: fetched out of the net, it goes over again; not back past one beside the goal,
+    pa_width), else from when it stopped, to
     the kick. A stoppage with no crossing
     (none for a free kick; none within OUT_NEAR_S of the ball stopping, on a line) shorter than STOP_S isn't
     one: the ball was in play."""
@@ -399,7 +416,7 @@ def out_of_play(restarts: list[dict], bframe: np.ndarray, bxy: np.ndarray, lengt
             if last_out is not None and near and r["still"] - bframe[last_out] > near * fps:
                 last_out = None  # the ball came back in long before: not this restart's crossing
             if last_out is not None and r["kind"] == "kickoff":
-                last_out = _into_net(last_out, lo, outside, placed, bxy, length)
+                last_out = _into_net(last_out, lo, outside, placed, bxy, length, width, pa_width)
             if last_out is not None:
                 inside = np.flatnonzero(~outside[lo:last_out] & placed[lo:last_out])
                 start = int(bframe[lo + inside[-1] + 1]) if len(inside) else int(bframe[lo + o[0]])
@@ -500,14 +517,15 @@ def build(store: Store, game: Game, log=None) -> dict:
                          kit=t.box_team, marked=marked, not_goalie=not_goalie)
     starts = [a for a, _ in hs]
     goals = [r for r in kickoffs if not any(abs(r["kick"] - h) < KICKOFF_SAME_S * fps for h in starts)]
-    oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts)
+    oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts, sizes["pa_width"])
     ends = {o["to"]: o for o in oop}
     for r in goals:  # after a goal: the teams lined up, or the ball in a goal; neither, a free kick by the centre spot
-        if not r.get("clear") and not goal_in(ends.get(r["kick"]), bf, bxy, sizes["length"], fps):
+        if not r.get("clear") and not goal_in(ends.get(r["kick"]), bf, bxy, sizes["length"], fps, sizes["width"],
+                                              sizes["pa_width"]):
             r["kind"] = "free kick"
     if any(r["kind"] != "kickoff" for r in goals):
         goals = [r for r in goals if r["kind"] == "kickoff"]
-        oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts)
+        oop = out_of_play(restarts, bf, bxy, sizes["length"], sizes["width"], fps, starts, sizes["pa_width"])
     info.update({
         "out_of_play": oop,
         "goals_by_kickoff": [r["kick"] for r in goals],
