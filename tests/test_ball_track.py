@@ -100,6 +100,22 @@ def test_still_object_seen_through_a_drifting_camera_estimate():
     assert (np.hypot(path[:300, 0] - (300 + 3 * np.arange(300)), path[:300, 1] - 600) < 3).all()
 
 
+def test_still_ball_seen_through_a_camera_estimate_drifting_in_scale():
+    # Over a whole game the chained estimate drifts in scale too (FC-1: one frame pixel was 26
+    # reference pixels at 37 min). Here it "zooms out" 20x, then a spare ball lies still, a pixel
+    # or two of detector jitter each way, while the game ball, weaker, rolls past.
+    n = 600
+    steps = still_camera(n)
+    k = 1 / 1.0101  # 300 frames of this: the scene shrinks 20x on screen, in the estimate
+    steps[1:300] = [[k, 0, (1 - k) * 960], [0, k, (1 - k) * 540]]
+    jitter = np.random.default_rng(0).normal(0, 1.5, (n, 2))
+    rows = [box(f, 1000 + jitter[f, 0], 600 + jitter[f, 1], 0.75) for f in range(300, n)]
+    rows += [box(f, 300 + 3 * (f - 300), 800, 0.35) for f in range(300, 500)]
+    path = ball_track.track(np.array(rows, np.float32), steps)
+    assert not (np.hypot(path[:, 0] - 1000, path[:, 1] - 600) < 5).any()
+    assert (np.hypot(path[300:500, 0] - (300 + 3 * np.arange(200)), path[300:500, 1] - 800) < 3).all()
+
+
 def test_set_piece_credit_needs_the_camera_on_it():
     # The camera follows play away from a still object (it slides across the screen while
     # still in the reference); something moving off next to it isn't a kick from it.
