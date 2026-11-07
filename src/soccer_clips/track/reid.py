@@ -1082,13 +1082,21 @@ def evaluate_auto(store: Store, game_ids: list[str], players: list[int] | None =
 
 
 _auto_cache: dict = {}
+AUTO_VERSION = 1  # what auto_all claims: bump when auto_label changes it (bridge.VERSION covers following by place)
+AUTO_KEEP = 4  # threshold settings kept on disk per game (the tagger's slider, the default)
+
+
+def _auto_path(store: Store, game: Game) -> Path:
+    return store.game_dir(game.year, game.id) / "tracks" / "auto_labels.json"
 
 
 def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: float = AUTO_MARGIN) -> dict[int, list[dict]]:
     """auto_label for every player labelled in any game; a stretch two players both claim is dropped. Then
-    bridge.extend: on from those and the labels by place on the field (claims with by: "place"). Cached until
-    the game's signatures, tracklets, picks or field calibration change, labels change in another game, or
-    the thresholds do (min_score, margin: see auto_label)."""
+    bridge.extend: on from those and the labels by place on the field (claims with by: "place"). Cached, in
+    memory and in tracks/auto_labels.json (~10 s a game to work out, so a server restart doesn't pay it again),
+    until the game's signatures, tracklets, picks or field calibration change, labels change in another game,
+    the thresholds do (min_score, margin: see auto_label), or the code (AUTO_VERSION, bridge.VERSION)."""
+    from soccer_clips.store import atomic_write_text
     from soccer_clips.track import bridge, people, pitch
 
     files = [sigs_path(store, game), people.path(store, game, people.DEFAULT_MODEL)]
@@ -1097,29 +1105,41 @@ def auto_all(store: Store, game: Game, min_score: float = AUTO_MIN, margin: floa
     looks = [_looks_path(store, g) for g in store.list_games()]
     pp = people._picks_path(store, game)
     cp = pitch.cal_path(store, game)
-    key = (game.id, min_score, margin, *(f.stat().st_mtime_ns for f in files), pp.stat().st_mtime_ns if pp.exists() else 0,
-           cp.stat().st_mtime_ns if cp.exists() else 0,
-           *(f.stat().st_mtime_ns if f.exists() else 0 for f in looks))
-    if _auto_cache.get(game.id, (None,))[0] != key:  # one entry per game (the player view reads every game)
-        players = sorted({p for g in store.list_games() for p in player_sums(store, g)})
-        claims = {p: auto_label(store, game, p, margin=margin, min_score=min_score) for p in players}
-        flat = sorted((c["track"], c["start"], c["end"], p) for p, cs in claims.items() for c in cs)
-        clash = set()
-        for (k1, a1, b1, p1), (k2, a2, b2, p2) in zip(flat, flat[1:]):
-            if k1 == k2 and a2 < b1 and p1 != p2:
-                clash |= {(k1, a1, p1), (k2, a2, p2)}
-        out = {p: [c for c in cs if (c["track"], c["start"], p) not in clash] for p, cs in claims.items()}
-        # then where a player labelled or guessed goes on, by place on the field, while it's plain who it is
-        t = people.tracks(store, game)
-        picks = people.load_picks(store, game)
-        rejected: dict[int, set[int]] = {}
-        for p in picks:
-            if p["kind"] != "is" and p.get("track") is not None:
-                rejected.setdefault(p["player"], set()).add(p["track"])
-        theirs = {x["track"] for x in people.not_ours(t, picks)}  # marked not ours: turned down for everyone
-        for p in {*players, *(x["player"] for x in people.segments(t, picks))}:
-            rejected.setdefault(p, set()).update(theirs)
-        for p, cs in bridge.extend(store, game, people.segments(t, picks), out, rejected).items():
-            out[p] = sorted(out.get(p, []) + cs, key=lambda c: c["start"])
-        _auto_cache[game.id] = (key, {p: cs for p, cs in out.items() if cs})
+    state = [AUTO_VERSION, bridge.VERSION, game.id, *(f.stat().st_mtime_ns for f in files),
+             pp.stat().st_mtime_ns if pp.exists() else 0, cp.stat().st_mtime_ns if cp.exists() else 0,
+             *(f.stat().st_mtime_ns if f.exists() else 0 for f in looks)]
+    key = (min_score, margin, *state)
+    if _auto_cache.get(game.id, (None,))[0] == key:  # one entry per game (the player view reads every game)
+        return _auto_cache[game.id][1]
+    disk = _auto_path(store, game)
+    saved = json.loads(disk.read_text())["entries"] if disk.exists() else []
+    saved = [e for e in saved if e["state"] == state]  # anything older is out of date
+    hit = next((e for e in saved if e["thresholds"] == [min_score, margin]), None)
+    if hit is not None:
+        _auto_cache[game.id] = (key, {int(p): cs for p, cs in hit["claims"].items()})
+        return _auto_cache[game.id][1]
+    players = sorted({p for g in store.list_games() for p in player_sums(store, g)})
+    claims = {p: auto_label(store, game, p, margin=margin, min_score=min_score) for p in players}
+    flat = sorted((c["track"], c["start"], c["end"], p) for p, cs in claims.items() for c in cs)
+    clash = set()
+    for (k1, a1, b1, p1), (k2, a2, b2, p2) in zip(flat, flat[1:]):
+        if k1 == k2 and a2 < b1 and p1 != p2:
+            clash |= {(k1, a1, p1), (k2, a2, p2)}
+    out = {p: [c for c in cs if (c["track"], c["start"], p) not in clash] for p, cs in claims.items()}
+    # then where a player labelled or guessed goes on, by place on the field, while it's plain who it is
+    t = people.tracks(store, game)
+    picks = people.load_picks(store, game)
+    rejected: dict[int, set[int]] = {}
+    for p in picks:
+        if p["kind"] != "is" and p.get("track") is not None:
+            rejected.setdefault(p["player"], set()).add(p["track"])
+    theirs = {x["track"] for x in people.not_ours(t, picks)}  # marked not ours: turned down for everyone
+    for p in {*players, *(x["player"] for x in people.segments(t, picks))}:
+        rejected.setdefault(p, set()).update(theirs)
+    for p, cs in bridge.extend(store, game, people.segments(t, picks), out, rejected).items():
+        out[p] = sorted(out.get(p, []) + cs, key=lambda c: c["start"])
+    _auto_cache[game.id] = (key, {p: cs for p, cs in out.items() if cs})
+    entry = {"state": state, "thresholds": [min_score, margin],
+             "claims": {str(p): cs for p, cs in _auto_cache[game.id][1].items()}}
+    atomic_write_text(disk, json.dumps({"entries": [entry] + saved[:AUTO_KEEP - 1]}) + "\n")
     return _auto_cache[game.id][1]

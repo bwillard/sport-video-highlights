@@ -43,6 +43,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
+VERSION = 2  # what extend claims (reid.auto_all keeps it on disk by this): 2, on through misread kits
 R0_M = 2.0  # where a player's feet are on the field is this uncertain (far boxes, a frame or two of lag)
 SPEED_MS = 3.0  # and they move about this fast (U11s jog 2-3 m/s; a sprint, ~5, still fits a short gap)
 MAX_GAP_S = 5.0  # longer holes aren't bridged: anyone could have come and gone
@@ -244,19 +245,28 @@ def _clear(ei: np.ndarray, si: np.ndarray, cost: np.ndarray, take: np.ndarray, u
     again = lambda a, b: (a, b) in plausible or (b, a) in plausible  # noqa: E731
     by_end: dict[int, list] = {}
     by_start: dict[int, list] = {}
-    for e, s, c in zip(ei.tolist(), si.tolist(), cost.tolist()):
+    order = np.argsort(cost, kind="stable").tolist()
+    for j in order:  # in cost order, so the cheapest rival is the first that counts
+        e, s, c = int(ei[j]), int(si[j]), float(cost[j])
         by_end.setdefault(e, []).append((c, s))
         by_start.setdefault(s, []).append((c, e))
-    for j in np.argsort(cost, kind="stable").tolist():
+
+    def rival(ways, other, used, same, c):  # any of these ways within RATIO of c that counts against it
+        for x, k in ways:
+            if x >= RATIO * c:
+                return False
+            if k != other and k not in used and not same(k):
+                return True
+        return False
+
+    for j in order:
         c, e, s = cost[j], int(ei[j]), int(si[j])
         if c >= 1:
             break
         if not take[j] or e in used_end or s in used_start:
             continue
-        rival = min([x for x, s2 in by_end[e] if s2 != s and s2 not in used_start and not again(s, s2)]
-                    + [x for x, e2 in by_start[s] if e2 != e and e2 not in used_end and not again(e2, e)],
-                    default=np.inf)
-        if rival < RATIO * c:
+        if (rival(by_end[e], s, used_start, lambda s2: again(s, s2), c)
+                or rival(by_start[s], e, used_end, lambda e2: again(e2, e), c)):
             continue
         used_end.add(e)
         used_start.add(s)
