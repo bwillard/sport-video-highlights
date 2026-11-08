@@ -51,8 +51,9 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 9  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S;
-# 8: not by a corner flag (beside); 9: a goal isn't a ball run along the byline (WIDE_M, BACK_IN_S)
+VERSION = 10  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S;
+# 8: not by a corner flag (beside); 9: a goal isn't a ball run along the byline (WIDE_M, BACK_IN_S);
+# 10: not back past a crossing beyond a touchline too (a cross in the air)
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
@@ -350,9 +351,10 @@ def beside(y, width: float, pa_width: float):
 def _into_net(last_out: int, lo: int, outside: np.ndarray, placed: np.ndarray, bxy: np.ndarray, length: float,
               width: float, pa_width: float) -> int:
     """A kickoff's crossing: from the last one (an index), back to the first of a run over the same goal line
-    with the ball no further than NET_M into the field in between, none of them beside the goal (beside: its
-    median). A crossing is over a goal line if any of it is (the ball fetched out of the net and kicked away can
-    read as over a touchline as it goes)."""
+    with the ball no further than NET_M into the field in between, none of them beside the goal (its median
+    beside, or further out than a touchline: FC Stars' 28:26, a cross from the far side in the air reading over
+    the goal line and the touchline, before #11 scored at the near post). A crossing is over a goal line if any of
+    it is (the ball fetched out of the net and kicked away can read as over a touchline as it goes)."""
     goal = np.abs(np.nan_to_num(bxy[:, 0])) > length / 2 + LINE_PAD_M
 
     def crossing(i: int) -> tuple[int | None, float, bool]:
@@ -363,7 +365,7 @@ def _into_net(last_out: int, lo: int, outside: np.ndarray, placed: np.ndarray, b
         g = (lo if a is None else a + 1) + np.flatnonzero(goal[(lo if a is None else a + 1):i + 1])
         if not len(g):
             return a, 0.0, False
-        return a, float(np.sign(bxy[g[0], 0])), bool(beside(np.median(bxy[g, 1]), width, pa_width))
+        return a, float(np.sign(bxy[g[0], 0])), bool(np.abs(np.median(bxy[g, 1])) > pa_width / 2)
 
     k, end, _ = crossing(last_out)
     i = last_out

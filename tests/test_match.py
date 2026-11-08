@@ -208,6 +208,8 @@ def test_kickoff_from_when_the_ball_went_in():
     xy[130:160] = (27.0, -3.0)
     assert match.out_of_play(ko, f, xy, SIZES["length"], SIZES["width"], FPS, [0])[0]["from"] == 100
     assert match.out_of_play(ko, f, xy, SIZES["length"], SIZES["width"], FPS, [0], SIZES["pa_width"])[0]["from"] == 160
+    xy[100:130] = (33.0, -24.0)  # a cross in the air, reading over the goal line and the touchline: not the goal
+    assert match.out_of_play(ko, f, xy, SIZES["length"], SIZES["width"], FPS, [0], SIZES["pa_width"])[0]["from"] == 160
 
 
 def test_goal_in():
