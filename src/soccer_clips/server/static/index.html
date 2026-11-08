@@ -147,7 +147,7 @@
     <option value="auto">fixes → label too</option>
     <option value="">fixes → don't label</option>
   </select>
-  <button id="loupeBtn" title="Magnifier (Z): a 3× close-up follows the mouse over the video, boxes and rings included.&#10;Shift+Z switches between 3× and 6×.">🔎 magnifier</button>
+  <button id="loupeBtn" title="Magnifier (Z): a 3× close-up follows the mouse over the video, boxes and rings included.&#10;Z again: the close-up shows just the video, nothing drawn over the players; Z a third time turns it off.&#10;Shift+Z switches between 3× and 6×.">🔎 magnifier</button>
   <button id="peopleBtn" title="Show tracked players (V): a thin box on everyone the player tracking found, and an orange ring under the player you follow (picked next to it) wherever they're labelled.&#10;A small white #number over a box = already labelled as that player.&#10;Box colour = team by kit colour: white = our team (the kit your labelled player wears), blue = opponents, grey dashed = everyone else (refs, keepers, spectators).&#10;With it on: L then click = that's the player you follow; Shift+L = the ring is on the wrong person from here; U = take back the last one.&#10;G = next suggestion: a tracklet that looks like the player you follow (magenta box); Y = yes it's them, X = no.&#10;Dashed ring / faint #n? = probably that player, by appearance, or followed on the field from where they're labelled or guessed (in a calibrated game); Y / X confirm or reject the dashed ring.">👥 players</button>
   <select id="followWho" hidden title="Who the orange ring follows (or nobody: just the boxes). L then click labels a player as this number."></select>
   <button id="onlyBtn" hidden title="Only them (W): play just the stretches where the player you follow is on screen (labelled, or the dashed #n? guesses), skipping the rest, as the Player view page does: a second either side, gaps under 3 s played through. The timeline darkens what's skipped.&#10;W again = play everything.">⏭ only them <span class="hk">W</span></button>
@@ -196,7 +196,7 @@
         <li><kbd>Space</kbd> play / pause · <kbd>M</kbd> sound on / off · <kbd>[</kbd> / <kbd>]</kbd> speed −/+ 0.5×</li>
         <li><kbd>←</kbd> / <kbd>→</kbd> back / forward 5 s (<kbd>Shift</kbd>: 60 s) · <kbd>,</kbd> / <kbd>.</kbd> one frame back / forward</li>
         <li>Click or drag the timeline to jump; hover it to see the time</li>
-        <li><kbd>Z</kbd> magnifier on / off: a close-up that follows the mouse over the video · <kbd>Shift</kbd>+<kbd>Z</kbd> 3× / 6×</li>
+        <li><kbd>Z</kbd> magnifier: a close-up that follows the mouse over the video; <kbd>Z</kbd> again shows just the video in it (no boxes or labels), a third time turns it off · <kbd>Shift</kbd>+<kbd>Z</kbd> 3× / 6×</li>
       </ul></details>
       <details data-sec="clips"><summary>Clips</summary><ul>
         <li><kbd>I</kbd> / <kbd>O</kbd> mark in / out · <kbd>Enter</kbd> save the clip (without an in point: the last 8 s and next 2 s) · <kbd>Esc</kbd> clear</li>
@@ -1371,17 +1371,30 @@ function videoRect() {
 
 // ---------- magnifier (Z) ----------
 const loupe = $("loupe"), lctx = loupe.getContext("2d");
-let showLoupe = false, loupeZoom = 3, loupeAt = null;  // loupeAt: mouse in CSS px over the video box
-try { showLoupe = localStorage.getItem("showLoupe") === "1"; loupeZoom = +localStorage.getItem("loupeZoom") || 3; } catch {}
+let showLoupe = false, loupeBare = false, loupeZoom = 3, loupeAt = null;  // loupeAt: mouse in CSS px over the video box
+try {
+  showLoupe = localStorage.getItem("showLoupe") === "1";
+  loupeBare = localStorage.getItem("loupeBare") === "1";
+  loupeZoom = +localStorage.getItem("loupeZoom") || 3;
+} catch {}
 function showLoupeButton() {
   $("loupeBtn").classList.toggle("on", showLoupe);
+  $("loupeBtn").textContent = showLoupe && loupeBare ? "🔎 magnifier: video only" : "🔎 magnifier";
   stage.classList.toggle("magnify", showLoupe);
 }
 function toggleLoupe() {
-  showLoupe = !showLoupe;
-  try { localStorage.setItem("showLoupe", showLoupe ? "1" : "0"); } catch {}
+  // off → with boxes and labels → just the video (to see who it is) → off
+  if (!showLoupe) [showLoupe, loupeBare] = [true, false];
+  else if (!loupeBare) loupeBare = true;
+  else showLoupe = false;
+  try {
+    localStorage.setItem("showLoupe", showLoupe ? "1" : "0");
+    localStorage.setItem("loupeBare", loupeBare ? "1" : "0");
+  } catch {}
   showLoupeButton();
-  flash(showLoupe ? `magnifier on (${loupeZoom}×): move the mouse over the video` : "magnifier off");
+  flash(!showLoupe ? "magnifier off"
+    : loupeBare ? `magnifier ${loupeZoom}×, video only: Z again turns it off`
+    : `magnifier on (${loupeZoom}×): move the mouse over the video; Z again hides the boxes in it`);
 }
 function cycleLoupeZoom() {
   loupeZoom = loupeZoom === 3 ? 6 : 3;
@@ -1411,8 +1424,10 @@ function drawLoupe() {
   lctx.fillStyle = "#000";
   lctx.fillRect(0, 0, L, L);
   lctx.drawImage(v, (m.x - r.x - span / 2) * k, (m.y - r.y - span / 2) * k, span * k, span * k, 0, 0, L, L);
-  const dpr = overlay.width / Math.max(1, overlay.clientWidth);  // boxes, rings and the ball, magnified too
-  lctx.drawImage(overlay, (m.x - span / 2) * dpr, (m.y - span / 2) * dpr, span * dpr, span * dpr, 0, 0, L, L);
+  if (!loupeBare) {
+    const dpr = overlay.width / Math.max(1, overlay.clientWidth);  // boxes, rings and the ball, magnified too
+    lctx.drawImage(overlay, (m.x - span / 2) * dpr, (m.y - span / 2) * dpr, span * dpr, span * dpr, 0, 0, L, L);
+  }
   const c = L / 2;
   lctx.strokeStyle = "#fff8";
   lctx.lineWidth = 1;
