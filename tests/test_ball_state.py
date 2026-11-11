@@ -14,6 +14,9 @@ def test_ball_per_frame():
     assert np.allclose(out[10:14, 0], [10, 11, 12, 13])  # 0.4 s gap, filled in a straight line
     assert np.isnan(out[20:]).all() and air[20] and not air[:20].any()
     assert abs(speed[5] - 10.0) < 1e-6  # 1 m a frame at 10 fps
+    flight = (f >= 4) & (f <= 6)  # in a flight: in the air, and keeps its place (under the ball)
+    out, speed, air = bs.ball_per_frame(f, xy, off, 25, FPS, flight)
+    assert air[4:7].all() and not air[:4].any() and np.allclose(out[4:7, 0], [4, 5, 6])
 
 
 def test_nearest_and_control():

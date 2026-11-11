@@ -249,6 +249,10 @@ function drawPitchMap(canvas, o) {
     ctx.beginPath(); ctx.arc(X, Y, 5, 0, 2 * Math.PI);
     if (o.ball.stale) { ctx.stroke(); ctx.strokeStyle = "#ffe14d"; ctx.beginPath(); ctx.arc(X, Y, 3.5, 0, 2 * Math.PI); ctx.stroke(); }
     else { ctx.fill(); ctx.stroke(); }
+    if (o.ball.air) {  // in the air: a dashed ring round the place under it
+      ctx.setLineDash([3, 3]); ctx.strokeStyle = "#ffe14d";
+      ctx.beginPath(); ctx.arc(X, Y, 9, 0, 2 * Math.PI); ctx.stroke();
+    }
     ctx.restore();
   }
   if (o.attack) {  // which way we attack, along the bottom (the camera's side)
@@ -284,16 +288,21 @@ const BALL_HOLD_S = 1.5;  // a ball not seen for this long drops off the map
 const BALL_OFF_M = 10;  // a ball further outside the lines than this is in the air (projected onto the ground far beyond)
 
 function pitchBall(ball, f, Ginv, frameW, frameH, fps, size) {
-  // the ball on the field at frame f, {x, y, stale}, or null. ball: the /ball path ({frame (sorted), x, y}
-  // in fractions of the frame). Where it isn't seen, its last position for up to BALL_HOLD_S, stale.
+  // the ball on the field at frame f, {x, y, stale, air}, or null. ball: the /ball path ({frame (sorted), x, y}
+  // in fractions of the frame; with the game's positions made, fx, fy: where the server places it, under the ball
+  // when it's in the air, and air). Where it isn't seen, its last position for up to BALL_HOLD_S, stale.
   const a = ball?.frame;
-  if (!a?.length || !Ginv) return null;
+  if (!a?.length || (!Ginv && !ball.fx)) return null;
   let lo = 0, hi = a.length - 1, i = -1;  // the last path frame at or before f
   while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m] <= f) { i = m; lo = m + 1; } else hi = m - 1; }
   if (i < 0 || f - a[i] > BALL_HOLD_S * fps) return null;
+  if (ball.fx) {
+    if (ball.fx[i] == null) return null;
+    return { x: ball.fx[i], y: ball.fy[i], stale: a[i] !== f, air: !!ball.air[i] };
+  }
   const p = pixelToPitch(Ginv, ball.x[i] * frameW, ball.y[i] * frameH);
   if (!p || Math.abs(p[0]) > size.length / 2 + BALL_OFF_M || Math.abs(p[1]) > size.width / 2 + BALL_OFF_M) return null;
-  return { x: p[0], y: p[1], stale: a[i] !== f };
+  return { x: p[0], y: p[1], stale: a[i] !== f, air: false };
 }
 
 function pitchPlayers(G, frameW, frameH, rows, i0, i1, stride, opts = {}) {

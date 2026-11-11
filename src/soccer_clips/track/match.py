@@ -51,9 +51,9 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 10  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S;
+VERSION = 11  # 6: a kickoff mid-half needs a clear formation or the ball in a goal; 7: in it for GOAL_IN_MIN_S;
 # 8: not by a corner flag (beside); 9: a goal isn't a ball run along the byline (WIDE_M, BACK_IN_S);
-# 10: not back past a crossing beyond a touchline too (a cross in the air)
+# 10: not back past a crossing beyond a touchline too (a cross in the air); 11: went_in_later needs the ball lost
 STILL_S = 1.0  # the ball still this long...
 STILL_M = 1.0  # ...within this of where it sits
 KICK_M = 3.0  # then this far away...
@@ -402,7 +402,9 @@ def went_in_later(start: int, hi: int, bframe: np.ndarray, bxy: np.ndarray, outs
     again (a ball run along the byline, read just over it for a moment: Elite Strikers' 42:34, where #26 then
     scored with the ball hidden among players). Then the frame after the ball was last seen in play. A real goal's
     ball, back as soon, stays by the line (in the net, or fetched): 11 of them in the games, all within 0.5 m
-    (2026-11-07). Rows up to hi."""
+    (2026-11-07). Lost again before the kickoff: a ball kicked out of the net and taken to the centre spot isn't
+    play going on (FCU 38:52, a long shot landing in the net, read 6.8 m wide, kicked out 0.9 s later). Rows up to
+    hi."""
     a = int(np.searchsorted(bframe, start))
     o = a + np.flatnonzero(outside[a:hi] & placed[a:hi])
     if not len(o) or abs(bxy[o[0], 1]) <= goal / 2 + WIDE_M:
@@ -415,7 +417,9 @@ def went_in_later(start: int, hi: int, bframe: np.ndarray, bxy: np.ndarray, outs
     if bframe[seen[0]] - bframe[o[0]] > BACK_IN_S * fps:
         return start
     stop = np.flatnonzero((np.diff(bframe[seen]) > SEEN_GAP_S * fps) | outside[seen[1:]])
-    last = seen[stop[0] if len(stop) else -1]
+    if not len(stop):
+        return start  # seen all the way to the kickoff
+    last = seen[stop[0]]
     return int(bframe[last]) + 1 if length / 2 - abs(bxy[last, 0]) >= IN_M else start
 
 

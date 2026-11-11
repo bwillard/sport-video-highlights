@@ -3,8 +3,9 @@ Ball state and control by team (Phase 6.2): who has the ball, frame by frame, an
 
 Built from the positions on the field (positions.py) and the game's shape (match.py):
 - **Ball per frame:** the ball path in metres; gaps up to BRIDGE_S filled in a straight line. Speed over
-  SPEED_HALF frames each way. **Airborne** (rough): projected more than positions.BALL_OFF_M outside the lines
-  (no place kept), or faster than AIR_MS: with one camera a ball in the air reads further away and faster.
+  SPEED_HALF frames each way. **Airborne:** in a flight (ball_air.py; placed under the ball), projected more than
+  positions.BALL_OFF_M outside the lines (no place kept), or faster than AIR_MS: with one camera a ball in the air
+  reads further away and faster.
 - **In play:** inside a half and not out of play (match.py: from crossing a line to the restart kick).
 - **Nearest of each team:** the closest on-field player of ours and theirs (goalies with their team, refs and
   others left out) and how far. Within reach (REACH_M, plus up to REACH_FAR_M more at the far touchline,
@@ -41,7 +42,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 3
+VERSION = 4  # 4: flights (ball_air) in the air, placed under the ball
 BRIDGE_S = 0.5  # gaps in the ball path filled in a straight line up to this; also control bridged over this
 SPEED_HALF = 3  # frames each way the ball's speed is measured over
 AIR_MS = 30.0  # faster than this (m/s, projected) the ball's in the air: a youth kick on the ground is slower
@@ -81,14 +82,16 @@ def key(store: Store, game: Game) -> str | None:
 # ---- the pieces (pure, for testing) ----
 
 def ball_per_frame(bframe: np.ndarray, bxy: np.ndarray, boff: np.ndarray, n: int,
-                   fps: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                   fps: float, bair: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(xy (n, 2) metres with NaN where unknown, speed (n,) m/s with NaN, air (n,) bool) for frames 0..n-1
-    from the ball path (frames, metres, off = too far outside the lines: in the air)."""
+    from the ball path (frames, metres, off = too far outside the lines: in the air, no place; bair: in a flight,
+    placed under the ball)."""
     xy = np.full((n, 2), np.nan)
     air = np.zeros(n, bool)
+    bair = np.zeros(len(bframe), bool) if bair is None else bair
     m = (bframe >= 0) & (bframe < n)
-    bframe, bxy, boff = bframe[m], bxy[m], boff[m]
-    air[bframe[boff]] = True
+    bframe, bxy, boff, bair = bframe[m], bxy[m], boff[m], bair[m]
+    air[bframe[boff | bair]] = True
     ok = ~boff & np.isfinite(bxy[:, 0])
     xy[bframe[ok]] = bxy[ok]
     known = np.flatnonzero(np.isfinite(xy[:, 0]))
@@ -342,7 +345,7 @@ def build(store: Store, game: Game, log=None) -> dict:
     n = hs[-1][1]
 
     xy, speed, air = ball_per_frame(pos["ball_frame"].astype(np.int64), pos["ball_xy"].astype(np.float64),
-                                    pos["ball_off"], n, fps)
+                                    pos["ball_off"], n, fps, pos["ball_air"])
     in_play = np.zeros(n, bool)
     for a, b in hs:
         in_play[a:b] = True

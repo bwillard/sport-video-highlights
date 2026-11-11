@@ -635,14 +635,24 @@ def create_app(store: Store | None = None) -> FastAPI:
         ball_others.edit(store.settings, set_verdict)
 
     def ball_json(game: Game) -> dict:
-        from soccer_clips.track import ball_game
+        """The ball path; with the game's positions made, also where each row is on the field (fx, fy metres, null
+        where it has no place: in the air far beyond the lines) and whether it's in the air (positions.py)."""
+        from soccer_clips.track import ball_game, positions
 
         z = ball_game.load_path(store, game)
         if z is None:
             return {"ranges": [], "frame": [], "x": [], "y": [], "r": [], "kind": []}
-        return {"ranges": z["ranges"].tolist(), "frame": z["frame"].tolist(),
-                "x": np.round(z["x"], 4).tolist(), "y": np.round(z["y"], 4).tolist(),
-                "r": np.round(z["r"], 4).tolist(), "kind": z["kind"].tolist()}
+        out = {"ranges": z["ranges"].tolist(), "frame": z["frame"].tolist(),
+               "x": np.round(z["x"], 4).tolist(), "y": np.round(z["y"], 4).tolist(),
+               "r": np.round(z["r"], 4).tolist(), "kind": z["kind"].tolist()}
+        pos = positions.load(store, game)
+        if pos is not None and np.array_equal(pos["ball_frame"], z["frame"]):
+            xy = np.where(pos["ball_off"][:, None], np.nan, np.round(pos["ball_xy"].astype(np.float64), 2))
+            out["fx"], out["fy"] = ([None if not np.isfinite(v) else float(v) for v in xy[:, k]] for k in (0, 1))
+            out["air"] = pos["ball_air"].astype(int).tolist()
+        else:
+            positions.build_soon(store, game)
+        return out
 
     @app.get("/api/games/{game_id}/ball")
     def game_ball(game_id: str) -> dict:
