@@ -89,3 +89,24 @@ def test_boxes_api_has_field_columns(settings, monkeypatch):
     monkeypatch.setattr(positions, "load", lambda store, g: {"xy": xy, "off": off})
     rows = get()
     assert np.allclose(rows[:, 7], np.arange(len(rows))) and (rows[:, 9] == (np.arange(len(rows)) % 2 == 0)).all()
+
+
+def test_ball_from_its_bottom(settings, monkeypatch):
+    # the projection stubbed as pixels / 100 = metres: the ball's place from its bottom (centre + r), where it meets
+    # the grass; the centre's kept for match.py
+    from soccer_clips.track import ball_air, ball_game, pitch
+
+    store, game = four_tracklets(settings)
+    monkeypatch.setattr(positions, "key", lambda store, game: "k")
+    monkeypatch.setattr(pitch, "load_cal", lambda store, game: {"P": np.eye(3)[None], "sizes": [60.0, 40.0]})
+    monkeypatch.setattr(positions, "_to_pitch", lambda store, game, P, frames, x, y:
+                        (np.column_stack([x, y]) / 100, np.zeros(len(frames), int)))
+    monkeypatch.setattr(ball_air, "find", lambda store, game, bp: [])
+    f = np.arange(5)
+    monkeypatch.setattr(ball_game, "load_path", lambda store, game: {
+        "frame": f, "x": np.full(5, 0.5), "y": np.full(5, 0.5), "r": np.full(5, 0.01), "kind": np.ones(5, np.uint8)})
+    positions.place(store, game)
+    with np.load(positions.path(store, game)) as z:
+        assert np.allclose(z["ball_xy"][:, 1], (0.5 + 0.01) * game.height / 100)
+        assert np.allclose(z["ball_centre_xy"][:, 1], 0.5 * game.height / 100)
+        assert np.allclose(z["ball_xy"][:, 0], z["ball_centre_xy"][:, 0])

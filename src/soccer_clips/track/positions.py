@@ -9,16 +9,22 @@ everything after it (Phase 6) read positions instead of each projecting boxes ag
 - **Off the field:** feet further than status.FIELD_PAD_M outside the lines, or standing still by a
   touchline (status.still_by_line: the bench and parents, who on the far side read up to 4 m inside it).
   The same rule as the Games page's count, here for every box.
-- **Ball:** the ball path's positions on the field. With one camera there's no height, so a ball in the air
-  projects far beyond where it is; more than BALL_OFF_M outside the lines is flagged as that (no place). Flights
-  (ball_air.py: the ball falling under gravity in the picture) are in the air too, and where the map has them
-  well off it, placed on the straight line between where the ball was on the ground before and after.
+- **Ball:** the ball path's positions on the field, from the bottom of the ball (its centre plus its radius in the
+  picture), where it meets the grass as feet do: its centre is a ball's height up, which on the far side reads 1-2 m
+  further away (at your labelled touches the ball's centre is a median 1.3 radii above the toucher's feet; from
+  its bottom, the toucher is 1.6 m from the ball on the map, not 2.2, and 2.8 near the ends, not 3.9). The game's
+  shape (match.py: restarts, kickoffs, the ball out of play) keeps the ball from its centre, which its rules were
+  measured on: from its bottom, a few dead balls by the centre spot moved into the kickoff box and four free
+  kicks and goal kicks read as kickoffs after goals that weren't. With one camera there's no height, so a ball
+  in the air projects far beyond where it is; more than BALL_OFF_M outside the lines is flagged as that (no
+  place). Flights (ball_air.py: the ball falling under gravity in the picture) are in the air too, and where the
+  map has them well off it, placed on the straight line between where the ball was on the ground before and after.
 
 <game>/tracks/pitch.npz: `xy` (rows, 2) float32 metres per row of the game's tracklets (people.Tracks order,
 NaN where the frame isn't placed), `off` per row, `ball_frame` / `ball_xy` (placed: under the ball in a flight) /
-`ball_seen_xy` (where the map puts it) / `ball_off` / `ball_air` (in a flight), `flights` (k, 2) first and last
-frames, the field's size
-it was made with, `stats` (JSON: how much was placed, seam jumps) and `key`: the files it was made from,
+`ball_seen_xy` (where the map puts it) / `ball_centre_xy` (placed, from the ball's centre: match.py) / `ball_off`
+/ `ball_air` (in a flight), `flights` (k, 2) first and last frames, the field's size it was made with, `stats`
+(JSON: how much was placed, seam jumps) and `key`: the files it was made from,
 so a re-track, a ball fix or a new calibration means it's made again (`get`, or `build_soon` for the app).
 """
 from __future__ import annotations
@@ -33,7 +39,7 @@ import numpy as np
 from soccer_clips.models import Game
 from soccer_clips.store import Store
 
-VERSION = 3  # bump when what's saved changes meaning; 3: flights (ball_air)
+VERSION = 5  # bump when what's saved changes meaning; 3: flights (ball_air); 5: the ball from its bottom (match.py: its centre)
 SMOOTH_HALF = 7  # rows each side of a box in its tracklet's running median (15 rows: ~0.5 s)
 BALL_OFF_M = 10.0  # a ball further outside the lines than this is in the air (as the map has it)
 CHUNK = 400_000  # rows smoothed at once (memory: 15 x 2 float64 per row)
@@ -168,15 +174,17 @@ def place(store: Store, game: Game, log=None) -> dict:
     bp = ball_game.load_path(store, game)
     if bp is not None and len(bp["frame"]):
         bf = bp["frame"].astype(np.int32)
-        bxy, _ = _to_pitch(store, game, cal["P"], bf, bp["x"] * game.width, bp["y"] * game.height)
+        bxy, _ = _to_pitch(store, game, cal["P"], bf, bp["x"] * game.width, (bp["y"] + bp["r"]) * game.height)
+        bcxy, _ = _to_pitch(store, game, cal["P"], bf, bp["x"] * game.width, bp["y"] * game.height)
         with np.errstate(invalid="ignore"):
             boff = (np.abs(bxy[:, 0]) > L / 2 + BALL_OFF_M) | (np.abs(bxy[:, 1]) > W / 2 + BALL_OFF_M)
         fl = ball_air.find(store, game, bp)
         bplaced, bair, moved = ball_air.place(bf, bxy, np.isfinite(bxy[:, 0]) & ~boff, fl, fps)
+        bcentre, _, _ = ball_air.place(bf, bcxy, np.isfinite(bxy[:, 0]) & ~boff, fl, fps)
         boff &= ~moved  # moved under the ball: their own place (or none)
     else:
         bf, bxy, boff = np.empty(0, np.int32), np.empty((0, 2)), np.empty(0, bool)
-        fl, bplaced, bair = [], bxy, boff
+        fl, bplaced, bair, bcentre = [], bxy, boff, bxy
 
     placed = np.isfinite(xy[:, 0])
     stats = {"rows": int(len(xy)), "placed": round(float(placed.mean()), 4) if len(xy) else 0.0,
@@ -189,6 +197,7 @@ def place(store: Store, game: Game, log=None) -> dict:
     stats["seconds"] = round(time.time() - t0, 1)
     ball_game.save_npz(path(store, game), key=np.array(k), xy=xy.astype(np.float32), off=off,
                        ball_frame=bf, ball_xy=bplaced.astype(np.float32), ball_seen_xy=bxy.astype(np.float32),
+                       ball_centre_xy=bcentre.astype(np.float32),
                        ball_off=boff, ball_air=bair, flights=np.array(fl, np.int32).reshape(-1, 2),
                        size=np.array([L, W]), stats=np.array(json.dumps(stats)))
     _cache.pop(game.id, None)

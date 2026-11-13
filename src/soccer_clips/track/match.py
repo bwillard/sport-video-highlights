@@ -516,7 +516,7 @@ def build(store: Store, game: Game, log=None) -> dict:
     on = ~pos["off"] & np.isfinite(pos["xy"][:, 0])
 
     bf = pos["ball_frame"]
-    bxy = np.where(pos["ball_off"][:, None], np.nan, pos["ball_xy"].astype(np.float64))
+    bxy = np.where(pos["ball_off"][:, None], np.nan, pos["ball_centre_xy"].astype(np.float64))  # what these rules were measured on
     in_game = lambda f: any(a <= f < b for a, b in hs)  # noqa: E731
     restarts = []
     for r in dead_balls(bf, bxy, fps):
